@@ -23,6 +23,7 @@
 ```bash
 git clone <ที่เก็บโค้ด> /www/wwwroot/paynest        # หรือโฟลเดอร์ไหนก็ได้
 cd /www/wwwroot/paynest
+git config core.fileMode false                     # ไม่นับการเปลี่ยนสิทธิ์ไฟล์ (chmod) ว่าเป็นการแก้โค้ด
 composer install --no-dev --optimize-autoloader
 ```
 

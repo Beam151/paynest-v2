@@ -69,6 +69,9 @@ Vagrantfile
 
 php_errors.log
 
+# aaPanel สร้างเองในโฟลเดอร์เว็บ (open_basedir กันเว็บอื่นในเครื่องเข้ามาอ่าน) — ของเครื่อง ไม่ใช่ของโค้ด
+/public/.user.ini
+
 # ค่าของเครื่องคนพัฒนาแต่ละคน
 .claude/
 
