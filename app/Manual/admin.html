@@ -1,0 +1,304 @@
+<!--
+  คู่มือสำหรับส่วนกลาง — เซิร์ฟเวอร์ส่งให้เฉพาะ super admin (GET /api/manual)
+  โครง: .m-home (ปุ่ม "อยากทำอะไร") → กดแล้วเปิด .m-guide ที่ id ตรงกับ data-guide ทีละเรื่อง
+  {i:ชื่อไอคอน} = ไอคอนจาก public/icons.svg · รูปจำลองหน้าจอใช้คลาส s-* ใน styles.css
+-->
+<div class="manual">
+
+<div class="m-home">
+  <div class="m-top">
+    <h1>คู่มือสำหรับส่วนกลาง</h1>
+    <p>อยากทำอะไร กดเลือกได้เลย</p>
+  </div>
+
+  <h2 class="m-sub">งานทุกรอบบิล (ทำตามลำดับ)</h2>
+  <div class="m-flow" aria-label="งานหนึ่งรอบบิล">
+    <div><span class="m-task-ico">{i:shopping-cart}</span><strong>1. กรอกยอดขาย</strong><small>หลังจบรอบ</small><button class="m-back" data-guide="sales">ดูวิธี →</button></div>
+    <div><span class="m-task-ico">{i:receipt}</span><strong>2. ออกบิล</strong><small>ร้านได้ Telegram ทันที</small><button class="m-back" data-guide="issue">ดูวิธี →</button></div>
+    <div><span class="m-task-ico">{i:eye}</span><strong>3. ตรวจสลิป</strong><small>ยืนยันแล้วยอดถูกตัด</small><button class="m-back" data-guide="slips">ดูวิธี →</button></div>
+    <div><span class="m-task-ico">{i:circle-check}</span><strong>4. ตามบิลค้าง</strong><small>ระบบทักร้านให้เอง</small><button class="m-back" data-guide="today">ดูวิธี →</button></div>
+  </div>
+
+  <h2 class="m-sub">เรื่องอื่น ๆ</h2>
+  <div class="m-tasks">
+    <button class="m-task" data-guide="start"><span class="m-task-ico">{i:rocket}</span><strong>เริ่มต้นครั้งแรก</strong><small>ตั้งค่าก่อนเปิดใช้</small></button>
+    <button class="m-task" data-guide="shops"><span class="m-task-ico">{i:store}</span><strong>เพิ่มร้านและสินค้า</strong><small>มอบหมายสินค้าให้ร้าน</small></button>
+    <button class="m-task" data-guide="agents"><span class="m-task-ico">{i:handshake}</span><strong>เซลและค่าคอม</strong><small>ผูกดีล · จ่ายคอม</small></button>
+    <button class="m-task" data-guide="news"><span class="m-task-ico">{i:megaphone}</span><strong>ประกาศถึงร้าน</strong><small>โปรโมชั่น · วันหยุด</small></button>
+    <button class="m-task" data-guide="settings"><span class="m-task-ico">{i:bell}</span><strong>แจ้งเตือน / สำรองข้อมูล</strong><small>Telegram · ระบบ</small></button>
+    <button class="m-task" data-guide="reports"><span class="m-task-ico">{i:notebook-text}</span><strong>รายงาน / รายรับ-รายจ่าย</strong><small>เทียบยอด · กำไรจริงของรอบ</small></button>
+    <button class="m-task is-warn" data-guide="special"><span class="m-task-ico">{i:file-pen-line}</span><strong>แก้บิล / กรณีพิเศษ</strong><small>ยอดผิด · ยอดติดลบ · ดอลลาร์</small></button>
+    <button class="m-task is-ok" data-guide="faq"><span class="m-task-ico">{i:circle-help}</span><strong>คำถามที่พบบ่อย</strong><small>ร้านบอกโอนแล้ว ฯลฯ</small></button>
+  </div>
+
+  <div class="m-know">
+    <span>{i:calendar} 2 รอบต่อเดือน: 1–15 และ 16–สิ้นเดือน</span>
+    <span>{i:alarm-clock} ครบกำหนด 7 วันหลังจบรอบ</span>
+    <span>{i:lock} เรื่องสำคัญต้องใส่รหัส 6 หลักจากแอป</span>
+  </div>
+</div>
+
+<!-- ── กรอกยอดขาย ── -->
+<section class="m-guide" id="sales" hidden>
+  <button class="m-back" data-home>← เลือกเรื่องอื่น</button>
+  <div class="m-guide-head"><span class="m-task-ico">{i:shopping-cart}</span><div><h2>กรอกยอดขาย</h2><p>ทำหลังจบรอบทุกครั้ง</p></div></div>
+  <div class="m-step">
+    <div class="m-shot" data-nav="sales" data-tap-nav data-title="ยอดขายรายรอบ" data-extra="1–15 ก.ย. 69 ▾">
+            <div class="s-body">
+        <div class="s-card">
+          <div class="s-row"><span><b>KF-01</b> <span class="s-muted">bkk01</span></span><span class="s-input s-hl" style="width:92px;color:var(--text)">42,800</span></div>
+          <div class="s-row"><span><b>KF-02</b> <span class="s-muted">bkk01</span></span><span class="s-input" style="width:92px;color:var(--text)">31,500</span></div>
+          <div class="s-row"><span><b>DR-01</b> <span class="s-muted">cnx01</span></span><span class="s-input" style="width:92px">ยังไม่กรอก</span></div>
+        </div>
+        <span class="s-btn wide s-hl">💾 บันทึกทั้งหมด (2)<span class="s-tap">{i:hand}</span></span>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">1</span><h3>เลือกรอบ แล้วกรอกยอดเต็ม</h3><p>{nav:sales} → เลือกรอบด้านบน → พิมพ์ยอดขายเต็มของแต่ละสินค้า → <span class="m-ui is-primary">💾 บันทึกทั้งหมด</span></p><p>ระบบคิดส่วนต่างให้เอง · ร้านคืนของมากกว่าขาย ใส่ติดลบได้</p></div>
+  </div>
+</section>
+
+<!-- ── ออกบิล ── -->
+<section class="m-guide" id="issue" hidden>
+  <button class="m-back" data-home>← เลือกเรื่องอื่น</button>
+  <div class="m-guide-head"><span class="m-task-ico">{i:receipt}</span><div><h2>ออกบิล</h2><p>ออกทีเดียวหลายร้านได้</p></div></div>
+  <div class="m-step">
+    <div class="m-shot" data-nav="bills" data-tap-nav data-title="บิลและการชำระ">
+            <div class="s-body">
+        <div class="s-row"><span class="s-btn">พร้อมออกบิล (3)</span><span class="s-btn ghost">บิล</span><span class="s-btn ghost">สลิปรอตรวจ</span></div>
+        <div class="s-card">
+          <div class="s-row" style="justify-content:flex-start;gap:8px"><span class="s-check on"></span><b>bkk01</b><span class="s-muted" style="margin-left:auto">6,489.00</span></div>
+          <div class="s-row" style="justify-content:flex-start;gap:8px"><span class="s-check on"></span><b>bkk02</b><span class="s-muted" style="margin-left:auto">8,886.00</span></div>
+          <div class="s-row" style="justify-content:flex-start;gap:8px"><span class="s-check on"></span><b>cnx01</b><span class="s-muted" style="margin-left:auto">10,775.00</span></div>
+        </div>
+        <span class="s-btn wide s-hl">ออกบิล 3 ร้านที่เลือก<span class="s-tap">{i:hand}</span></span>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">1</span><h3>ติ๊กร้าน แล้วออกบิล</h3><p>{nav:bills} → แท็บ <span class="m-ui">พร้อมออกบิล</span> → ติ๊กร้าน → <span class="m-ui is-primary">ออกบิล N ร้านที่เลือก</span></p><p>ร้านได้ข้อความ "บิลรอบใหม่ออกแล้ว" ทันที</p></div>
+  </div>
+  <div class="m-tip">{i:info}<span>ต้องใส่ค่าใช้จ่าย/ส่วนลด เลือกบางสินค้า หรือให้จ่ายเป็นดอลลาร์ → ใช้ <span class="m-ui is-primary">+ ออกใบเรียกเก็บ</span> ทีละร้านแทน</span></div>
+</section>
+
+<!-- ── ตรวจสลิป ── -->
+<section class="m-guide" id="slips" hidden>
+  <button class="m-back" data-home>← เลือกเรื่องอื่น</button>
+  <div class="m-guide-head"><span class="m-task-ico">{i:eye}</span><div><h2>ตรวจสลิป</h2><p>เทียบกับเงินเข้าในบัญชีธนาคาร</p></div></div>
+  <div class="m-step">
+    <div class="m-shot" data-modal="ตรวจสอบการชำระ" data-nav="bills" data-title="ตรวจสอบการชำระ">
+            <div class="s-body">
+        <div class="s-row"><b>bkk01 · INV-2609-014</b><b>15,614.00 ฿</b></div>
+        <div class="s-slip">รูปสลิป</div>
+        <span class="s-btn ok wide s-hl">✓ ยืนยันรับเงิน 15,614.00 ฿<span class="s-tap">{i:hand}</span></span>
+        <div class="s-row"><span class="s-btn ghost" style="flex:1;color:var(--danger)">✕ ปฏิเสธ</span><span class="s-btn ghost" style="flex:1">ข้าม →</span></div>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">1</span><h3>ดูสลิปทีละใบ</h3><p>แท็บ <span class="m-ui">สลิปรอตรวจ</span> → กดใบแรก ระบบพาไล่ทีละใบ</p>
+      <ul class="m-legend">
+        <li><span class="s-mark ok">✓</span><span><b>ถูกต้อง</b> ยอดถูกตัดทันที ร้านได้ข้อความขอบคุณ</span></li>
+        <li><span class="s-mark bad">✕</span><span><b>ไม่ถูกต้อง</b> ใส่เหตุผล ร้านเห็นแล้วแจ้งใหม่ได้</span></li>
+        <li><span class="s-mark gray">→</span><span><b>ยังไม่แน่ใจ</b> ข้ามไปใบถัดไปก่อน</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ── หน้าแรก / ตามบิลค้าง ── -->
+<section class="m-guide" id="today" hidden>
+  <button class="m-back" data-home>← เลือกเรื่องอื่น</button>
+  <div class="m-guide-head"><span class="m-task-ico">{i:circle-check}</span><div><h2>ต้องทำวันนี้ · ตามบิลค้าง</h2><p>เปิดหน้าแรกทุกเช้า</p></div></div>
+  <div class="m-step">
+    <div class="m-shot" data-nav="dashboard" data-tap-nav data-title="ภาพรวม — ต้องทำวันนี้">
+            <div class="s-body">
+        <div class="s-card"><div class="s-row"><span>👀 <b>ตรวจสลิป 3 ใบ</b></span><span>→</span></div></div>
+        <div class="s-card s-hl"><div class="s-row"><span>⏰ <b>ทวงบิลเลยกำหนด 2 ร้าน</b></span><span>→</span></div><span class="s-muted">cnx01 7,118 ฿ (95 วัน) · pkt02 4,781 ฿</span></div>
+        <div class="s-card"><div class="s-row"><span>📝 <b>กรอกยอดขาย 1 ร้าน</b></span><span>→</span></div></div>
+        <div class="s-card"><div class="s-row"><span>🧾 <b>ออกบิล 3 ร้าน</b></span><span>→</span></div></div>
+      </div>
+    </div>
+    <div class="m-step-text"><h3>กดช่องไหน ไปถึงงานนั้นเลย</h3><p>{nav:dashboard} (หน้าแรกหลังเข้าระบบ) · ไม่มีงานค้างจะขึ้นแถบสีเขียว</p><p>ระบบทักร้านทาง Telegram ให้เองก่อนครบกำหนด 2 วัน และหลังเลยกำหนด 3 วันกับ 7 วัน — ส่วนกลางโทรตามเฉพาะร้านที่ยังเงียบ</p></div>
+  </div>
+</section>
+
+<!-- ── เริ่มต้นครั้งแรก ── -->
+<section class="m-guide" id="start" hidden>
+  <button class="m-back" data-home>← เลือกเรื่องอื่น</button>
+  <div class="m-guide-head"><span class="m-task-ico">{i:rocket}</span><div><h2>เริ่มต้นครั้งแรก</h2><p>ทำครั้งเดียว เรียงตามนี้</p></div></div>
+  <div class="m-step">
+    <div class="m-shot" data-modal="ตั้ง Google Authenticator" data-nav="" data-title="ตั้ง Google Authenticator">
+            <div class="s-body" style="text-align:center">
+        <span class="s-muted">ในแอปกด + แล้วสแกน QR นี้</span>
+        <div class="s-qr"></div>
+        <div class="s-input s-hl" style="text-align:center;letter-spacing:4px;color:var(--text)">123 456</div>
+        <span class="s-btn wide">ยืนยันและเปิดใช้</span>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">1</span><h3>รหัสผ่าน + Google Authenticator</h3><p>เข้าระบบครั้งแรกระบบจะบังคับตั้งรหัสใหม่ แล้วสแกน QR ด้วยแอป Google Authenticator</p><p><b>จดรหัสสำรอง 10 ชุดเก็บไว้</b> ใช้เข้าระบบตอนมือถือหาย</p></div>
+  </div>
+  <div class="m-step">
+    <div class="m-shot" data-nav="settings" data-tap-nav data-title="ตั้งค่าแจ้งเตือน">
+            <div class="s-body">
+        <div class="s-card"><div class="s-row"><span>{i:send} <b>Telegram — ยังไม่ได้เชื่อม</b></span></div><span class="s-btn wide s-hl">เชื่อม Telegram<span class="s-tap">{i:hand}</span></span></div>
+        <div class="s-card s-dim"><div class="s-line" style="width:70%"></div><div class="s-line" style="width:50%"></div></div>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">2</span><h3>เชื่อม Telegram ของทีม</h3><p>{nav:settings} → สร้างบอทกับ @BotFather → สร้างกลุ่มที่มีบอทกับเจ้าของกิจการ พิมพ์อะไรก็ได้ในกลุ่ม → วาง token → ค้นหากลุ่ม → บันทึก</p></div>
+  </div>
+  <div class="m-step">
+    <div class="m-shot" data-nav="bank" data-tap-nav data-title="บัญชีรับเงิน">
+            <div class="s-body">
+        <div class="s-card"><div class="s-row"><b>กสิกรไทย 123-4-56789-0</b><span class="s-badge green">⭐ หลัก</span></div><div class="s-row"><span class="s-muted">บจก. เซ็นทรัลซัพพลาย</span><div class="s-qr" style="width:38px;height:38px;margin:0;border-width:3px"></div></div></div>
+        <span class="s-btn wide s-hl">+ เพิ่มบัญชี<span class="s-tap">{i:hand}</span></span>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">3</span><h3>บัญชีรับเงิน + รูป QR</h3><p>{nav:bank} → <span class="m-ui is-primary">+ เพิ่มบัญชี</span> ร้านสแกนโอนได้ ไม่พิมพ์เลขผิด</p></div>
+  </div>
+  <div class="m-tip">{i:info}<span>จากนั้น: <span class="m-ui">ค่าใช้จ่าย/ส่วนลด</span> ที่ใช้ประจำ → <span class="m-ui">สินค้า</span> → <span class="m-ui">ร้านค้า</span> → <span class="m-ui">เซล</span> (ดูเรื่อง "เพิ่มร้านและสินค้า")</span></div>
+</section>
+
+<!-- ── ร้านและสินค้า ── -->
+<section class="m-guide" id="shops" hidden>
+  <button class="m-back" data-home>← เลือกเรื่องอื่น</button>
+  <div class="m-guide-head"><span class="m-task-ico">{i:store}</span><div><h2>เพิ่มร้านและสินค้า</h2><p>สินค้า 1 ชิ้นอยู่กับร้านเดียวในช่วงเวลาหนึ่ง</p></div></div>
+  <div class="m-step">
+    <div class="m-shot" data-modal="สร้างสินค้าใหม่" data-nav="products" data-title="สร้างสินค้าใหม่">
+            <div class="s-body">
+        <div class="s-input" style="color:var(--text)">รหัสสินค้า: KF-01</div>
+        <div class="s-input" style="color:var(--text)">ชื่อสินค้า: ไก่ทอดสูตรต้นตำรับ</div>
+        <div class="s-input s-hl" style="color:var(--text)">% ส่วนต่างที่ร้านต้องจ่าย: 12</div>
+        <div class="s-input" style="color:var(--text)">มอบหมายให้ร้าน: bkk01 ▾</div>
+        <span class="s-btn wide">บันทึก</span>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">1</span><h3>สร้างสินค้า พร้อมมอบให้ร้าน</h3><p>{nav:products} → <span class="m-ui is-primary">+ สร้างสินค้าใหม่</span> ใส่ % ส่วนต่าง และเลือกร้านได้ในหน้าเดียว</p><p>ย้ายสินค้าไปร้านอื่น: <span class="m-ui">ปิดสัญญา</span> ก่อน แล้วค่อย <span class="m-ui">มอบหมาย</span> ใหม่</p></div>
+  </div>
+  <div class="m-step">
+    <div class="m-shot" data-nav="shops" data-tap-nav data-title="ร้านค้า">
+            <div class="s-body">
+        <div class="s-card">
+          <div class="s-row"><b>bkk01</b><span class="s-badge green">ใช้งาน</span></div>
+          <div class="s-row" style="flex-wrap:wrap;justify-content:flex-start;gap:4px"><span class="s-btn ghost">บิลและยอดค้าง</span><span class="s-btn ghost s-hl">👁 ดูมุมมองนี้</span><span class="s-btn ghost">ตั้งรหัสใหม่</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">2</span><h3>สร้างร้าน แล้วส่งรหัสให้ร้าน</h3><p>{nav:shops} → <span class="m-ui is-primary">+ สร้างร้านค้าใหม่</span> ตั้งชื่อผู้ใช้กับรหัสผ่าน ส่งให้ร้าน</p><p><span class="m-ui">👁 ดูมุมมองนี้</span> = ดูระบบแบบที่ร้านเห็น (ดูอย่างเดียว) · <span class="m-ui">📱 ปลด 2FA</span> เมื่อร้านทำมือถือหาย</p></div>
+  </div>
+</section>
+
+<!-- ── เซล ── -->
+<section class="m-guide" id="agents" hidden>
+  <button class="m-back" data-home>← เลือกเรื่องอื่น</button>
+  <div class="m-guide-head"><span class="m-task-ico">{i:handshake}</span><div><h2>เซลและค่าคอม</h2><p>คอมเกิดเองตอนออกบิล</p></div></div>
+  <div class="m-step">
+    <div class="m-shot" data-nav="agents" data-tap-nav data-title="เซล — ค่าคอม">
+            <div class="s-body">
+        <div class="s-card">
+          <div class="s-row"><b>1–15 ก.ย. 69 · sale01</b></div>
+          <div class="s-row"><span class="s-muted">ค้างจ่าย</span><b style="color:var(--warn)">2,340.00</b></div>
+          <span class="s-btn wide s-hl">จ่ายทั้งรอบ<span class="s-tap">{i:hand}</span></span>
+        </div>
+        <span class="s-btn ghost wide">+ เพิ่มค่าคอมอื่น ๆ</span>
+      </div>
+    </div>
+    <div class="m-step-text"><h3>ผูกดีล → คอมเกิดเอง → กดจ่าย</h3><p>{nav:agents} → <span class="m-ui is-primary">+ เพิ่มเซล</span> → <span class="m-ui">+ ผูกดีล / ค่าคอมอื่น</span> เลือกสินค้า กี่ % และ/หรือเหมาต่อรอบ</p><p>โอนให้เซลแล้ว กด <span class="m-ui is-primary">จ่ายทั้งรอบ</span> · โบนัสพิเศษใช้ <span class="m-ui">+ เพิ่มค่าคอมอื่น ๆ</span></p></div>
+  </div>
+</section>
+
+<!-- ── ประกาศ ── -->
+<section class="m-guide" id="news" hidden>
+  <button class="m-back" data-home>← เลือกเรื่องอื่น</button>
+  <div class="m-guide-head"><span class="m-task-ico">{i:megaphone}</span><div><h2>ประกาศถึงร้าน</h2><p>ขึ้นหน้าแรกของร้าน + ส่ง Telegram</p></div></div>
+  <div class="m-step">
+    <div class="m-shot" data-nav="news" data-tap-nav data-title="ประกาศถึงร้าน">
+            <div class="s-body">
+        <div class="s-card">
+          <div class="s-row"><b>📌 หยุดวันปิยมหาราช</b><span class="s-badge green">กำลังแสดง</span></div>
+          <div class="s-row s-hl" style="padding:2px 4px"><span class="s-muted">อ่านแล้ว</span><b style="color:var(--primary)">9/14 ร้าน</b></div>
+        </div>
+        <span class="s-btn wide">+ ประกาศใหม่</span>
+      </div>
+    </div>
+    <div class="m-step-text"><h3>เขียน · ตั้งวัน · ดูใครอ่าน</h3><p>{nav:news} → <span class="m-ui is-primary">+ ประกาศใหม่</span> เลือกประเภท ปักหมุดได้ ตั้งวันเริ่ม/วันหมดได้ (หมดแล้วหายเอง)</p><p>กดตัวเลข <b>9/14 ร้าน</b> ดูร้านที่ยังไม่อ่านพร้อมเบอร์โทร</p></div>
+  </div>
+</section>
+
+<!-- ── แจ้งเตือนและสำรองข้อมูล ── -->
+<section class="m-guide" id="settings" hidden>
+  <button class="m-back" data-home>← เลือกเรื่องอื่น</button>
+  <div class="m-guide-head"><span class="m-task-ico">{i:bell}</span><div><h2>แจ้งเตือนและสำรองข้อมูล</h2><p>{nav:settings}</p></div></div>
+  <div class="m-step">
+    <div class="m-shot" data-nav="settings" data-tap-nav data-title="ตั้งค่าแจ้งเตือน">
+            <div class="s-body">
+        <div class="s-card">
+          <div class="s-row"><span>ร้านแจ้งชำระ</span></div>
+          <div class="s-row s-hl" style="padding:2px"><span class="s-btn" style="flex:1">ทันที</span><span class="s-btn ghost" style="flex:1">สรุปรายวัน</span><span class="s-btn ghost" style="flex:1">ไม่แจ้ง</span></div>
+        </div>
+        <div class="s-card"><div class="s-row"><span>🌙 ช่วงห้ามรบกวน 22:00–07:00</span><span class="s-switch on"></span></div></div>
+        <div class="s-card"><div class="s-row"><span>💾 สำรองล่าสุด 03:30 น.</span><span class="s-btn ghost">สำรองตอนนี้</span></div></div>
+      </div>
+    </div>
+    <div class="m-step-text"><h3>เลือกทีละเรื่อง</h3>
+      <ul class="m-legend">
+        <li><span class="s-mark">1</span><span><b>ทันที · สรุปรายวัน · ไม่แจ้ง</b> เลือกได้ทุกเรื่อง ยกเว้นเรื่องความปลอดภัย (แจ้งทันทีเสมอ)</span></li>
+        <li><span class="s-mark">2</span><span><b>ช่วงห้ามรบกวน</b> ข้อความกลางคืนไปส่งตอนเช้า</span></li>
+        <li><span class="s-mark">3</span><span><b>สำรองข้อมูล</b> ระบบทำเองทุกคืน กด "สำรองตอนนี้" ก่อนอัปเดตระบบ</span></li>
+      </ul>
+      <p>การบันทึกต้องใส่รหัส 6 หลัก และกลุ่มจะรู้ว่าใครแก้อะไร</p></div>
+  </div>
+</section>
+
+<!-- ── รายงานและรายรับ-รายจ่าย ── -->
+<section class="m-guide" id="reports" hidden>
+  <button class="m-back" data-home>← เลือกเรื่องอื่น</button>
+  <div class="m-guide-head"><span class="m-task-ico">{i:notebook-text}</span><div><h2>รายงาน / รายรับ-รายจ่าย</h2><p>รู้ว่ารอบนี้เหลือเงินจริงเท่าไร</p></div></div>
+  <div class="m-step">
+    <div class="m-shot" data-nav="ledger" data-tap-nav data-title="รายรับ-รายจ่ายของเรา">
+            <div class="s-body">
+        <div class="s-row"><div class="s-card" style="flex:1"><span class="s-muted">เก็บเงินได้จริง</span><b>48,200 ฿</b></div><div class="s-card" style="flex:1"><span class="s-muted">รายจ่ายของเรา</span><b style="color:var(--danger)">−12,500 ฿</b></div></div>
+        <div class="s-card s-hl"><span class="s-muted">เหลือจริงในรอบนี้</span><b style="font-size:17px;color:var(--success)">35,700 ฿</b></div>
+        <span class="s-btn wide">+ บันทึกรายการ</span>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">1</span><h3>บันทึกรายจ่ายของเรา</h3><p>{nav:ledger} → <span class="m-ui is-primary">+ บันทึกรายการ</span> เช่น ค่าขนส่ง ค่าเช่าโกดัง</p><p>ระบบคิด "เหลือจริง" = เงินที่เก็บได้ + รายรับอื่น − รายจ่าย และขึ้นท้ายหน้าภาพรวมด้วย</p></div>
+  </div>
+  <div class="m-step">
+    <div class="m-shot" data-nav="reports" data-tap-nav data-title="รายงานเปรียบเทียบ">
+            <div class="s-body">
+        <div class="s-row"><span class="s-btn">รายเดือน</span><span class="s-btn ghost">รายรอบ</span><span class="s-btn ghost s-hl">เทียบช่วง</span></div>
+        <div class="s-card">
+          <div class="s-row"><span>1–15 ก.ย. 69</span><b>312,400</b></div>
+          <div class="s-row"><span class="s-muted">1–15 ส.ค. 69</span><span class="s-muted">287,900</span></div>
+          <div class="s-row" style="color:var(--success)"><b>เพิ่มขึ้น</b><b>▲ 8.5%</b></div>
+        </div>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">2</span><h3>เทียบยอดขาย</h3><p>{nav:reports} ดูรายเดือน รายรอบ หรือเทียบช่วงวันเดียวกันของเดือนก่อน / ปีก่อน เลือกทุกร้านหรือร้านเดียวได้</p></div>
+  </div>
+</section>
+
+<!-- ── กรณีพิเศษ ── -->
+<section class="m-guide" id="special" hidden>
+  <button class="m-back" data-home>← เลือกเรื่องอื่น</button>
+  <div class="m-guide-head"><span class="m-task-ico">{i:file-pen-line}</span><div><h2>แก้บิล / กรณีพิเศษ</h2></div></div>
+  <div class="m-tasks cols-3">
+    <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:plus}</span><strong>ยอดเพิ่มหลังออกบิล</strong><small>แท็บพร้อมออกบิล → "ไปเพิ่มเข้าบิล" (ก่อนร้านจ่าย)</small></div>
+    <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:file-pen-line}</span><strong>ยอดในบิลผิด</strong><small>"แก้ไขบิล" ได้ถ้ายังไม่มีเงินเข้า · ไม่งั้นยกเลิก (ใส่เหตุผล) แล้วออกใหม่</small></div>
+    <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:calendar}</span><strong>เลื่อนวันครบกำหนด / เปลี่ยนบัญชี</strong><small>เปิดบิลโหมดแก้ไข → "🏦 เปลี่ยนบัญชี / วันครบกำหนด"</small></div>
+    <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:refresh-cw}</span><strong>ร้านคืนของมากกว่าขาย</strong><small>ไม่ต้องโอนคืน ระบบหักบิลรอบถัดไปให้เอง</small></div>
+    <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:banknote}</span><strong>ร้านจ่ายเป็นดอลลาร์</strong><small>ตั้งอัตราของรอบข้างแถบรอบบิล → เลือก USD ตอนออกบิล</small></div>
+    <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:wallet}</span><strong>ร้านทยอยจ่าย</strong><small>ตรวจสลิปทีละงวด บิลเป็น "ชำระบางส่วน" จนครบ</small></div>
+  </div>
+</section>
+
+<!-- ── คำถามที่พบบ่อย ── -->
+<section class="m-guide" id="faq" hidden>
+  <button class="m-back" data-home>← เลือกเรื่องอื่น</button>
+  <div class="m-guide-head"><span class="m-task-ico">{i:circle-help}</span><div><h2>คำถามที่พบบ่อย</h2></div></div>
+  <div class="m-faqs">
+    <details class="m-faq"><summary>ร้านบอกว่าโอนแล้ว แต่ในระบบยังค้าง</summary><div>ดูแท็บ "สลิปรอตรวจ" ก่อน ถ้ามี = ยังไม่ได้กดยืนยัน ถ้าไม่มี = ร้านยังไม่ได้แนบสลิปในระบบ</div></details>
+    <details class="m-faq"><summary>แก้ยอดขายที่ออกบิลไปแล้วไม่ได้</summary><div>ตั้งใจให้เป็นแบบนั้น ยอดในบิลต้องตรงกับที่ร้านเห็น ถ้ายังไม่มีเงินเข้า ยกเลิกบิล แก้ยอด แล้วออกใหม่</div></details>
+    <details class="m-faq"><summary>ร้านไม่ได้ข้อความ Telegram</summary><div>ร้านต้องเชื่อม Telegram เองที่เมนูบัญชีของร้าน ใช้ "👁 ดูมุมมองนี้" ดูว่าเช็กลิสต์ "เชื่อม Telegram" ยังค้างอยู่ไหม</div></details>
+    <details class="m-faq"><summary>มือถือที่มี Google Authenticator หาย</summary><div>เข้าด้วยรหัสสำรอง 1 ชุด แล้วตั้งใหม่ · รหัสสำรองหมด: ให้แอดมินอีกคนปลดให้ หรือให้ผู้ดูแลเซิร์ฟเวอร์ปลด</div></details>
+    <details class="m-faq"><summary>บัญชีรับเงินถูกแก้โดยไม่รู้ตัว</summary><div>ระบบแจ้งกลุ่มทันทีและขึ้นแถบเตือนทุกหน้า ถ้าไม่ได้แก้เอง ให้เปลี่ยนรหัสผ่านทันที (ทุกเครื่องหลุด) แล้วแก้บัญชีกลับ</div></details>
+  </div>
+</section>
+
+</div>

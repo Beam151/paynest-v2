@@ -1,0 +1,850 @@
+<?php
+
+namespace App\Services;
+
+use App\Libraries\ApiException;
+use App\Libraries\AuthContext;
+use App\Libraries\Db;
+use App\Libraries\Money;
+use App\Libraries\Period;
+use App\Libraries\SignedUrl;
+use Config\Paynest;
+use Throwable;
+
+/**
+ * ใบเรียกเก็บ — 1 ร้าน 1 รอบ = ใบเดียว
+ * ยอดที่ร้านต้องจ่าย = ส่วนต่าง + ค่าใช้จ่ายอื่น − ส่วนลด − ยอดยกมา
+ */
+final class InvoiceService
+{
+    private const SELECT_INVOICE = "
+        SELECT i.*, f.username AS franchise_username,
+               ba.bank_name, ba.account_name, ba.account_number, ba.branch AS bank_branch,
+               ba.currency AS bank_currency, ba.qr_url AS bank_qr_url,
+               bp.code AS period_code, bp.start_date AS period_start, bp.end_date AS period_end,
+               (SELECT COALESCE(SUM(fc.amount_satang), 0) FROM franchise_credits fc
+                 WHERE fc.source_invoice_id = i.id AND fc.status <> 'CANCELLED') AS credit_created,
+               (SELECT COUNT(*) FROM payment_submissions ps
+                 WHERE ps.invoice_id = i.id AND ps.status = 'PENDING') AS pending_submissions,
+               (SELECT COUNT(*) FROM sales_entries se
+                 WHERE se.franchise_id = i.franchise_id AND se.period_id = i.period_id
+                   AND se.status <> 'INVOICED') AS pending_entries
+          FROM invoices i
+          JOIN franchises f       ON f.id = i.franchise_id
+          JOIN billing_periods bp ON bp.id = i.period_id
+          LEFT JOIN bank_accounts ba ON ba.id = i.bank_account_id";
+
+    private static function row(int $id): array
+    {
+        return Db::one('SELECT * FROM invoices WHERE id = ?', [$id]) ?? throw ApiException::notFound('ไม่พบใบเรียกเก็บ');
+    }
+
+    /* ── คำนวณยอดรวมใหม่ทุกครั้งที่บิลเปลี่ยน ──────────────────── */
+
+    /**
+     * ยอดที่ต้องจ่ายจริง = ส่วนต่างจากยอดเต็ม + ค่าใช้จ่ายอื่น − ส่วนลด − ยอดยกมาจากรอบก่อน
+     * เรียกซ้ำได้เสมอ และเป็นที่เดียวที่ตัดสินสถานะ OPEN/PARTIAL/PAID
+     *
+     * รอบไหนร้านคืนสินค้ามากกว่าขาย ยอดจะติดลบ = เราเป็นฝ่ายติดค้างร้าน
+     * ไม่ได้โอนเงินคืน แต่จดเป็นเครดิตแล้วหักออกจากบิลรอบถัดไปให้เอง (ดู CreditService)
+     */
+    private static function recalc(int $invoiceId, ?array $user): int
+    {
+        $inv  = self::row($invoiceId);
+        $sums = Db::one(
+            "SELECT COALESCE(SUM(CASE WHEN kind = 'CHARGE'   THEN amount_satang ELSE 0 END), 0) AS charge,
+                    COALESCE(SUM(CASE WHEN kind = 'DISCOUNT' THEN amount_satang ELSE 0 END), 0) AS discount
+               FROM invoice_adjustments WHERE invoice_id = ?",
+            [$invoiceId],
+        );
+        $charge   = (int) $sums['charge'];
+        $discount = (int) $sums['discount'];
+
+        /*
+         * ตรวจก่อนแตะเครดิต เพื่อให้ error ไม่ทิ้งเครดิตค้างสถานะกลางทาง
+         * ส่วนลดมากเกินยังเป็น error เพราะมันคือคนกรอกผิด ไม่ใช่ร้านคืนของ
+         * ต่างจากส่วนต่างติดลบซึ่งเป็นเหตุการณ์ทางธุรกิจจริงที่ต้องยกยอดไป
+         */
+        $base = (int) $inv['commission_total_satang'] + $charge;
+        if ($base >= 0 && $discount > $base) {
+            throw ApiException::badRequest('ส่วนลดรวมมากกว่ายอดที่ต้องจ่าย — ปรับส่วนลดลงก่อน');
+        }
+        if ($base < 0 && $discount > 0) {
+            throw ApiException::badRequest(
+                'รอบนี้ยอดติดลบอยู่แล้ว (' . Money::toBaht($base) . ' บาท — ร้านคืนมากกว่าที่ขายได้) '
+                . 'ใส่ส่วนลดเพิ่มไม่ได้ ยอดทั้งก้อนจะถูกยกไปหักรอบหน้าให้อยู่แล้ว',
+            );
+        }
+
+        // คิดใหม่จากเครดิตเต็มก้อนเสมอ — คืนของเก่าก่อน ไม่งั้นแก้บิลซ้ำจะหักซ้อนกัน
+        CreditService::clearCreditsFrom($invoiceId);
+        CreditService::releaseCreditsOf($invoiceId);
+
+        $subtotal      = $base - $discount;
+        $creditApplied = 0;
+        if ($subtotal < 0) {
+            // ติดค้างร้าน — รอบนี้ไม่ต้องเก็บอะไร แล้วยกทั้งก้อนไปหักรอบหน้า
+            $net = 0;
+            CreditService::create((int) $inv['franchise_id'], -$subtotal, $invoiceId, "ยอดติดลบจากบิล {$inv['invoice_no']}", isset($user['id']) ? (int) $user['id'] : null);
+        } else {
+            $creditApplied = CreditService::applyCreditsTo($invoiceId, (int) $inv['franchise_id'], $subtotal);
+            $net           = $subtotal - $creditApplied;
+        }
+
+        $paid = Db::int('SELECT COALESCE(SUM(amount_satang), 0) FROM invoice_payments WHERE invoice_id = ?', [$invoiceId]);
+        if ($paid > $net) {
+            throw ApiException::badRequest('แก้ไม่ได้: ยอดที่ชำระแล้ว ' . Money::toBaht($paid) . ' บาท จะเกินยอดใหม่ ' . Money::toBaht($net) . ' บาท');
+        }
+        $status = $inv['status'] === 'VOID' ? 'VOID' : ($paid >= $net ? 'PAID' : ($paid === 0 ? 'OPEN' : 'PARTIAL'));
+
+        Db::exec(
+            'UPDATE invoices
+                SET charge_total_satang = ?, discount_total_satang = ?, net_total_satang = ?,
+                    credit_applied_satang = ?, paid_satang = ?, status = ?,
+                    paid_at = CASE WHEN ? = \'PAID\' THEN COALESCE(paid_at, UTC_TIMESTAMP()) ELSE NULL END,
+                    updated_at = UTC_TIMESTAMP()
+              WHERE id = ?',
+            [$charge, $discount, $net, $creditApplied, $paid, $status, $status, $invoiceId],
+        );
+
+        return $net;
+    }
+
+    /* ── ภาพรวมการออกบิลของรอบ (ออกทีละหลายร้าน) ───────────────────── */
+
+    /**
+     * แต่ละร้านในรอบนี้อยู่ขั้นไหน — ใช้หน้า "พร้อมออกบิล" และหน้าภาพรวม
+     *   NO_SALES   มีสินค้าต้องขายในรอบนี้ แต่ยังไม่มีการกรอกยอด
+     *   READY      กรอกยอดแล้ว ยังไม่ได้ออกบิล
+     *   INVOICED   ออกบิลแล้ว (addedLater = มียอดกรอกเพิ่มทีหลังที่ยังไม่ได้เพิ่มเข้าบิล)
+     * ร้านที่ไม่มีสินค้าในรอบนี้และไม่มีข้อมูลเลยไม่ต้องขึ้น — ไม่มีอะไรต้องทำ
+     */
+    public static function readiness(string $periodCode): array
+    {
+        $p   = Period::fromCode($periodCode);
+        $pid = (int) (Db::val('SELECT id FROM billing_periods WHERE code = ?', [$p['code']]) ?? -1);
+
+        $rows = Db::all(
+            "SELECT f.id, f.username,
+                    (SELECT COUNT(*) FROM sales_entries se
+                      WHERE se.franchise_id = f.id AND se.period_id = ? AND se.status <> 'INVOICED') AS pending_entries,
+                    (SELECT COALESCE(SUM(se.commission_amount_satang), 0) FROM sales_entries se
+                      WHERE se.franchise_id = f.id AND se.period_id = ? AND se.status <> 'INVOICED') AS pending_commission,
+                    (SELECT COALESCE(SUM(se.gross_amount_satang), 0) FROM sales_entries se
+                      WHERE se.franchise_id = f.id AND se.period_id = ? AND se.status <> 'INVOICED') AS pending_gross,
+                    i.id AS invoice_id, i.invoice_no, i.net_total_satang,
+                    (SELECT COUNT(*) FROM product_assignments a
+                      WHERE a.franchise_id = f.id AND a.start_date <= ? AND (a.end_date IS NULL OR a.end_date >= ?)) AS assigned
+               FROM franchises f
+               LEFT JOIN invoices i ON i.franchise_id = f.id AND i.period_id = ? AND i.status <> 'VOID'
+              WHERE f.status = 'ACTIVE'
+              ORDER BY f.username",
+            [$pid, $pid, $pid, $p['endDate'], $p['startDate'], $pid],
+        );
+
+        $items = [];
+        foreach ($rows as $r) {
+            $pending = (int) $r['pending_entries'];
+            $status  = $r['invoice_id'] ? 'INVOICED' : ($pending > 0 ? 'READY' : 'NO_SALES');
+            $item    = [
+                'franchiseId'       => (int) $r['id'],
+                'username'          => $r['username'],
+                'status'            => $status,
+                'pendingEntries'    => $pending,
+                'pendingCommission' => Money::toBaht((int) $r['pending_commission']),
+                'pendingGross'      => Money::toBaht((int) $r['pending_gross']),
+                'invoiceId'         => $r['invoice_id'] === null ? null : (int) $r['invoice_id'],
+                'invoiceNo'         => $r['invoice_no'] ?? null,
+                'invoiceNetTotal'   => $r['invoice_id'] ? Money::toBaht($r['net_total_satang']) : null,
+                'addedLater'        => (bool) $r['invoice_id'] && $pending > 0,
+                'assigned'          => (int) $r['assigned'] > 0,
+            ];
+            if ($item['assigned'] || $status !== 'NO_SALES') {
+                $items[] = $item;
+            }
+        }
+        $count = static fn (string $status) => count(array_filter($items, static fn ($r) => $r['status'] === $status));
+
+        return [
+            'periodCode' => $p['code'],
+            'items'      => $items,
+            'summary'    => [
+                'ready'      => $count('READY'),
+                'invoiced'   => $count('INVOICED'),
+                'noSales'    => $count('NO_SALES'),
+                'addedLater' => count(array_filter($items, static fn ($r) => $r['addedLater'])),
+            ],
+        ];
+    }
+
+    /**
+     * ออกบิลหลายร้านในครั้งเดียว — แต่ละร้านแยกกัน ร้านไหนติดปัญหา ร้านอื่นยังออกได้
+     * ใช้ค่าตั้งต้นทั้งหมด (บัญชีหลัก บาท ครบกำหนดตามรอบ) — ร้านที่ต้องใส่ส่วนลดค่อยแก้บิลทีหลัง
+     */
+    public static function generateBulk(array $input, array $user): array
+    {
+        $created = [];
+        $errors  = [];
+        foreach (array_values(array_unique(array_map('intval', $input['franchiseIds']))) as $franchiseId) {
+            try {
+                $inv       = self::generate(['franchiseId' => $franchiseId, 'periodCode' => $input['periodCode'], 'dueDate' => $input['dueDate'] ?? null], $user);
+                $created[] = [
+                    'franchiseId' => $franchiseId,
+                    'invoiceId'   => $inv['id'],
+                    'invoiceNo'   => $inv['invoiceNo'],
+                    'netTotal'    => $inv['netTotal'],
+                    'dueDate'     => $inv['dueDate'],
+                    'periodCode'  => $inv['periodCode'],
+                ];
+            } catch (Throwable $e) {
+                $f        = Db::one('SELECT username FROM franchises WHERE id = ?', [$franchiseId]);
+                $errors[] = [
+                    'franchiseId' => $franchiseId,
+                    'username'    => $f['username'] ?? (string) $franchiseId,
+                    'message'     => $e instanceof ApiException ? $e->getMessage() : (Db::isConstraintError($e) ? 'ข้อมูลขัดกับข้อกำหนดของระบบ' : 'เกิดข้อผิดพลาดภายในระบบ'),
+                ];
+            }
+        }
+
+        return ['created' => $created, 'errors' => $errors];
+    }
+
+    /* ── ออกใบเรียกเก็บ ─────────────────────────────────────────── */
+
+    public static function generate(array $input, array $user): array
+    {
+        $period    = PeriodService::getByCode($input['periodCode']);
+        $franchise = Db::one('SELECT * FROM franchises WHERE id = ?', [(int) $input['franchiseId']]) ?? throw ApiException::notFound('ไม่พบร้านค้า');
+        $currency  = $input['currency'] ?? 'THB';
+
+        // 1 ร้าน / 1 รอบบิล = ใบเดียว — รายการที่ยังไม่ได้เรียกเก็บให้เพิ่มเข้าใบเดิมแทน
+        $active = Db::one("SELECT * FROM invoices WHERE franchise_id = ? AND period_id = ? AND status <> 'VOID' LIMIT 1", [$franchise['id'], $period['id']]);
+        if ($active !== null) {
+            throw ApiException::conflict(
+                "ร้าน {$franchise['username']} ออกใบเรียกเก็บของรอบ {$period['code']} ไปแล้ว ({$active['invoice_no']}) — "
+                . 'หนึ่งรอบบิลออกได้ใบเดียว ถ้ามีรายการตกหล่นให้กด "เพิ่มรายการเข้าบิล" ที่ใบเดิม '
+                . 'หรือยกเลิกใบเดิมก่อนแล้วออกใหม่',
+            );
+        }
+
+        /*
+         * สกุลเงินที่ให้ร้านจ่าย — ยอดในฐานข้อมูลยังเป็นบาทเสมอ
+         * ตัวนี้บอกแค่ว่าจะให้ร้านเห็นและโอนเป็นสกุลไหน แล้วแปลงด้วยอัตราที่ตรึงไว้
+         * บิลดอลลาร์ที่ไม่มีอัตราแปลงไม่ได้ จึงต้องกันไว้ตั้งแต่ต้น
+         */
+        if (! in_array($currency, ['THB', 'USD'], true)) {
+            throw ApiException::badRequest('currency: ต้องเป็น THB หรือ USD');
+        }
+        if ($currency === 'USD' && ! $period['usd_rate_satang']) {
+            throw ApiException::badRequest("รอบ {$period['code']} ยังไม่ได้ตั้งอัตราแลกเปลี่ยน — ออกบิลเป็นดอลลาร์ไม่ได้ ให้ตั้งอัตราที่แถบรอบบิลก่อน");
+        }
+
+        // ไม่ได้เลือกมา = ใช้บัญชีหลักที่รับสกุลเดียวกับบิล (ยังไม่มีบัญชีเลยก็ปล่อยว่างไว้ได้ ค่อยไปเพิ่มทีหลัง)
+        $bankAccount = ($input['bankAccountId'] ?? null) === null
+            ? BankAccountService::defaultId($currency)
+            : BankAccountService::assertUsable((int) $input['bankAccountId'], $currency);
+
+        // ยอดที่บันทึกแล้วพร้อมเรียกเก็บทันที ไม่ต้องรออนุมัติซ้ำ
+        $available = Db::all("SELECT * FROM sales_entries WHERE franchise_id = ? AND period_id = ? AND status <> 'INVOICED' ORDER BY id", [$franchise['id'], $period['id']]);
+        if ($available === []) {
+            $existing = array_column(Db::all("SELECT invoice_no FROM invoices WHERE franchise_id = ? AND period_id = ? AND status <> 'VOID' ORDER BY id", [$franchise['id'], $period['id']]), 'invoice_no');
+
+            throw ApiException::badRequest($existing
+                ? "ออกใบเรียกเก็บของรอบ {$period['code']} ครบแล้ว (" . implode(', ', $existing) . ') — ไม่มียอดที่ยังไม่ได้เรียกเก็บเหลืออยู่'
+                : "ยังไม่มียอดขายที่บันทึกไว้ในรอบ {$period['code']} — ไปกรอกยอดที่หน้า \"ยอดขายรายรอบ\" ก่อน");
+        }
+
+        // เลือกเฉพาะบางรายการได้ — ที่ไม่ได้เลือกยังคงรออกใบถัดไปได้
+        $entries = $available;
+        if (array_key_exists('entryIds', $input)) {
+            $wanted = array_values(array_unique(array_map('intval', $input['entryIds'])));
+            if ($wanted === []) {
+                throw ApiException::badRequest('ต้องเลือกอย่างน้อยหนึ่งรายการที่จะเรียกเก็บ');
+            }
+            $byId    = array_column($available, null, 'id');
+            $missing = array_values(array_filter($wanted, static fn ($id) => ! isset($byId[$id])));
+            if ($missing !== []) {
+                throw ApiException::badRequest("รายการที่เลือกบางรายการไม่อยู่ในรอบ {$period['code']} ของร้านนี้ หรือออกบิลไปแล้ว (id: " . implode(', ', $missing) . ')');
+            }
+            $entries = array_map(static fn ($id) => $byId[$id], $wanted);
+        }
+
+        $grossTotal      = array_sum(array_map(static fn ($e) => (int) $e['gross_amount_satang'], $entries));
+        $commissionTotal = array_sum(array_map(static fn ($e) => (int) $e['commission_amount_satang'], $entries));
+        $due             = ! empty($input['dueDate'])
+            ? Period::assertDate($input['dueDate'], 'dueDate')
+            : Period::addDays($period['end_date'], config(Paynest::class)->invoiceDueDays);
+        $invoiceNo   = self::nextInvoiceNo($period['code'], $franchise['username']);
+        $adjustments = $input['adjustments'] ?? [];
+
+        return Db::tx(static function () use ($invoiceNo, $franchise, $period, $grossTotal, $commissionTotal, $due, $input, $bankAccount, $currency, $user, $entries, $adjustments) {
+            $invoiceId = Db::insert(
+                'INSERT INTO invoices
+                   (invoice_no, franchise_id, period_id, gross_total_satang, commission_total_satang,
+                    net_total_satang, due_date, note, bank_account_id, usd_rate_satang, currency,
+                    created_by_user_id, issued_at, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP(), UTC_TIMESTAMP())',
+                [
+                    $invoiceNo, $franchise['id'], $period['id'], $grossTotal, $commissionTotal, $commissionTotal,
+                    $due, $input['note'] ?? null, $bankAccount, $period['usd_rate_satang'] ?? null, $currency, $user['id'],
+                ],
+            );
+            foreach ($entries as $e) {
+                Db::exec("UPDATE sales_entries SET status = 'INVOICED', invoice_id = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?", [$invoiceId, $e['id']]);
+            }
+            // ค่าใช้จ่ายอื่น/ส่วนลดที่แนบมาพร้อมตอนออกบิล
+            foreach ($adjustments as $adj) {
+                self::insertAdjustment($invoiceId, $commissionTotal, $adj, $user);
+            }
+            self::recalc($invoiceId, $user);
+
+            // ค่าคอมของเซลที่ถือดีลของสินค้าในบิลนี้ (ดีลผูกกับสินค้า บิลใบเดียวจึงอาจมีค่าคอมของเซลหลายคน)
+            $commissionIds = SalesAgentService::createCommissionForInvoice(self::row($invoiceId), $period, (int) $user['id']);
+
+            Audit::write((int) $user['id'], 'invoice.create', 'invoice', $invoiceId, [
+                'invoiceNo'          => $invoiceNo,
+                'lines'              => count($entries),
+                'adjustments'        => count($adjustments),
+                'salesCommissionIds' => $commissionIds,
+            ]);
+
+            return self::get($invoiceId, $user);
+        });
+    }
+
+    /**
+     * เพิ่มรายการยอดขายที่ยังไม่ได้เรียกเก็บเข้าใบเดิมของรอบนั้น
+     *
+     * มีเพราะหนึ่งรอบบิลออกได้ใบเดียว — ถ้ากรอกยอดเพิ่มทีหลังหรือตอนออกบิลไม่ได้ติ๊กครบ
+     * รายการที่เหลือต้องมีทางขึ้นบิล ไม่งั้นจะค้างเก็บเงินไม่ได้ตลอดไป
+     * ค่าใช้จ่าย/ส่วนลดที่คิดเป็น % ถูกคำนวณใหม่ตามส่วนต่างก้อนใหม่ และค่าคอมเซลถูกคิดใหม่ด้วย
+     */
+    public static function addEntries(int $invoiceId, ?array $entryIds, array $user): array
+    {
+        $inv = self::row($invoiceId);
+        self::assertEditable($inv);
+        $pending = Db::all("SELECT * FROM sales_entries WHERE franchise_id = ? AND period_id = ? AND status <> 'INVOICED' ORDER BY id", [$inv['franchise_id'], $inv['period_id']]);
+        if ($pending === []) {
+            throw ApiException::badRequest('ไม่มีรายการที่ยังไม่ได้เรียกเก็บในรอบนี้');
+        }
+        $picked = $pending;
+        if ($entryIds !== null) {
+            $wanted = array_values(array_unique(array_map('intval', $entryIds)));
+            if ($wanted === []) {
+                throw ApiException::badRequest('ต้องเลือกอย่างน้อยหนึ่งรายการ');
+            }
+            $byId    = array_column($pending, null, 'id');
+            $missing = array_values(array_filter($wanted, static fn ($id) => ! isset($byId[$id])));
+            if ($missing !== []) {
+                throw ApiException::badRequest('รายการที่เลือกไม่อยู่ในรอบนี้ของร้านนี้ หรือออกบิลไปแล้ว (id: ' . implode(', ', $missing) . ')');
+            }
+            $picked = array_map(static fn ($id) => $byId[$id], $wanted);
+        }
+
+        return Db::tx(static function () use ($invoiceId, $inv, $picked, $user) {
+            foreach ($picked as $e) {
+                Db::exec("UPDATE sales_entries SET status = 'INVOICED', invoice_id = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?", [$invoiceId, $e['id']]);
+            }
+            $gross      = (int) $inv['gross_total_satang'] + array_sum(array_map(static fn ($e) => (int) $e['gross_amount_satang'], $picked));
+            $commission = (int) $inv['commission_total_satang'] + array_sum(array_map(static fn ($e) => (int) $e['commission_amount_satang'], $picked));
+            Db::exec('UPDATE invoices SET gross_total_satang = ?, commission_total_satang = ? WHERE id = ?', [$gross, $commission, $invoiceId]);
+
+            // รายการที่คิดเป็น % ต้องเดินตามส่วนต่างก้อนใหม่ ไม่งั้นยอดจะเพี้ยน
+            foreach (Db::all('SELECT id, pct_bp FROM invoice_adjustments WHERE invoice_id = ? AND pct_bp IS NOT NULL', [$invoiceId]) as $a) {
+                Db::exec('UPDATE invoice_adjustments SET amount_satang = ? WHERE id = ?', [Money::commissionOf($commission, (int) $a['pct_bp']), $a['id']]);
+            }
+            self::recalc($invoiceId, $user);
+
+            // คิดค่าคอมเซลใหม่ให้ตรงยอด (ของที่จ่ายให้เซลไปแล้วไม่ถูกแตะ)
+            $period = Db::one('SELECT * FROM billing_periods WHERE id = ?', [$inv['period_id']]);
+            SalesAgentService::recalcCommissionForInvoice(self::row($invoiceId), $period, (int) $user['id']);
+
+            Audit::write((int) $user['id'], 'invoice.add_lines', 'invoice', $invoiceId, ['added' => count($picked), 'gross' => $gross, 'commission' => $commission]);
+
+            return self::get($invoiceId, $user);
+        });
+    }
+
+    private static function nextInvoiceNo(string $periodCode, string $franchiseUsername): string
+    {
+        $base  = 'INV-' . str_replace('-', '', $periodCode) . "-{$franchiseUsername}";
+        $taken = Db::int('SELECT COUNT(*) FROM invoices WHERE invoice_no LIKE ?', [self::likePrefix($base)]);
+
+        return $taken === 0 ? $base : "{$base}-R{$taken}";
+    }
+
+    /** LIKE 'prefix%' โดย escape % _ \ ในชื่อร้าน (ชื่อร้านมี _ ได้) */
+    private static function likePrefix(string $prefix): string
+    {
+        return addcslashes($prefix, '\\%_') . '%';
+    }
+
+    /* ── ค่าใช้จ่ายอื่น / ส่วนลด ─────────────────────────────────── */
+
+    /**
+     * แปลง input หนึ่งรายการเป็นแถวใน invoice_adjustments
+     * - อ้าง chargeItemId เพื่อดึงชื่อ/ค่าตั้งต้นจากรายการตั้งต้น หรือพิมพ์ label เองก็ได้
+     * - ระบุ pct = คิดเป็น % ของส่วนต่างในรอบนั้น (เก็บทั้ง % และจำนวนเงินที่คำนวณได้)
+     */
+    private static function insertAdjustment(int $invoiceId, int $commissionTotal, array $input, array $user): int
+    {
+        $kind   = $input['kind'] ?? null;
+        $label  = $input['label'] ?? null;
+        $pctBp  = ($input['pct'] ?? null) === null ? null : Money::pctToBp($input['pct'], 'pct');
+        $satang = ($input['amount'] ?? null) === null ? null : Money::toSatang($input['amount'], 'amount');
+
+        if (! empty($input['chargeItemId'])) {
+            $item = Db::one('SELECT * FROM charge_items WHERE id = ?', [(int) $input['chargeItemId']])
+                ?? throw ApiException::notFound("ไม่พบรายการค่าใช้จ่าย id {$input['chargeItemId']}");
+            $kind = $item['kind'];
+            $label ??= $item['name'];
+            if ($pctBp === null && $satang === null) {
+                $pctBp  = $item['default_pct_bp'] === null ? null : (int) $item['default_pct_bp'];
+                $satang = $item['default_amount_satang'] === null ? null : (int) $item['default_amount_satang'];
+            }
+        }
+        if (! in_array($kind, ['CHARGE', 'DISCOUNT'], true)) {
+            throw ApiException::badRequest('kind: ต้องเป็น CHARGE หรือ DISCOUNT');
+        }
+        if (! $label) {
+            throw ApiException::badRequest('ต้องระบุชื่อรายการ (label) หรือเลือก chargeItemId');
+        }
+        if ($pctBp !== null && $satang === null) {
+            $satang = Money::commissionOf($commissionTotal, $pctBp);
+        }
+        if ($satang === null) {
+            throw ApiException::badRequest("รายการ \"{$label}\": ต้องระบุจำนวนเงินหรือเปอร์เซ็นต์");
+        }
+        if ($satang < 0) {
+            throw ApiException::badRequest("รายการ \"{$label}\": จำนวนเงินต้องไม่ติดลบ");
+        }
+
+        return Db::insert(
+            'INSERT INTO invoice_adjustments (invoice_id, charge_item_id, kind, label, pct_bp, amount_satang, note, created_by_user_id, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())',
+            [$invoiceId, ! empty($input['chargeItemId']) ? (int) $input['chargeItemId'] : null, $kind, $label, $pctBp, $satang, $input['note'] ?? null, $user['id']],
+        );
+    }
+
+    /**
+     * บิลที่ส่งไปแล้วและมีความเคลื่อนไหวเรื่องเงินแล้ว ห้ามแก้ยอด
+     * ไม่งั้นสิ่งที่ร้านเห็นตอนจ่าย กับยอดในระบบจะไม่ตรงกัน แล้วตามหลังยาก
+     */
+    private static function assertEditable(array $inv): void
+    {
+        if ($inv['status'] === 'VOID') {
+            throw ApiException::conflict('ใบเรียกเก็บนี้ถูกยกเลิกแล้ว');
+        }
+        /*
+         * PAID ที่ยังไม่มีเงินเข้าเลย = บิลยอด 0 (รอบที่ติดลบ หรือยอดยกมาหักจนหมดพอดี)
+         * ใบพวกนี้ต้องแก้ได้ ไม่งั้นยอดบวกที่เข้ามาทีหลังในรอบเดียวกันจะขึ้นบิลไม่ได้เลย
+         * ด่านจริงคือ paid_satang > 0 — "เงินขยับแล้ว" ต่างหากที่ห้ามแก้
+         */
+        $paid = (int) $inv['paid_satang'];
+        if ($inv['status'] === 'PAID' && $paid > 0) {
+            throw ApiException::conflict('ใบที่ชำระครบแล้วแก้รายการไม่ได้');
+        }
+        if ($paid > 0) {
+            throw ApiException::conflict('ร้านจ่ายมาแล้ว ' . Money::fmt(Money::toBaht($paid)) . ' บาท — แก้ข้อมูลในบิลไม่ได้ ถ้าผิดต้องยกเลิกใบนี้แล้วออกใบใหม่');
+        }
+        if (Db::int("SELECT COUNT(*) FROM payment_submissions WHERE invoice_id = ? AND status = 'PENDING'", [$inv['id']]) > 0) {
+            throw ApiException::conflict('มีสลิปรอตรวจสอบอยู่ — ตรวจให้เสร็จ หรือให้ร้านยกเลิกการแจ้งก่อนจึงจะแก้บิลได้');
+        }
+    }
+
+    public static function addAdjustment(int $invoiceId, array $input, array $user): array
+    {
+        $inv = self::row($invoiceId);
+        self::assertEditable($inv);
+
+        return Db::tx(static function () use ($invoiceId, $inv, $input, $user) {
+            $id = self::insertAdjustment($invoiceId, (int) $inv['commission_total_satang'], $input, $user);
+            self::recalc($invoiceId, $user);
+            Audit::write((int) $user['id'], 'invoice.adjustment.add', 'invoice', $invoiceId, ['adjustmentId' => $id, 'label' => $input['label'] ?? null]);
+
+            return self::get($invoiceId, $user);
+        });
+    }
+
+    /**
+     * แก้ข้อมูลหัวบิลที่ไม่เกี่ยวกับตัวเลขยอดขาย — บัญชีปลายทาง วันครบกำหนด หมายเหตุ สกุลที่ให้จ่าย
+     * กติกาเดียวกับการแก้ยอด: แก้ได้เฉพาะตอนที่ยังไม่มีเงินเข้าและไม่มีสลิปรอตรวจ
+     * (ถ้าร้านโอนไปแล้ว การเปลี่ยนบัญชีปลายทางจะทำให้สลิปที่ถืออยู่ไม่ตรงกับบิล)
+     */
+    public static function updateHeader(int $id, array $patch, array $user): array
+    {
+        $inv = self::row($id);
+        self::assertEditable($inv);
+        $sets   = [];
+        $params = [];
+
+        /*
+         * เปลี่ยนสกุลที่ให้ร้านจ่าย — ยอดในฐานข้อมูลยังเป็นบาทเท่าเดิม แค่เปลี่ยนตัวที่ร้านเห็นและโอน
+         * บิลดอลลาร์ต้องมีอัตราตรึงไว้ ใบที่ออกตอนรอบยังไม่ได้ตั้งอัตราจะไม่มี ต้องหยิบจากรอบมาเติมตอนนี้
+         */
+        $currency = $patch['currency'] ?? $inv['currency'] ?? 'THB';
+        if (array_key_exists('currency', $patch) && $patch['currency'] !== $inv['currency']) {
+            $rate = $inv['usd_rate_satang'];
+            if ($currency === 'USD' && ! $rate) {
+                $rate = Db::val('SELECT usd_rate_satang FROM billing_periods WHERE id = ?', [$inv['period_id']]);
+                if (! $rate) {
+                    throw ApiException::badRequest('รอบบิลนี้ยังไม่ได้ตั้งอัตราแลกเปลี่ยน — เปลี่ยนเป็นสกุลดอลลาร์ไม่ได้ ให้ตั้งอัตราที่แถบรอบบิลก่อน');
+                }
+                $sets[]   = 'usd_rate_satang = ?';
+                $params[] = $rate;
+            }
+            $sets[]   = 'currency = ?';
+            $params[] = $currency;
+        }
+
+        /*
+         * บัญชีปลายทางต้องรับสกุลเดียวกับบิลเสมอ
+         * เปลี่ยนสกุลอย่างเดียวโดยไม่เลือกบัญชีใหม่ = บัญชีเดิมต้องผ่านด่านนี้ด้วย ไม่งั้นบิลจะชี้บัญชีผิดสกุล
+         */
+        if (array_key_exists('bankAccountId', $patch)) {
+            $sets[]   = 'bank_account_id = ?';
+            $params[] = $patch['bankAccountId'] === null ? null : BankAccountService::assertUsable((int) $patch['bankAccountId'], $currency);
+        } elseif ($currency !== $inv['currency'] && $inv['bank_account_id']) {
+            // เช็กแค่สกุล ไม่เช็กสถานะ เพราะบัญชีที่ปิดใช้งานทีหลังไม่ใช่ความผิดของบิลใบนี้
+            $cur = Db::one('SELECT * FROM bank_accounts WHERE id = ?', [$inv['bank_account_id']]);
+            if ($cur !== null && $cur['currency'] !== $currency) {
+                throw ApiException::badRequest(
+                    'บิลใบนี้ผูกบัญชี' . BankAccountService::CURRENCY_LABEL[$cur['currency']] . " ({$cur['bank_name']} {$cur['account_number']}) อยู่ "
+                    . '— เปลี่ยนเป็นสกุล' . BankAccountService::CURRENCY_LABEL[$currency] . ' ต้องเลือกบัญชีที่รับสกุลนั้นพร้อมกันด้วย',
+                );
+            }
+        }
+        if (array_key_exists('dueDate', $patch)) {
+            $sets[]   = 'due_date = ?';
+            $params[] = Period::assertDate($patch['dueDate'], 'dueDate');
+            // เลื่อนวันครบกำหนด = นับการเตือนใหม่ตามวันใหม่
+            array_push($sets, 'reminded_at = NULL', 'overdue_nudges = 0');
+        }
+        if (array_key_exists('note', $patch)) {
+            $sets[]   = 'note = ?';
+            $params[] = $patch['note'] ?: null;
+        }
+        if ($sets === []) {
+            return self::get($id, $user);
+        }
+        $sets[]   = 'updated_at = UTC_TIMESTAMP()';
+        $params[] = $id;
+        Db::exec('UPDATE invoices SET ' . implode(', ', $sets) . ' WHERE id = ?', $params);
+        Audit::write((int) $user['id'], 'invoice.update', 'invoice', $id, $patch);
+
+        return self::get($id, $user);
+    }
+
+    public static function removeAdjustment(int $invoiceId, int $adjustmentId, array $user): array
+    {
+        $inv = self::row($invoiceId);
+        self::assertEditable($inv);
+        $row = Db::one('SELECT * FROM invoice_adjustments WHERE id = ? AND invoice_id = ?', [$adjustmentId, $invoiceId])
+            ?? throw ApiException::notFound('ไม่พบรายการในใบเรียกเก็บนี้');
+
+        return Db::tx(static function () use ($invoiceId, $adjustmentId, $row, $user) {
+            Db::exec('DELETE FROM invoice_adjustments WHERE id = ?', [$adjustmentId]);
+            self::recalc($invoiceId, $user);
+            Audit::write((int) $user['id'], 'invoice.adjustment.remove', 'invoice', $invoiceId, ['label' => $row['label']]);
+
+            return self::get($invoiceId, $user);
+        });
+    }
+
+    /* ── อ่านข้อมูล ────────────────────────────────────────────── */
+
+    public static function get(int $id, array $user): array
+    {
+        $row = Db::one(self::SELECT_INVOICE . ' WHERE i.id = ?', [$id]) ?? throw ApiException::notFound('ไม่พบใบเรียกเก็บ');
+        if (! AuthContext::isSuperAdmin($user) && (int) $row['franchise_id'] !== (int) $user['franchise_id']) {
+            throw ApiException::forbidden();
+        }
+
+        $lines = array_map([SalesService::class, 'serialize'], Db::all(
+            'SELECT se.*, bp.code AS period_code, bp.start_date AS period_start, bp.end_date AS period_end,
+                    bp.year AS period_year, bp.month AS period_month, bp.half AS period_half, bp.status AS period_status,
+                    p.sku, p.name AS product_name, f.username AS franchise_username,
+                    i.invoice_no
+               FROM sales_entries se
+               JOIN billing_periods bp ON bp.id = se.period_id
+               JOIN products p         ON p.id = se.product_id
+               JOIN franchises f       ON f.id = se.franchise_id
+               JOIN invoices i         ON i.id = se.invoice_id
+              WHERE se.invoice_id = ?
+              ORDER BY p.sku',
+            [$id],
+        ));
+        $adjustments = array_map([self::class, 'serializeAdjustment'], Db::all(
+            'SELECT * FROM invoice_adjustments WHERE invoice_id = ? ORDER BY kind DESC, id',
+            [$id],
+        ));
+        $payments = array_map(static fn ($p) => [
+            'id'        => (int) $p['id'],
+            'amount'    => Money::toBaht($p['amount_satang']),
+            'paidAt'    => $p['paid_at'],
+            'method'    => $p['method'],
+            'reference' => $p['reference'],
+            'note'      => $p['note'],
+        ], Db::all('SELECT * FROM invoice_payments WHERE invoice_id = ? ORDER BY paid_at, id', [$id]));
+        $submissions = array_map(static fn ($s) => [
+            'id'           => (int) $s['id'],
+            'amount'       => Money::toBaht($s['amount_satang']),
+            'paidAt'       => $s['paid_at'],
+            'method'       => $s['method'],
+            'reference'    => $s['reference'],
+            'slipUrl'      => SignedUrl::sign($s['slip_url']),
+            'status'       => $s['status'],
+            'rejectReason' => $s['reject_reason'],
+            'createdAt'    => $s['created_at'],
+        ], Db::all('SELECT * FROM payment_submissions WHERE invoice_id = ? ORDER BY created_at DESC, id DESC', [$id]));
+
+        return [...self::serialize($row), 'lines' => $lines, 'adjustments' => $adjustments, 'payments' => $payments, 'submissions' => $submissions];
+    }
+
+    public static function list(array $filters, array $user): array
+    {
+        $where       = [];
+        $params      = [];
+        $franchiseId = AuthContext::isSuperAdmin($user) ? ($filters['franchiseId'] ?? null) : $user['franchise_id'];
+        if ($franchiseId) {
+            $where[]  = 'i.franchise_id = ?';
+            $params[] = (int) $franchiseId;
+        }
+        if (! empty($filters['status'])) {
+            $where[]  = 'i.status = ?';
+            $params[] = $filters['status'];
+        }
+        if (! empty($filters['periodCode'])) {
+            $where[]  = 'bp.code = ?';
+            $params[] = Period::fromCode($filters['periodCode'])['code'];
+        }
+        if (($filters['unpaidOnly'] ?? null) === true || ($filters['unpaidOnly'] ?? null) === 'true') {
+            $where[] = "i.status IN ('OPEN', 'PARTIAL')";
+        }
+        $rows = array_map([self::class, 'serialize'], Db::all(
+            self::SELECT_INVOICE . ($where ? ' WHERE ' . implode(' AND ', $where) : '') . ' ORDER BY bp.start_date DESC, i.id DESC',
+            $params,
+        ));
+        $live = array_filter($rows, static fn ($r) => $r['status'] !== 'VOID');
+
+        return [
+            'items'   => $rows,
+            'summary' => [
+                'count'              => count($rows),
+                'netTotal'           => Money::round2(array_sum(array_column($live, 'netTotal'))),
+                'outstanding'        => Money::round2(array_sum(array_column($live, 'outstanding'))),
+                'pendingSubmissions' => array_sum(array_column($rows, 'pendingSubmissions')),
+            ],
+        ];
+    }
+
+    /**
+     * เงินที่ "รับเข้ามาจริง" ทั้งหมด — ใช้ที่หน้าชำระเงินเพื่อแยกให้ชัดว่า
+     * อันไหนได้เงินแล้ว ต่างจากใบที่ออกไปแล้วแต่ยังไม่ได้รับ
+     */
+    public static function listReceivedPayments(array $filters, array $user): array
+    {
+        $where       = [];
+        $params      = [];
+        $franchiseId = AuthContext::isSuperAdmin($user) ? ($filters['franchiseId'] ?? null) : $user['franchise_id'];
+        if ($franchiseId) {
+            $where[]  = 'i.franchise_id = ?';
+            $params[] = (int) $franchiseId;
+        }
+        if (! empty($filters['periodCode'])) {
+            $where[]  = 'bp.code = ?';
+            $params[] = Period::fromCode($filters['periodCode'])['code'];
+        }
+        $items = array_map(static fn ($r) => [
+            'id'                => (int) $r['id'],
+            'invoiceId'         => (int) $r['invoice_id'],
+            'invoiceNo'         => $r['invoice_no'],
+            'franchiseUsername' => $r['franchise_username'],
+            'periodCode'        => $r['period_code'],
+            'amount'            => Money::toBaht($r['amount_satang']),
+            'paidAt'            => $r['paid_at'],
+            'method'            => $r['method'],
+            'reference'         => $r['reference'],
+            'note'              => $r['note'],
+            'recordedBy'        => $r['recorded_by'],
+        ], Db::all(
+            'SELECT p.*, i.invoice_no, i.net_total_satang, f.username AS franchise_username,
+                    bp.code AS period_code, u.username AS recorded_by
+               FROM invoice_payments p
+               JOIN invoices i         ON i.id = p.invoice_id
+               JOIN franchises f       ON f.id = i.franchise_id
+               JOIN billing_periods bp ON bp.id = i.period_id
+               LEFT JOIN users u       ON u.id = p.created_by_user_id
+              ' . ($where ? 'WHERE ' . implode(' AND ', $where) : '') . '
+              ORDER BY p.paid_at DESC, p.id DESC',
+            $params,
+        ));
+
+        return [
+            'items'   => $items,
+            'summary' => ['count' => count($items), 'total' => Money::round2(array_sum(array_column($items, 'amount')))],
+        ];
+    }
+
+    /* ── การชำระเงิน ───────────────────────────────────────────── */
+
+    /**
+     * ตัดยอดเงินเข้าในบิล
+     * เรียกได้จากขั้นตอนอนุมัติการแจ้งชำระเท่านั้น (PaymentSubmissionService::approve)
+     * ไม่มีเส้นทางไหนเปิดให้เรียกตรง ๆ เพราะส่วนกลางไม่มีสิทธิ์จ่ายแทนร้าน
+     */
+    public static function addPayment(int $invoiceId, array $input, array $user, ?int $submissionId = null): array
+    {
+        $inv = self::row($invoiceId);
+        if ($inv['status'] === 'VOID') {
+            throw ApiException::conflict('ใบเรียกเก็บนี้ถูกยกเลิกแล้ว');
+        }
+        $amount = Money::toSatang($input['amount'] ?? null, 'amount');
+        if ($amount <= 0) {
+            throw ApiException::badRequest('amount: ต้องมากกว่า 0');
+        }
+        $outstanding = (int) $inv['net_total_satang'] - (int) $inv['paid_satang'];
+        if ($amount > $outstanding) {
+            throw ApiException::badRequest('ยอดชำระเกินยอดค้าง (ค้างอยู่ ' . Money::toBaht($outstanding) . ' บาท)');
+        }
+
+        return Db::tx(static function () use ($invoiceId, $input, $amount, $user, $submissionId) {
+            $paymentId = Db::insert(
+                'INSERT INTO invoice_payments (invoice_id, amount_satang, paid_at, method, reference, note, created_by_user_id, created_at)
+                 VALUES (?, ?, COALESCE(?, UTC_TIMESTAMP()), ?, ?, ?, ?, UTC_TIMESTAMP())',
+                [$invoiceId, $amount, $input['paidAt'] ?? null, $input['method'] ?? null, $input['reference'] ?? null, $input['note'] ?? null, $user['id']],
+            );
+            self::recalc($invoiceId, $user);
+            Audit::write((int) $user['id'], 'invoice.payment', 'invoice', $invoiceId, ['amount' => $amount, 'submissionId' => $submissionId]);
+
+            return ['paymentId' => $paymentId, 'invoice' => self::get($invoiceId, $user)];
+        });
+    }
+
+    /** ยกเลิกใบเรียกเก็บ คืนรายการยอดขายเป็น APPROVED และยกเลิกค่าคอมเซลที่ผูกอยู่ */
+    public static function void(int $id, string $reason, array $user): array
+    {
+        $inv = self::row($id);
+        if ($inv['status'] === 'VOID') {
+            throw ApiException::conflict('ใบเรียกเก็บนี้ถูกยกเลิกไปแล้ว');
+        }
+        if ((int) $inv['paid_satang'] > 0) {
+            throw ApiException::conflict('ใบเรียกเก็บที่มีการชำระแล้วยกเลิกไม่ได้');
+        }
+
+        return Db::tx(static function () use ($id, $reason, $inv, $user) {
+            Db::exec("UPDATE sales_entries SET status = 'APPROVED', invoice_id = NULL, updated_at = UTC_TIMESTAMP() WHERE invoice_id = ?", [$id]);
+            Db::exec("UPDATE payment_submissions SET status = 'CANCELLED', updated_at = UTC_TIMESTAMP() WHERE invoice_id = ? AND status = 'PENDING'", [$id]);
+            SalesAgentService::voidCommissionsForInvoice($id, (int) $user['id']);
+            /*
+             * เครดิตสองทางต้องจัดการคนละแบบ
+             *   ใบนี้ "หัก" เครดิตไป → คืนกลับให้ร้าน ยังใช้กับใบอื่นได้
+             *   ใบนี้ "สร้าง" เครดิต → ยกเลิกทิ้ง (แต่ถ้าถูกหักไปใช้แล้วจะโยน error ให้ไปจัดการใบนั้นก่อน)
+             */
+            CreditService::releaseCreditsOf($id);
+            CreditService::cancelCreditsFrom($id, (int) $user['id']);
+            Db::exec("UPDATE invoices SET status = 'VOID', note = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?", [$reason !== '' ? $reason : $inv['note'], $id]);
+            Audit::write((int) $user['id'], 'invoice.void', 'invoice', $id, ['reason' => $reason]);
+
+            return self::get($id, $user);
+        });
+    }
+
+    /* ── serializers ───────────────────────────────────────────── */
+
+    public static function serializeAdjustment(array $row): array
+    {
+        $amount = (int) $row['amount_satang'];
+
+        return [
+            'id'           => (int) $row['id'],
+            'chargeItemId' => $row['charge_item_id'] === null ? null : (int) $row['charge_item_id'],
+            'kind'         => $row['kind'],
+            'kindLabel'    => $row['kind'] === 'DISCOUNT' ? 'ส่วนลด' : 'ค่าใช้จ่าย',
+            'label'        => $row['label'],
+            'pct'          => $row['pct_bp'] === null ? null : Money::bpToPct($row['pct_bp']),
+            'amount'       => Money::toBaht($amount),
+            // เครื่องหมายที่ควรแสดงในบิล: ค่าใช้จ่าย = +, ส่วนลด = −
+            'signedAmount' => Money::toBaht($row['kind'] === 'DISCOUNT' ? -$amount : $amount),
+            'note'         => $row['note'],
+            'createdAt'    => $row['created_at'],
+        ];
+    }
+
+    public static function serialize(array $row): array
+    {
+        $net      = (int) $row['net_total_satang'];
+        $paid     = (int) $row['paid_satang'];
+        $applied  = (int) ($row['credit_applied_satang'] ?? 0);
+        $rate     = $row['usd_rate_satang'] === null ? null : (int) $row['usd_rate_satang'];
+        $currency = $row['currency'] ?? 'THB';
+        $void     = $row['status'] === 'VOID';
+        $today    = Period::today();
+        $usd      = static fn (int $satang) => Money::round2($satang / $rate);
+
+        return [
+            'id'                => (int) $row['id'],
+            'invoiceNo'         => $row['invoice_no'],
+            'franchiseId'       => (int) $row['franchise_id'],
+            'franchiseUsername' => $row['franchise_username'],
+            'periodCode'        => $row['period_code'],
+            'periodStart'       => $row['period_start'],
+            'periodEnd'         => $row['period_end'],
+            'grossTotal'        => Money::toBaht($row['gross_total_satang']),
+            'commissionTotal'   => Money::toBaht($row['commission_total_satang']),
+            'chargeTotal'       => Money::toBaht($row['charge_total_satang']),
+            'discountTotal'     => Money::toBaht($row['discount_total_satang']),
+            /*
+             * ยอดยกมาจากรอบก่อนที่ถูกหักออกจากใบนี้ (เราเคยติดค้างร้านไว้)
+             * แยกจาก discountTotal เพราะคนละความหมาย — ส่วนลดคือเราลดให้
+             * ส่วนยอดยกมาคือเงินของร้านที่ค้างอยู่กับเรามาตั้งแต่รอบก่อน
+             */
+            'creditApplied' => Money::toBaht($applied),
+            // ใบนี้ยอดติดลบ จึงยกยอดนี้ไปหักรอบหน้าแทนการโอนคืนร้าน
+            'creditCarried' => Money::toBaht((int) ($row['credit_created'] ?? 0)),
+            // ยอดก่อนหักยอดยกมา — ไว้ให้บิลโชว์ได้ว่าหักอะไรออกไปบ้าง
+            'subtotal'    => Money::toBaht($net + $applied),
+            'netTotal'    => Money::toBaht($net),
+            'paid'        => Money::toBaht($paid),
+            // ใบที่ยกเลิกแล้วไม่มีใครต้องจ่าย
+            'outstanding'        => $void ? 0 : Money::toBaht($net - $paid),
+            'status'             => $row['status'],
+            'pendingSubmissions' => (int) ($row['pending_submissions'] ?? 0),
+            'pendingEntries'     => (int) ($row['pending_entries'] ?? 0),
+            'issuedAt'           => $row['issued_at'],
+            'dueDate'            => $row['due_date'],
+            // เลยกำหนดชำระ = ยังค้างเงินอยู่ และวันครบกำหนดผ่านไปแล้ว (ใบที่ยกเลิกไม่นับ)
+            'isOverdue'   => ! $void && $net > $paid && $row['due_date'] !== null && $row['due_date'] < $today,
+            'daysOverdue' => Period::daysBetween($row['due_date'], $today),
+            'paidAt'      => $row['paid_at'],
+            'note'        => $row['note'],
+            /*
+             * สกุลที่ให้ร้านจ่าย + ยอดในสกุลนั้น
+             * payAmount/payOutstanding คือตัวเลขที่เอาไปโชว์บนบิลและในฟอร์มจ่ายได้เลย
+             */
+            'currency'       => $currency,
+            'isUsd'          => $currency === 'USD',
+            'usdRate'        => $rate ? Money::toBaht($rate) : null,
+            'netTotalUsd'    => $rate ? $usd($net) : null,
+            'outstandingUsd' => $rate && ! $void ? $usd($net - $paid) : null,
+            'payAmount'      => $currency === 'USD' && $rate ? $usd($net) : Money::toBaht($net),
+            'payOutstanding' => $currency === 'USD' && $rate
+                ? ($void ? 0 : $usd($net - $paid))
+                : ($void ? 0 : Money::toBaht($net - $paid)),
+            // บัญชีที่ให้ร้านโอนเข้า ตรึงไว้ตั้งแต่ตอนออกบิล ถึงเปลี่ยนบัญชีหลักทีหลังก็ไม่กระทบใบเก่า
+            'bankAccount' => $row['bank_account_id']
+                ? [
+                    'id'              => (int) $row['bank_account_id'],
+                    'bankName'        => $row['bank_name'],
+                    'accountName'     => $row['account_name'],
+                    'accountNumber'   => $row['account_number'],
+                    'branch'          => $row['bank_branch'],
+                    'currency'        => $row['bank_currency'] ?? 'THB',
+                    'qrUrl'           => SignedUrl::sign($row['bank_qr_url']),
+                    'currencyMatches' => ($row['bank_currency'] ?? 'THB') === $currency,
+                    'label'           => "{$row['bank_name']} · {$row['account_number']} ({$row['account_name']})",
+                ]
+                : null,
+        ];
+    }
+}

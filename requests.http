@@ -1,0 +1,145 @@
+### ตัวอย่างเรียก API (ใช้กับ REST Client ของ VS Code หรือ JetBrains HTTP Client)
+@host = http://localhost:8080
+
+### 1. super admin ล็อกอิน
+# @name loginAdmin
+POST {{host}}/api/auth/login
+Content-Type: application/json
+
+{ "username": "superadmin", "password": "admin1234" }
+
+@admin = {{loginAdmin.response.body.token}}
+
+### 2. สร้างเจ้าของร้าน (username เดียวใช้ทั้งระบุเจ้าของร้านและเข้าระบบ)
+POST {{host}}/api/franchises
+Authorization: Bearer {{admin}}
+Content-Type: application/json
+
+{
+  "username": "hdy01",
+  "password": "franchise1234",
+  "contactName": "คุณซี",
+  "phone": "0812345678",
+  "defaultCommissionPct": 10
+}
+
+### 3. สร้างสินค้า แล้วมอบหมายให้ร้านทันที
+POST {{host}}/api/products
+Authorization: Bearer {{admin}}
+Content-Type: application/json
+
+{
+  "sku": "SYRUP-VN",
+  "name": "ไซรัปวานิลลา",
+  "franchiseId": 1,
+  "startDate": "2026-09-01"
+}
+
+### 4. มอบหมายสินค้าที่มีอยู่แล้วให้ร้าน (ทับช่วงวันที่กันจะได้ 409)
+POST {{host}}/api/assignments
+Authorization: Bearer {{admin}}
+Content-Type: application/json
+
+{ "productId": 4, "franchiseId": 2, "startDate": "2026-09-01" }
+
+### 5. เจ้าของร้านล็อกอิน
+# @name loginShop
+POST {{host}}/api/auth/login
+Content-Type: application/json
+
+{ "username": "bkk01", "password": "franchise1234" }
+
+@shop = {{loginShop.response.body.token}}
+
+### 6. เจ้าของร้านดูสินค้าของตัวเอง
+GET {{host}}/api/products
+Authorization: Bearer {{shop}}
+
+### 7. กรอกยอดขายรอบครึ่งเดือน (super admin เท่านั้น)
+POST {{host}}/api/sales-entries
+Authorization: Bearer {{admin}}
+Content-Type: application/json
+
+{ "periodCode": "2026-09-H2", "productId": 1, "grossAmount": 185000.50, "units": 41 }
+
+### 8. ส่วนกลางอนุมัติ
+POST {{host}}/api/sales-entries/1/approve
+Authorization: Bearer {{admin}}
+
+### 9. ออกใบเรียกเก็บของรอบบิล (เลือกเฉพาะบางสินค้าด้วย entryIds ก็ได้)
+POST {{host}}/api/invoices/generate
+Authorization: Bearer {{admin}}
+Content-Type: application/json
+
+{
+  "franchiseId": 1,
+  "periodCode": "2026-09-H1",
+  "adjustments": [
+    { "kind": "CHARGE", "label": "ค่าขนส่งรอบพิเศษ", "amount": 1200.50 },
+    { "kind": "DISCOUNT", "label": "ส่วนลดโปรโมชัน", "pct": 1 }
+  ]
+}
+
+### 10. บันทึกรับชำระโดยตรง (super admin)
+POST {{host}}/api/invoices/1/payments
+Authorization: Bearer {{admin}}
+Content-Type: application/json
+
+{ "amount": 5000, "method": "โอนธนาคาร", "reference": "TRX-0001" }
+
+### 10b. ลูกค้าแจ้งชำระเงิน แล้ว super admin ยืนยัน
+POST {{host}}/api/payments
+Authorization: Bearer {{shop}}
+Content-Type: application/json
+
+{
+  "invoiceId": 1,
+  "amount": 5000,
+  "paidAt": "2026-09-16",
+  "method": "พร้อมเพย์",
+  "reference": "TRX-0002",
+  "slipUrl": "https://example.com/slip.jpg"
+}
+
+###
+POST {{host}}/api/payments/1/approve
+Authorization: Bearer {{admin}}
+
+### 10c. เซล: ผูกดีลกับร้านที่หามาได้ แล้วดูค่าคอม
+POST {{host}}/api/sales-agents/links
+Authorization: Bearer {{admin}}
+Content-Type: application/json
+
+{ "salesAgentId": 1, "franchiseId": 1, "commissionPct": 5, "fixedAmount": 300 }
+
+###
+GET {{host}}/api/sales-agents/commissions?status=PENDING
+Authorization: Bearer {{admin}}
+
+### 11. รายงานรายเดือน (แยก H1/H2)
+GET {{host}}/api/reports/by-month?from=2026-07&to=2026-09
+Authorization: Bearer {{shop}}
+
+### 12. รายงานรายรอบบิล
+GET {{host}}/api/reports/by-period?from=2026-07-H1&to=2026-09-H2
+Authorization: Bearer {{shop}}
+
+### 13. เทียบเดือนต่อเดือน
+GET {{host}}/api/reports/compare?granularity=month&current=2026-08&previous=2026-07
+Authorization: Bearer {{shop}}
+
+### 14. เทียบรอบบิลต่อรอบบิล
+GET {{host}}/api/reports/compare?granularity=period&current=2026-08-H2
+Authorization: Bearer {{shop}}
+
+### 15. เทียบช่วงวันที่เดียวกันของเดือนก่อน
+GET {{host}}/api/reports/compare-range?aStart=2026-08-01&aEnd=2026-08-15&against=prev_month
+Authorization: Bearer {{shop}}
+
+### 16. ภาพรวมทุกร้าน (super admin)
+GET {{host}}/api/reports/breakdown?from=2026-08-H1&to=2026-08-H2&groupBy=franchise
+Authorization: Bearer {{admin}}
+
+### 17. dashboard
+GET {{host}}/api/reports/dashboard?periodCode=2026-08-H2
+Authorization: Bearer {{admin}}

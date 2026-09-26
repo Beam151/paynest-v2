@@ -1,0 +1,147 @@
+<?php
+
+namespace Config;
+
+use CodeIgniter\Config\BaseConfig;
+
+/**
+ * ค่าของระบบ — ทุกค่ามีค่าตั้งต้นที่ปลอดภัย ใช้งานได้ทันทีโดยไม่ต้องแก้อะไร
+ * อยากเปลี่ยนให้ใส่ใน .env เช่น  paynest.trustProxy = 1  (ดู env ที่รากโปรเจกต์)
+ *
+ * ค่าที่แอดมินต้องปรับเองระหว่างใช้งาน (Telegram, เรื่องที่แจ้งเตือน, บัญชีรับเงิน) อยู่ในหน้าเว็บ ไม่ใช่ที่นี่
+ */
+class Paynest extends BaseConfig
+{
+    /** ชื่อที่ขึ้นในแอป Google Authenticator ให้รู้ว่ารหัสนี้ของระบบไหน */
+    public string $appName = 'ระบบจัดการร้าน';
+
+    /** ล็อกอินหมดอายุ — ใช้รูปแบบ 24h / 30m / 3600 (วินาที) · เจ้าของระบบตัดสินใจให้ล็อกอินใหม่วันละครั้ง */
+    public string $jwtExpiresIn = '24h';
+
+    /**
+     * จำนวน reverse proxy / CDN ที่อยู่หน้าเว็บเซิร์ฟเวอร์ (Cloudflare หรือ load balancer = 1, ไม่มี = 0)
+     * nginx/Apache ที่รัน PHP เอง (PHP-FPM) ไม่นับ — IP ที่ PHP เห็นเป็นของผู้ใช้จริงอยู่แล้ว
+     * ต้องตั้งให้ตรง ไม่งั้น rate limit จะเห็นทุกคนเป็น IP เดียวกัน (IP ของ proxy)
+     */
+    public int $trustProxy = 0;
+
+    /** จำนวนวันหลังจบรอบบิลที่ถือเป็นวันครบกำหนดชำระ */
+    public int $invoiceDueDays = 7;
+
+    /**
+     * ที่เก็บไฟล์ของระบบ: secrets.json, รหัสแอดมินเริ่มต้น, uploads/ (สลิป/QR), backups/
+     * ว่าง = writable/data
+     */
+    public string $dataDir = '';
+
+    /** ที่เก็บไฟล์สำรอง (ว่าง = <dataDir>/backups) และเก็บย้อนหลังกี่วัน */
+    public string $backupDir = '';
+    public int $backupKeepDays = 30;
+
+    /**
+     * กุญแจลับ — ไม่ต้องตั้ง: ระบบสุ่มให้แล้วเก็บใน <dataDir>/secrets.json
+     * ตั้งเองได้ถ้าเก็บ secret แยก (ค่าใน env ชนะไฟล์เสมอ · ต้องยาว ≥ 32 ตัว)
+     */
+    public string $jwtSecret     = '';
+    public string $encryptionKey = '';
+
+    /** แอดมินคนแรก — ไม่ตั้งรหัส = ระบบสุ่มรหัสใส่ไฟล์ <dataDir>/initial-admin-password.txt */
+    public string $seedSuperAdminUser = 'superadmin';
+    public string $seedSuperAdminPass = '';
+
+    /** ปลายทาง Telegram — มีไว้ให้เทสต์ชี้ไป Telegram จำลอง (ของจริงตั้งบอทในหน้าตั้งค่า) */
+    public string $telegramApiBase = 'https://api.telegram.org';
+
+    /**
+     * ตัวแปรสภาพแวดล้อมจริง (PAYNEST_*) ชนะค่าใน .env เสมอ — ใช้กับ Docker / ระบบเก็บ secret แยก / ชุดเทสต์
+     * ชื่อตรงกับระบบเดิม (JWT_SECRET → PAYNEST_JWT_SECRET ฯลฯ) ให้คนดูแลเซิร์ฟเวอร์เทียบกันได้ง่าย
+     */
+    private const ENV_OVERRIDES = [
+        'PAYNEST_APP_NAME'          => 'appName',
+        'PAYNEST_TRUST_PROXY'       => 'trustProxy',
+        'PAYNEST_INVOICE_DUE_DAYS'  => 'invoiceDueDays',
+        'PAYNEST_DATA_DIR'          => 'dataDir',
+        'PAYNEST_BACKUP_DIR'        => 'backupDir',
+        'PAYNEST_BACKUP_KEEP_DAYS'  => 'backupKeepDays',
+        'PAYNEST_JWT_SECRET'        => 'jwtSecret',
+        'PAYNEST_ENCRYPTION_KEY'    => 'encryptionKey',
+        'PAYNEST_JWT_EXPIRES_IN'    => 'jwtExpiresIn',
+        'PAYNEST_SEED_ADMIN_USER'   => 'seedSuperAdminUser',
+        'PAYNEST_SEED_ADMIN_PASS'   => 'seedSuperAdminPass',
+        'PAYNEST_TELEGRAM_API_BASE' => 'telegramApiBase',
+    ];
+
+    public function __construct()
+    {
+        parent::__construct();
+        foreach (self::ENV_OVERRIDES as $env => $property) {
+            $value = getenv($env);
+            if ($value !== false) {
+                $this->{$property} = is_int($this->{$property}) ? (int) $value : $value;
+            }
+        }
+    }
+
+    /**
+     * บังคับ Google Authenticator กับบัญชีส่วนกลาง — เฉพาะเซิร์ฟเวอร์จริง (CI_ENVIRONMENT = production)
+     * ไม่มีปุ่มปิดในหน้าเว็บโดยตั้งใจ: ถ้าปิดได้จากหน้าเว็บ คนที่ได้รหัสผ่านไปก็ปิดเองได้
+     */
+    public function requireAdmin2fa(): bool
+    {
+        return ENVIRONMENT === 'production';
+    }
+
+    public function dataPath(string $relative = ''): string
+    {
+        $base = $this->dataDir !== '' ? $this->resolve($this->dataDir) : WRITEPATH . 'data';
+        $base = rtrim($base, '/\\');
+
+        return $relative === '' ? $base : $base . DIRECTORY_SEPARATOR . $relative;
+    }
+
+    public function uploadPath(string $name = ''): string
+    {
+        return $this->dataPath('uploads' . ($name === '' ? '' : DIRECTORY_SEPARATOR . $name));
+    }
+
+    public function backupPath(string $relative = ''): string
+    {
+        $base = $this->backupDir !== '' ? rtrim($this->resolve($this->backupDir), '/\\') : $this->dataPath('backups');
+
+        return $relative === '' ? $base : $base . DIRECTORY_SEPARATOR . $relative;
+    }
+
+    /** อายุ token เข้าระบบเป็นวินาที */
+    public function jwtTtl(): int
+    {
+        return self::parseDuration($this->jwtExpiresIn, 86400);
+    }
+
+    /** '24h' / '30m' / '7d' / '3600' → วินาที (แบบเดียวกับไลบรารี ms ที่ตัวเดิมใช้) */
+    public static function parseDuration(string $text, int $fallback): int
+    {
+        $text = strtolower(trim($text));
+        if (preg_match('/^\d+$/', $text)) {
+            return (int) $text;
+        }
+        if (! preg_match('/^(\d+(?:\.\d+)?)\s*(s|sec|secs|seconds?|m|min|mins|minutes?|h|hrs?|hours?|d|days?|w|weeks?|y|yrs?|years?)$/', $text, $m)) {
+            return $fallback;
+        }
+        $unit = match ($m[2][0]) {
+            's'     => 1,
+            'm'     => 60,
+            'h'     => 3600,
+            'd'     => 86400,
+            'w'     => 604800,
+            default => 31557600,
+        };
+
+        return (int) round((float) $m[1] * $unit);
+    }
+
+    private function resolve(string $path): string
+    {
+        // path แบบสัมพัทธ์นับจากรากโปรเจกต์ (โฟลเดอร์ที่มี spark)
+        return preg_match('#^([a-zA-Z]:[\\\\/]|[\\\\/])#', $path) ? $path : ROOTPATH . $path;
+    }
+}

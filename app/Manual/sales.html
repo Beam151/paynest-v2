@@ -1,0 +1,74 @@
+<!--
+  คู่มือสำหรับเซล — เซิร์ฟเวอร์ส่งให้เฉพาะบัญชีเซล (GET /api/manual)
+  โครงเดียวกับคู่มือร้าน: .m-home → .m-guide ทีละเรื่อง · {i:ชื่อไอคอน} = ไอคอนจาก public/icons.svg
+-->
+<div class="manual">
+
+<div class="m-home">
+  <div class="m-top">
+    <h1>คู่มือสำหรับเซล</h1>
+    <p>อยากทำอะไร กดเลือกได้เลย</p>
+  </div>
+  <div class="m-tasks cols-3">
+    <button class="m-task" data-guide="income"><span class="m-task-ico">{i:target}</span><strong>ดูค่าคอมของฉัน</strong><small>แต่ละรอบได้เท่าไร ได้รับหรือยัง</small></button>
+    <button class="m-task" data-guide="deals"><span class="m-task-ico">{i:package}</span><strong>สินค้าที่ถือดีล</strong><small>เงื่อนไขคอมของแต่ละชิ้น</small></button>
+    <button class="m-task is-ok" data-guide="faq"><span class="m-task-ico">{i:circle-help}</span><strong>คำถามที่พบบ่อย</strong><small>คอมเกิดเมื่อไร ฯลฯ</small></button>
+  </div>
+  <div class="m-know">
+    <span>{i:calendar} คอมคิดทุกรอบบิล (1–15 และ 16–สิ้นเดือน)</span>
+    <span>{i:smartphone} ใช้บนมือถือได้ ไม่ต้องลงแอป</span>
+  </div>
+</div>
+
+<section class="m-guide" id="income" hidden>
+  <button class="m-back" data-home>← เลือกเรื่องอื่น</button>
+  <div class="m-guide-head"><span class="m-task-ico">{i:target}</span><div><h2>ดูค่าคอมของฉัน</h2><p>{nav:mysales} (หน้าแรกหลังเข้าระบบ)</p></div></div>
+  <div class="m-step">
+    <div class="m-shot" data-nav="mysales" data-tap-nav data-title="รายได้ของฉัน">
+            <div class="s-body">
+        <div class="s-row"><div class="s-card" style="flex:1"><span class="s-muted">รอรับ</span><b style="color:var(--warn)">2,340 ฿</b></div><span class="s-mark">1</span></div>
+        <div class="s-row"><div class="s-card" style="flex:1"><span class="s-muted">ได้รับแล้วสะสม</span><b style="color:var(--success)">18,600 ฿</b></div><span class="s-mark">2</span></div>
+        <div class="s-card">
+          <div class="s-row"><b>1–15 ก.ย. 69</b><b>2,340.00</b></div>
+          <span class="s-btn wide s-hl">ดูใบสรุป<span class="s-tap">{i:hand}</span></span>
+        </div>
+      </div>
+    </div>
+    <div class="m-step-text"><h3>อ่านหน้าแรก</h3>
+      <ul class="m-legend">
+        <li><span class="s-mark">1</span><span><b>รอรับ</b> คอมที่เกิดแล้ว ยังไม่ได้รับเงิน</span></li>
+        <li><span class="s-mark">2</span><span><b>ได้รับแล้วสะสม</b> ตั้งแต่เริ่มทำ</span></li>
+      </ul>
+      <p>กด <span class="m-ui is-primary">ดูใบสรุป</span> เพื่อดูว่าคอมรอบนั้นมาจากร้านไหน สินค้าอะไร</p></div>
+  </div>
+</section>
+
+<section class="m-guide" id="deals" hidden>
+  <button class="m-back" data-home>← เลือกเรื่องอื่น</button>
+  <div class="m-guide-head"><span class="m-task-ico">{i:package}</span><div><h2>สินค้าที่ถือดีล</h2><p>{nav:deals}</p></div></div>
+  <div class="m-step">
+    <div class="m-shot" data-nav="deals" data-tap-nav data-title="สินค้าที่ถือดีล">
+            <div class="s-body">
+        <div class="s-card">
+          <div class="s-row"><b>KF-01</b><span class="s-badge green">ใช้งาน</span></div>
+          <span class="s-muted">ร้าน bkk01</span>
+          <div class="s-row s-hl" style="padding:2px 4px"><span>5% ของส่วนต่าง</span><span>+ เหมา 300 ฿/รอบ</span></div>
+        </div>
+        <div class="s-card s-dim"><div class="s-line" style="width:40%"></div><div class="s-line" style="width:70%"></div></div>
+      </div>
+    </div>
+    <div class="m-step-text"><h3>เงื่อนไขคอมของแต่ละชิ้น</h3><p>สินค้าที่คุณดูแล ร้านที่ขาย และได้คอมกี่ % หรือเหมาเท่าไรต่อรอบ</p><p>ทางเราเป็นคนผูกดีลให้ ถ้าไม่ตรงกับที่ตกลงไว้ ติดต่อทางเรา</p></div>
+  </div>
+</section>
+
+<section class="m-guide" id="faq" hidden>
+  <button class="m-back" data-home>← เลือกเรื่องอื่น</button>
+  <div class="m-guide-head"><span class="m-task-ico">{i:circle-help}</span><div><h2>คำถามที่พบบ่อย</h2></div></div>
+  <div class="m-faqs">
+    <details class="m-faq"><summary>ค่าคอมเกิดเมื่อไร</summary><div>ทุกครั้งที่ทางเราออกบิลให้ร้านที่ขายสินค้าที่คุณถือดีลอยู่ คอมของรอบนั้นจะขึ้นทันที</div></details>
+    <details class="m-faq"><summary>ทำไมคอมบางรายการหายไป</summary><div>บิลของร้านถูกยกเลิก คอมที่ยังไม่จ่ายของบิลนั้นก็ถูกยกเลิกด้วย ออกบิลใหม่เมื่อไร คอมก็เกิดใหม่ตามยอดที่ถูกต้อง</div></details>
+    <details class="m-faq"><summary>เห็นยอดขายหรือบิลของร้านได้ไหม</summary><div>ไม่ได้ เซลเห็นเฉพาะค่าคอมของตัวเองและเงื่อนไขดีล ข้อมูลร้านเป็นความลับของร้าน</div></details>
+  </div>
+</section>
+
+</div>
