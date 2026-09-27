@@ -67,6 +67,10 @@ sudo -u www php spark app:install
   }
   ```
 - SSL → Let's Encrypt → เปิด Force HTTPS
+- Config file → หาบล็อก `location ~ .*\.(js|css)?$` ที่ aaPanel ใส่มาให้ แล้วเปลี่ยน `expires 12h;` เป็น
+  `add_header Cache-Control "no-cache";` → Save
+  (ค่าตั้งต้นของ aaPanel ให้เบราว์เซอร์ใช้ไฟล์ JS/CSS เก่าได้ 12 ชม. — อัปเดตระบบแล้วร้านจะยังเห็นหน้าจอเก่า
+  `no-cache` = เบราว์เซอร์ถามเซิร์ฟเวอร์ทุกครั้ง ไฟล์ไม่เปลี่ยนก็ได้ 304 กลับไป เร็วเท่าเดิม)
 
 **nginx ตั้งเอง:**
 
@@ -80,6 +84,10 @@ server {
 
     location / {
         try_files $uri $uri/ /index.php$is_args$args;
+    }
+    location ~* \.(js|css|svg)$ {               # อัปเดตแล้วเบราว์เซอร์ต้องได้ไฟล์ใหม่ทันที (ไม่เปลี่ยน = 304)
+        add_header Cache-Control "no-cache";
+        try_files $uri =404;
     }
     location ~ \.php$ {
         include fastcgi_params;
