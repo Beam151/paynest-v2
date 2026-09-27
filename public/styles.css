@@ -218,6 +218,10 @@ a { color: var(--primary); }
 .sidebar-user .role { color: var(--sidebar-muted); font-size: var(--fs-xs); }
 .sidebar-user.active .role { color: rgba(255, 255, 255, .75); }
 
+/* รุ่นของระบบ + เวลาอัปเดต ท้ายเมนู — ตัวเล็กจาง ไม่แย่งสายตาจากเมนูงาน */
+.sidebar-version { display: flex; flex-direction: column; padding: 6px 11px 0; font-size: var(--fs-xs); color: var(--sidebar-muted); }
+.sidebar-version:empty { display: none; }
+
 /* แถบเตือนตอน super admin สวมมุมคนอื่นดูอยู่
    ต้องหนึบไว้บนสุด ไม่งั้นเลื่อนหน้าลงมาแล้วลืมว่าอยู่โหมดดูอย่างเดียว
    แล้วงงว่าทำไมกดปุ่มอะไรไม่ได้ */

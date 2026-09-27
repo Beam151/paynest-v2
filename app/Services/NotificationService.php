@@ -535,14 +535,24 @@ final class NotificationService
         }
     }
 
-    /** ระบบกลับมาทำงาน — ถ้าไม่ได้สั่งรีสตาร์ต/อัปเดตเอง แปลว่าเพิ่งล่มไป */
-    public static function notifyStarted(?DateTimeImmutable $now = null): void
+    /**
+     * ระบบกลับมาทำงาน — ถ้าไม่ได้สั่งรีสตาร์ต/อัปเดตเอง แปลว่าเพิ่งล่มไป
+     * $release = รุ่นที่ app:install เพิ่งจด (ดู VersionService::record) → รู้แน่ว่าเป็นการอัปเดต ไม่ต้องให้กลุ่มเดา
+     */
+    public static function notifyStarted(?DateTimeImmutable $now = null, ?array $release = null): void
     {
         $now ??= Clock::thaiNow();
         self::notify('system.started', implode("\n", [
             '🟢 <b>ระบบเริ่มทำงานแล้ว</b>',
             'เวลา ' . self::hhmm($now) . ' น.',
-            'ถ้าไม่ได้สั่งรีสตาร์ตหรืออัปเดตเอง แปลว่าระบบเพิ่งล่มแล้วฟื้นกลับมา — ลองเช็ก log',
+            ...match (true) {
+                $release === null => [
+                    'รุ่น ' . VersionService::label(VersionService::running()),
+                    'ถ้าไม่ได้สั่งรีสตาร์ตหรืออัปเดตเอง แปลว่าระบบเพิ่งล่มแล้วฟื้นกลับมา — ลองเช็ก log',
+                ],
+                $release['previous'] === null => ['🆕 ติดตั้งรุ่น <b>' . VersionService::label($release) . '</b>'],
+                default                       => ['🆕 อัปเดตเป็นรุ่น <b>' . VersionService::label($release) . '</b> (เดิม ' . VersionService::label($release['previous']) . ')'],
+            },
         ]));
     }
 

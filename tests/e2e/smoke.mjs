@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { spawnSync } from 'node:child_process';
-import { DB, jwtSign, startStack, thaiWall, totp } from './lib/harness.mjs';
+import { DB, jwtSign, spark, startStack, thaiWall, totp } from './lib/harness.mjs';
 
 const TG_TOKEN = '123456:SMOKE-SECRET-TOKEN';
 const TG_CHAT = '-1009876543210';
@@ -2295,6 +2295,40 @@ section('ดูแลระบบ: ตรวจสถานะ · แจ้ง�
   await notifyStarted();
   await flushTelegram();
   check('เปิดระบบใหม่ → แจ้งกลุ่ม', telegram.messages.slice(mark).some((m) => /ระบบเริ่มทำงานแล้ว/.test(m.text)));
+
+  // รุ่นของระบบ + เวลาอัปเดต — app:install ตอนตั้งฉากจดไว้แล้ว
+  const version = (token) => api('GET', '/api/system/version', { token });
+  const ver = await version(admin);
+  const shopVer = await version(tokenA);
+  check('ส่วนกลางเห็นรุ่น + เวลาอัปเดตที่ app:install จดไว้ · ร้านเห็นแค่รุ่นกับวันที่ · ไม่ล็อกอินดูไม่ได้',
+    ver.status === 200 && /^\d+\.\d+\.\d+$/.test(ver.body.version) && Boolean(ver.body.updatedAt) && ver.body.installPending === false
+      && shopVer.status === 200 && shopVer.body.version === ver.body.version && shopVer.body.updatedAt === ver.body.updatedAt
+      && !('commit' in shopVer.body) && !('installPending' in shopVer.body)
+      && (await version()).status === 401, { admin: ver.body, shop: shopVer.body });
+
+  // จำลองเครื่องที่รันรุ่นเก่าอยู่ แล้ว git pull โค้ดใหม่มา
+  const oldRelease = { version: '1.9.0', commit: null, at: '2026-01-01 00:00:00', previous: null };
+  db.prepare("UPDATE app_settings SET value = ? WHERE name = 'system.release'").run(JSON.stringify(oldRelease));
+  const pulled = await version(admin);
+  check('pull โค้ดใหม่แล้วยังไม่ได้รัน app:install → เตือน และยังไม่นับว่าอัปเดต (บอกว่ารุ่นที่ติดตั้งไว้คือรุ่นไหน)',
+    pulled.body.installPending === true && pulled.body.updatedAt === oldRelease.at && pulled.body.installed?.version === '1.9.0'
+      && pulled.body.version === ver.body.version, pulled.body);
+
+  mark = telegram.messages.length;
+  const install = await spark(['app:install'], stack.env);
+  await flushTelegram();
+  const updated = await version(admin);
+  const upMsgs = telegram.messages.slice(mark).filter((m) => /ระบบเริ่มทำงานแล้ว/.test(m.text));
+  check('รัน app:install → จดเวลาอัปเดตใหม่ + รุ่นก่อนหน้า · กลุ่มได้ข้อความว่าอัปเดตจากรุ่นไหนเป็นรุ่นไหน',
+    install.status === 0 && updated.body.installPending === false && updated.body.updatedAt !== oldRelease.at
+      && updated.body.previous?.version === '1.9.0'
+      && upMsgs.length === 1 && upMsgs[0].text.includes(`อัปเดตเป็นรุ่น <b>${ver.body.version}`) && /เดิม 1\.9\.0\)/.test(upMsgs[0].text)
+      && !/เพิ่งล่ม/.test(upMsgs[0].text), { status: install.status, out: install.stdout.slice(-400), updated: updated.body, upMsgs });
+
+  const rerun = await spark(['app:install'], stack.env);
+  await flushTelegram();
+  check('รัน app:install ซ้ำ (รุ่นเดิม) ไม่นับเป็นการอัปเดต — เวลาเดิมคงไว้',
+    rerun.status === 0 && /รุ่นเดิม/.test(rerun.stdout) && (await version(admin)).body.updatedAt === updated.body.updatedAt, rerun.stdout.slice(-400));
 
   mark = telegram.messages.length;
   const first = await notifySystemError(new Error('SQLITE_BUSY: database is locked'), { method: 'POST', originalUrl: '/api/payments?x=secret' });

@@ -5,6 +5,7 @@ namespace App\Commands;
 use App\Libraries\Secrets;
 use App\Services\BootstrapService;
 use App\Services\NotificationService;
+use App\Services\VersionService;
 use CodeIgniter\CLI\BaseCommand;
 use CodeIgniter\CLI\CLI;
 use Config\Paynest;
@@ -15,7 +16,8 @@ use Config\Services;
  *   1) รัน migration ที่ค้าง
  *   2) สร้างกุญแจลับ (secrets.json) ถ้ายังไม่มี
  *   3) สร้างแอดมินคนแรก (รหัสสุ่มลงไฟล์) ถ้ายังไม่มี
- *   4) แจ้งกลุ่ม Telegram ว่าระบบเริ่มทำงานแล้ว (ถ้าตั้งไว้)
+ *   4) จดรุ่นของระบบ + เวลาอัปเดต (ถ้ารุ่นเปลี่ยน)
+ *   5) แจ้งกลุ่ม Telegram ว่าระบบเริ่มทำงานแล้ว พร้อมรุ่นที่เพิ่งอัปเดต (ถ้าตั้งไว้)
  */
 class AppInstall extends BaseCommand
 {
@@ -52,7 +54,15 @@ class AppInstall extends BaseCommand
         if (ENVIRONMENT !== 'production') {
             CLI::write('⚠ CI_ENVIRONMENT = ' . ENVIRONMENT . ' — ไม่บังคับ Google Authenticator กับบัญชีส่วนกลาง (เซิร์ฟเวอร์จริงต้องเป็น production)', 'yellow');
         }
-        NotificationService::notifyStarted();
+
+        // จดเมื่อทุกขั้นข้างบนผ่านแล้วเท่านั้น — พังกลางทาง = ยังไม่นับว่าอัปเดตสำเร็จ (หน้าตั้งค่ายังเตือนให้รันใหม่)
+        $release = VersionService::record();
+        CLI::write('✓ ระบบรุ่น ' . VersionService::label(VersionService::running()) . ' — ' . match (true) {
+            $release === null             => 'รุ่นเดิม ไม่นับเป็นการอัปเดต',
+            $release['previous'] === null => 'ติดตั้งครั้งแรก',
+            default                       => 'อัปเดตจาก ' . VersionService::label($release['previous']),
+        }, 'green');
+        NotificationService::notifyStarted(null, $release);
 
         return EXIT_SUCCESS;
     }

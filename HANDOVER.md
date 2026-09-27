@@ -18,7 +18,7 @@
 app/
   Config/
     Routes.php           เส้นทางทั้งหมด + ด่านตรวจของแต่ละเส้น  guard:auth,staff,perm.bills,…  (รายการ endpoint ที่ถูกต้องที่สุด)
-    Paynest.php          ค่าของระบบ — ค่าตั้งต้นใช้ได้เลย · เปลี่ยนใน .env (paynest.*) หรือ env จริง (PAYNEST_*)
+    Paynest.php          ค่าของระบบ — ค่าตั้งต้นใช้ได้เลย · เปลี่ยนใน .env (paynest.*) หรือ env จริง (PAYNEST_*) · เลขรุ่น VERSION
     Filters.php          jsonbody (ก่อน /api/*) · guard (ตาม Routes) · appheaders (หลังทุกคำขอ แม้ 404)
     Database.php         การต่อฐานข้อมูล (ค่าจริงอยู่ใน .env · PAYNEST_DB_* ชนะเสมอ)
     Exceptions.php · Routing.php   error ทุกแบบตอบเป็น JSON — ไม่โชว์หน้า error ของเฟรมเวิร์ก แม้ลืมตั้ง production
@@ -31,6 +31,7 @@ app/
     SecurityHeaders.php  CSP / HSTS / nosniff / COOP ฯลฯ ชุดเดียวกับ helmet ของระบบเดิม
   Services/              ตรรกะธุรกิจทั้งหมด (คำนวณบิล ค่าคอม แจ้งเตือน สำรอง ฯลฯ) — static method คืน array
     Scheduler.php        งานตั้งเวลาทั้งหมด (cron เรียก Scheduler::tick() ทุกนาที)
+    VersionService.php   รุ่นของระบบ (VERSION + commit จาก .git) · app:install จดเวลาอัปเดตเมื่อรุ่นเปลี่ยน
   Libraries/
     Db.php               query ตรง ๆ: all / one / val / int / exec / insert / tx · ตั้ง UTC + STRICT ให้ทุก connection
     V.php + Validation/  ตัวตรวจ input แบบเดียวกับ zod ของระบบเดิม (ข้อความ error ภาษาไทยเหมือนเดิม)
@@ -82,6 +83,10 @@ writable/data/           กุญแจลับ · รหัสแอดมิ
 ข้อมูลเดิมต้องไม่พัง (ตั้ง DEFAULT หรือ UPDATE ค่าเดิมใน migration เดียวกัน)
 ⚠ MySQL ย้อน DDL ไม่ได้ (ต่างจาก SQLite) — migration ที่พังกลางทางจะค้างครึ่ง ๆ ลองกับสำเนาฐานข้อมูลก่อนเสมอ
 MySQL ไม่มี unique index แบบมีเงื่อนไข (`WHERE`) — ใช้คอลัมน์ generated + unique แทน (ดูตัวอย่างใน migration แรก)
+
+**ปล่อยงานขึ้นเครื่องจริง** — เลื่อน `VERSION` ใน `app/Config/Paynest.php` (แก้บั๊ก = เลขท้าย · ฟีเจอร์ใหม่ = เลขกลาง) แล้ว commit ไปด้วยกัน
+เวลาอัปเดตจดเองตอนรัน `app:install` บนเครื่องจริง (ขึ้นท้ายเมนูซ้าย + หน้าตั้งค่าแจ้งเตือน + ข้อความ 🟢 ในกลุ่ม Telegram)
+ลืมเลื่อนเลขก็ยังจดเวลาได้ (เทียบ commit ด้วย) แต่ทุกคนจะเห็นเลขรุ่นเดิม — บอกไม่ได้ว่ารุ่นไหนมีอะไร
 
 **เพิ่ม API** — เพิ่มเส้นใน `app/Config/Routes.php` พร้อมด่านตรวจ `$g('auth,…')` → เมธอดใน `app/Controllers/Api/X.php`
 ตรวจ input ด้วย `V::parse(V::object([...]), $this->body())` → ตรรกะใน `app/Services/XService.php`

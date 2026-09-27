@@ -175,4 +175,7 @@ $routes->group('api', ['namespace' => 'App\Controllers\Api'], static function (R
     $routes->delete('announcements/(:segment)', 'Announcements::delete/$1', $g('auth,super'));
 
     $routes->get('manual', 'Manual::index', $g('auth'));
+
+    /* ── รุ่นของระบบ + เวลาอัปเดตล่าสุด (รายละเอียดเฉพาะส่วนกลาง) ── */
+    $routes->get('system/version', 'System::version', $g('auth'));
 });
