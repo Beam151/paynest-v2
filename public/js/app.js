@@ -1,6 +1,7 @@
 import { api, session } from './api.js';
-import { beginRender, clear, dateTimeTh, el, icon, iconFor, toast } from './ui.js';
+import { beginRender, clear, el, icon, iconFor, toast } from './ui.js';
 import { scopeStateTo } from './viewState.js';
+import { versionButton } from './version.js';
 import { loginView } from './views/login.js';
 import { dashboardView } from './views/dashboard.js';
 import { franchisesView } from './views/franchises.js';
@@ -214,23 +215,8 @@ function sidebar(activePath) {
       onclick: () => { session.clear(); location.hash = '#/login'; render(); },
     }, el('span', { class: 'ico' }, icon('log-out')), 'ออกจากระบบ'),
 
-    el('div', { class: 'sidebar-version' }));
-}
-
-/*
- * รุ่นของระบบท้ายเมนู — ตอบคำถาม "อัปเดตแล้วหรือยัง" ได้โดยไม่ต้องถามคนดูแลเซิร์ฟเวอร์
- * ขอครั้งเดียวต่อการเปิดหน้าเว็บ: รุ่นเปลี่ยนก็ต่อเมื่อโหลดหน้าใหม่ (ไฟล์ JS ที่เปิดอยู่ยังเป็นรุ่นเดิม)
- */
-let versionRequest = null;
-function loadVersion(shell) {
-  versionRequest ??= api.get('/api/system/version').catch(() => { versionRequest = null; return null; });
-  versionRequest.then((v) => {
-    const slot = shell.querySelector('.sidebar-version');
-    if (!v || !slot) return;
-    slot.replaceChildren(
-      el('span', {}, `รุ่น ${v.version}`),
-      v.updatedAt ? el('span', {}, `อัปเดต ${dateTimeTh(v.updatedAt)}`) : '');
-  });
+    // รุ่นของระบบ + เวลาอัปเดต — กดแล้วเปิดรายละเอียด
+    versionButton());
 }
 
 /**
@@ -334,7 +320,6 @@ export async function render() {
     shell.querySelectorAll('.sidebar a').forEach((a) => a.addEventListener('click', closeDrawer));
     clear(root).append(shell);
     mounted = { shell, main, path };
-    loadVersion(shell);
   }
   loadNavCounts(mounted.shell);
 

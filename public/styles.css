@@ -218,8 +218,17 @@ a { color: var(--primary); }
 .sidebar-user .role { color: var(--sidebar-muted); font-size: var(--fs-xs); }
 .sidebar-user.active .role { color: rgba(255, 255, 255, .75); }
 
-/* รุ่นของระบบ + เวลาอัปเดต ท้ายเมนู — ตัวเล็กจาง ไม่แย่งสายตาจากเมนูงาน */
-.sidebar-version { display: flex; flex-direction: column; padding: 6px 11px 0; font-size: var(--fs-xs); color: var(--sidebar-muted); }
+/* รุ่นของระบบ + เวลาอัปเดต ท้ายเมนู — ตัวเล็กจาง ไม่แย่งสายตาจากเมนูงาน แต่ต้องดูออกว่ากดได้ (ไอคอน + hover) */
+.sidebar-version {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 7px 11px; border: 0; border-radius: var(--radius-md); background: none;
+  color: var(--sidebar-muted); font-family: inherit; font-size: var(--fs-xs); text-align: left; cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.sidebar-version:hover { background: rgba(255, 255, 255, .07); color: var(--on-dark); }
+.sidebar-version .ico { width: 18px; text-align: center; flex: none; }
+.sidebar-version .ico .icon { width: 15px; height: 15px; }
+.sidebar-version .lines { display: flex; flex-direction: column; }
 .sidebar-version:empty { display: none; }
 
 /* แถบเตือนตอน super admin สวมมุมคนอื่นดูอยู่

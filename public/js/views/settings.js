@@ -1,6 +1,7 @@
 import { api } from '../api.js';
-import { card, confirmAction, copyButton, dateTh, dateTimeTh, el, field, icon, infoModal, int, toast } from '../ui.js';
+import { card, confirmAction, copyButton, dateTh, el, field, icon, infoModal, int, toast } from '../ui.js';
 import { elevated } from '../elevation.js';
+import { versionDetails } from '../version.js';
 import { render } from '../app.js';
 
 /**
@@ -134,30 +135,10 @@ export async function settingsView() {
 
     uptimeCard(),
     backup ? backupCard(backup) : '',
-    version ? versionCard(version) : '',
+    // เนื้อหาเดียวกับที่กดดูจากท้ายเมนูซ้าย — ที่นี่เห็นคำเตือน "ยังไม่ได้รัน app:install" โดยไม่ต้องกด
+    version ? card('เวอร์ชันระบบ', versionDetails(version)) : '',
 
     saveBar);
-}
-
-/*
- * รุ่นของระบบ — เวลาอัปเดตคือตอนที่รัน app:install บนเซิร์ฟเวอร์ (ไม่ใช่ตอน git pull)
- * git pull แล้วลืม app:install = ฐานข้อมูลอาจยังเป็นโครงสร้างเก่า หน้าที่ใช้ของใหม่จะพัง จึงเตือนไว้ตรงนี้
- * ช่วงนั้นเวลาอัปเดตเป็นของรุ่นที่ติดตั้งไว้ก่อน ไม่ใช่ของโค้ดที่รันอยู่ — บอกให้ชัดว่าเป็นของรุ่นไหน
- */
-function versionCard(v) {
-  const label = (r) => `${r.version}${r.commit ? ` (${r.commit})` : ''}`;
-  const detail = v.installPending
-    ? (v.installed ? `ติดตั้งล่าสุดคือรุ่น ${label(v.installed)} เมื่อ ${dateTimeTh(v.updatedAt)}` : 'ยังไม่มีบันทึกการติดตั้ง')
-    : `อัปเดตล่าสุด ${dateTimeTh(v.updatedAt)}${v.previous ? ` · ก่อนหน้านี้รุ่น ${label(v.previous)}` : ''}`;
-  return card('เวอร์ชันระบบ', el('div', {},
-    el('div', { class: 'channel-row' },
-      el('span', { class: `channel-ico${v.installPending ? '' : ' on'}` }, icon(v.installPending ? 'triangle-alert' : 'package')),
-      el('div', { class: 'channel-text' },
-        el('strong', {}, `รุ่น ${label(v)}`),
-        el('span', { class: 'sub-line' }, detail))),
-    v.installPending ? el('div', { class: 'alert-box mt-8' },
-      'โค้ดรุ่นนี้ยังไม่ได้รัน ', el('code', {}, 'php spark app:install'),
-      ' บนเซิร์ฟเวอร์ — โครงสร้างฐานข้อมูลอาจยังเป็นของรุ่นก่อน รันคำสั่งนี้ให้เรียบร้อย (ดูคู่มือ DEPLOY.md ข้อ 7)') : ''));
 }
 
 /*
