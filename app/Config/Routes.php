@@ -155,7 +155,7 @@ $routes->group('api', ['namespace' => 'App\Controllers\Api'], static function (R
     $routes->patch('bank-accounts/(:segment)', 'BankAccounts::update/$1', $g('auth,staff,super'));
     $routes->delete('bank-accounts/(:segment)', 'BankAccounts::delete/$1', $g('auth,staff,super,elevated'));
 
-    /* ── ตั้งค่าแจ้งเตือน · Telegram กลุ่ม · สำรองข้อมูล (แก้อะไรต้องยืนยันรหัส 6 หลัก) ── */
+    /* ── ตั้งค่าแจ้งเตือน · Telegram กลุ่ม · captcha หน้าเข้าสู่ระบบ · สำรองข้อมูล (แก้อะไรต้องยืนยันรหัส 6 หลัก) ── */
     $routes->get('settings/notifications', 'Settings::notifications', $g('auth,super'));
     $routes->put('settings/notifications', 'Settings::saveNotifications', $g('auth,super,elevated'));
     $routes->get('settings/telegram', 'Settings::telegram', $g('auth,super'));
@@ -163,6 +163,9 @@ $routes->group('api', ['namespace' => 'App\Controllers\Api'], static function (R
     $routes->post('settings/telegram/discover', 'Settings::telegramDiscover', $g('auth,super,elevated'));
     $routes->put('settings/telegram', 'Settings::saveTelegram', $g('auth,super,elevated'));
     $routes->delete('settings/telegram', 'Settings::disableTelegram', $g('auth,super,elevated'));
+    $routes->get('settings/turnstile', 'Settings::turnstile', $g('auth,super'));
+    $routes->put('settings/turnstile', 'Settings::saveTurnstile', $g('auth,super,elevated'));
+    $routes->delete('settings/turnstile', 'Settings::disableTurnstile', $g('auth,super,elevated'));
     $routes->get('settings/backup', 'Settings::backup', $g('auth,super'));
     $routes->post('settings/backup', 'Settings::runBackup', $g('auth,super'));
 

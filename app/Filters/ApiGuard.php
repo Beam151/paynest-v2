@@ -14,6 +14,8 @@ use App\Libraries\RateLimiter;
 use App\Libraries\RequestBody;
 use App\Services\NotificationService;
 use App\Services\TelegramService;
+use App\Services\TurnstileService;
+use App\Services\UserService;
 use CodeIgniter\Filters\FilterInterface;
 use CodeIgniter\HTTP\RequestInterface;
 use CodeIgniter\HTTP\ResponseInterface;
@@ -206,9 +208,10 @@ class ApiGuard implements FilterInterface
 
         switch ($kind) {
             /*
-             * กันเดารหัสผ่าน — สองชั้น นับเฉพาะครั้งที่ล็อกอินไม่ผ่าน
+             * กันเดารหัสผ่าน — สามชั้น นับเฉพาะครั้งที่ล็อกอินไม่ผ่าน
              * ชั้นบัญชี: เดาบัญชีเดียวซ้ำ ๆ (brute force)
              * ชั้น IP: ลองรหัสยอดนิยมไล่ทีละบัญชี (password spraying)
+             * ชั้น captcha: หลาย IP ผลัดกันเดาบัญชีเดียว (botnet) — ดู loginCaptcha()
              * ไม่ล็อกบัญชีทั้งระบบ (ไม่ผูกกับ IP) เพราะคนร้ายจะยิงรหัสผิดใส่ superadmin แล้วส่วนกลางทั้งหมดล็อกอินไม่ได้แทน
              */
             case 'login':
@@ -223,7 +226,8 @@ class ApiGuard implements FilterInterface
                         'มีการล็อกอินผิดจากเครือข่ายนี้หลายครั้งเกินไป — รอ 15 นาทีแล้วลองใหม่',
                         'เครือข่าย',
                         $justLocked,
-                    ));
+                    ))
+                    ?? $this->loginCaptcha($username, $failedOnly);
 
             // ด่านรหัส 6 หลักตอนล็อกอิน — ยังไม่มี session จึงนับตามผู้ใช้ใน mfa token + IP
             case 'mfa':
@@ -308,5 +312,41 @@ class ApiGuard implements FilterInterface
         }
 
         return ApiResponse::errorOf(429, 'TOO_MANY_REQUESTS', $message);
+    }
+
+    /**
+     * ชั้นที่สามของการกันเดารหัส — นับตามชื่อบัญชีอย่างเดียว ไม่ผูก IP
+     * สองชั้นแรกผูก IP: คนร้ายที่มีหลาย IP ได้ลองคนละ 10 ครั้ง รวมกันแล้วไม่จำกัด
+     * ผิดเกินกำหนดใน 1 ชั่วโมง = ต้องผ่าน captcha ก่อน (ไม่ล็อก — เจ้าของบัญชีตัวจริงยังเข้าได้)
+     * ยังไม่ได้ตั้ง captcha ก็ยังนับ เพื่อแจ้งกลุ่มว่าบัญชีไหนกำลังถูกเดา
+     *
+     * นับชื่อที่ไม่มีอยู่จริงด้วย — ไม่งั้นดูจากการถาม captcha ก็รู้ว่าชื่อไหนมีจริง
+     */
+    private function loginCaptcha(string $username, callable $successful): ?ResponseInterface
+    {
+        $key  = "login-user:{$username}";
+        $hits = RateLimiter::hit($key, TurnstileService::LOGIN_WINDOW);
+        self::$counted[] = [$key, $successful];
+        if ($hits <= TurnstileService::LOGIN_THRESHOLD) {
+            return null;
+        }
+        $configured = TurnstileService::isConfigured();
+        // แจ้งครั้งเดียวตอนเพิ่งเกิน · ชื่อที่ไม่มีจริงไม่แจ้ง (คนร้ายสุ่มชื่อมาเป็นร้อยจะท่วมกลุ่ม)
+        if ($hits === TurnstileService::LOGIN_THRESHOLD + 1 && UserService::findByUsername($username) !== null) {
+            $name = TelegramService::escapeHtml(mb_substr($username, 0, 60));
+            $ip   = TelegramService::escapeHtml(ClientIp::get());
+            NotificationService::notify('security.login_captcha', implode("\n", [
+                '🧩 <b>บัญชีถูกใส่รหัสผิดเกิน ' . TurnstileService::LOGIN_THRESHOLD . ' ครั้งใน 1 ชั่วโมง</b>',
+                "บัญชี: <b>{$name}</b> · ครั้งล่าสุดจาก IP {$ip}",
+                $configured
+                    ? 'ต่อจากนี้ต้องยืนยันว่าไม่ใช่บอทก่อนเข้าระบบ (จนครบชั่วโมง)'
+                    : 'ยังไม่ได้เปิด captcha — คนร้ายที่มีหลาย IP ยังเดาต่อได้ · เปิดได้ที่หน้าตั้งค่า',
+            ]), ['line' => "{$name} จาก IP {$ip}"]);
+        }
+        if ($configured) {
+            TurnstileService::verifyLogin(RequestBody::field('captchaToken'));
+        }
+
+        return null;
     }
 }

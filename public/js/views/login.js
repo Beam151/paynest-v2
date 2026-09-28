@@ -1,4 +1,5 @@
 import { api, session } from '../api.js';
+import { captchaSiteKey, mountCaptcha } from '../turnstile.js';
 import { el, field, icon, toast } from '../ui.js';
 
 export function loginView(onSuccess) {
@@ -7,29 +8,85 @@ export function loginView(onSuccess) {
   const errorBox = el('div', { class: 'error-box', style: 'display:none' });
   const button = el('button', { class: 'btn block mt-6' }, 'เข้าสู่ระบบ');
 
+  /*
+   * ช่อง captcha — โผล่เฉพาะเมื่อเซิร์ฟเวอร์บอกว่าบัญชีนี้ถูกใส่รหัสผิดหลายครั้ง (คนใช้ปกติไม่เห็น)
+   * โผล่แล้วอยู่ต่อจนออกจากหน้านี้ ทุกครั้งที่กดเข้าสู่ระบบต้องมี token ใบใหม่
+   */
+  const captchaBox = el('div', { class: 'captcha-box', hidden: true });
+  let captcha = null; // { widget, token }
+  let resubmit = false; // เซิร์ฟเวอร์เพิ่งขอ captcha — ผ่านช่องแล้วส่งให้เองไม่ต้องกดซ้ำ
+
+  const showError = (message) => {
+    errorBox.textContent = message;
+    errorBox.style.display = '';
+  };
+
+  const showCaptcha = async (siteKey) => {
+    if (captcha) return;
+    captcha = { widget: null, token: null };
+    captchaBox.hidden = false;
+    try {
+      captcha.widget = await mountCaptcha(captchaBox, {
+        siteKey,
+        action: 'login',
+        onToken: (token) => {
+          captcha.token = token;
+          if (token && resubmit) {
+            resubmit = false;
+            submit();
+          }
+        },
+        onError: (code) => showError(`ช่องยืนยันว่าไม่ใช่บอทขัดข้อง (รหัส ${code}) — รีเฟรชหน้าแล้วลองใหม่`),
+      });
+    } catch (err) {
+      // โหลดสคริปต์ไม่ได้ — กดเข้าสู่ระบบอีกครั้ง เซิร์ฟเวอร์จะขอ captcha แล้วลองโหลดใหม่
+      captcha = null;
+      captchaBox.hidden = true;
+      showError(err.message);
+    }
+  };
+
   const submit = async (event) => {
     event?.preventDefault();
     if (!username.value.trim() || !password.value) {
-      errorBox.textContent = 'กรุณากรอกชื่อผู้ใช้และรหัสผ่าน';
-      errorBox.style.display = '';
+      showError('กรุณากรอกชื่อผู้ใช้และรหัสผ่าน');
       return;
     }
+    if (captcha && !captcha.token) {
+      resubmit = true;
+      showError('ติ๊กช่องยืนยันว่าไม่ใช่บอทด้านล่างก่อน');
+      return;
+    }
+    const captchaToken = captcha?.token;
     button.disabled = true;
     button.textContent = 'กำลังเข้าสู่ระบบ…';
     errorBox.style.display = 'none';
     try {
-      const res = await api.post('/api/auth/login', { username: username.value.trim(), password: password.value });
+      const res = await api.post('/api/auth/login', {
+        username: username.value.trim(),
+        password: password.value,
+        ...(captchaToken ? { captchaToken } : {}),
+      });
       if (res.mfaRequired) {
         form.replaceWith(mfaStep(res.mfaToken, finish));
         return;
       }
       finish(res);
     } catch (err) {
-      errorBox.textContent = err.fullMessage ?? err.message;
-      errorBox.style.display = '';
-      password.value = '';
-      password.focus();
+      showError(err.fullMessage ?? err.message);
+      const siteKey = captchaSiteKey(err);
+      if (siteKey) {
+        // เซิร์ฟเวอร์ยังไม่ได้ตรวจรหัสผ่าน — เก็บไว้ · ส่งให้เองเฉพาะครั้งแรกที่ถูกขอ
+        // (token ไม่ผ่าน / Cloudflare ขัดข้อง แล้วส่งเองซ้ำ ๆ จะวนไม่จบ)
+        if (err.code === 'CAPTCHA_REQUIRED') resubmit = true;
+        await showCaptcha(siteKey);
+      } else {
+        password.value = '';
+        password.focus();
+      }
     } finally {
+      // token ใช้ได้ครั้งเดียว — ส่งไปแล้วขอใบใหม่ไว้สำหรับครั้งหน้า
+      if (captchaToken) captcha?.widget?.reset();
       button.disabled = false;
       button.textContent = 'เข้าสู่ระบบ';
     }
@@ -53,6 +110,7 @@ export function loginView(onSuccess) {
     el('div', { style: 'display:grid;gap:14px' },
       field('ชื่อผู้ใช้', username),
       field('รหัสผ่าน', password),
+      captchaBox,
       button),
     // คู่มืออยู่ในระบบ (แยกตามบทบาท) — ก่อนล็อกอินบอกแค่ทางออกเรื่องรหัสผ่าน
     el('p', { class: 'sub-line', style: 'margin:18px 0 0;text-align:center' },

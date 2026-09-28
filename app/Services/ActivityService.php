@@ -13,6 +13,8 @@ final class ActivityService
     private const ACTION_TEXT = [
         'auth.login'                => 'เข้าสู่ระบบ',
         'auth.change_password'      => 'เปลี่ยนรหัสผ่าน',
+        'turnstile.configure'       => 'เปิด captcha หน้าเข้าสู่ระบบ',
+        'turnstile.disable'         => 'ปิด captcha หน้าเข้าสู่ระบบ',
         'franchise.create'          => 'สร้างร้านค้า',
         'franchise.update'          => 'แก้ไขข้อมูลร้าน',
         'product.create'            => 'เพิ่มสินค้า',

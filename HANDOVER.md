@@ -1,7 +1,7 @@
 # เอกสารส่งต่องาน (สำหรับนักพัฒนา)
 
 อ่าน [README.md](README.md) ก่อน (ภาพรวม + กติกาธุรกิจ) แล้วค่อยอ่านไฟล์นี้
-ขึ้นเซิร์ฟเวอร์ / cron / สำรองข้อมูล / เรื่องฉุกเฉิน อยู่ใน [DEPLOY.md](DEPLOY.md)
+ขึ้นเซิร์ฟเวอร์ / cron / สำรองข้อมูล / เรื่องฉุกเฉิน อยู่ใน [DEPLOY.md](DEPLOY.md) · ด่านความปลอดภัยทั้งหมดอยู่ใน [SECURITY.md](SECURITY.md)
 
 ## สถานะตอนส่งมอบ (ก.ย. 2569)
 
@@ -9,7 +9,7 @@
   หน้าเว็บ (`public/`) เป็นชุดเดิมแทบไม่ได้แก้ — API ตอบ JSON รูปเดียวกับของเดิมทุกตัว
 - ตรวจความตรงกับของเดิมแล้ว: ใส่ข้อมูลตัวอย่างชุดเดียวกันทั้งสองระบบ → ตารางเงินทั้ง 6 ตารางตรงกันทุกแถว
   และคำตอบ GET ทุก endpoint × ทุกบทบาท (135 คู่) ตรงกัน
-- `composer test` ผ่านทั้งหมด: smoke 444 ข้อ + pentest 93 ข้อ (ชุดเดิมที่พอร์ตมา) — **รันก่อนส่งงานทุกครั้ง**
+- `composer test` ผ่านทั้งหมด: smoke 481 ข้อ + pentest 93 ข้อ (ชุดเดิมที่พอร์ตมา) — **รันก่อนส่งงานทุกครั้ง**
 - ยังไม่ได้ขึ้นเซิร์ฟเวอร์จริง · ทดสอบบน PHP 8.2 + MariaDB 10.4 (Windows/XAMPP)
 
 ## แผนที่โค้ด
@@ -26,7 +26,7 @@ app/
     Home.php             หน้า SPA · /health (แตะฐานข้อมูลจริง) · 404 แบบ JSON
     Api/*.php            ชั้น HTTP: ตรวจ input ด้วย V แล้วเรียก service — ไม่มีตรรกะธุรกิจ (หนึ่งไฟล์ต่อหนึ่งกลุ่ม)
   Filters/
-    ApiGuard.php         auth (JWT + โหลดผู้ใช้) · บทบาท · สิทธิ์ผู้ช่วย · elevated (รหัส 6 หลัก) · rate limit
+    ApiGuard.php         auth (JWT + โหลดผู้ใช้) · บทบาท · สิทธิ์ผู้ช่วย · elevated (รหัส 6 หลัก) · rate limit + captcha ตอนล็อกอิน
     JsonBody.php         อ่าน JSON body: เกิน 256KB = 413 · JSON พัง = 400 · ข้อความช่องเดียวเกิน 2,000 ตัว = 400
     SecurityHeaders.php  CSP / HSTS / nosniff / COOP ฯลฯ ชุดเดียวกับ helmet ของระบบเดิม
   Services/              ตรรกะธุรกิจทั้งหมด (คำนวณบิล ค่าคอม แจ้งเตือน สำรอง ฯลฯ) — static method คืน array
@@ -116,19 +116,12 @@ Telegram ในเทสต์เป็นเซิร์ฟเวอร์จ�
 
 ## ความปลอดภัย (ที่มีอยู่แล้ว — อย่าถอดออก)
 
-| เรื่อง | อยู่ที่ |
-| --- | --- |
-| รหัสผ่าน bcrypt · JWT อายุ 24 ชม. · เปลี่ยนรหัส/เปิด 2FA = token เก่าทุกเครื่องหลุด (`token_version`) | `UserService`, `Libraries/Jwt.php`, `Filters/ApiGuard.php` |
-| ผู้ใช้ไม่มีจริงก็เช็กรหัสด้วย bcrypt หลอก — เดาจากเวลาตอบไม่ได้ว่าชื่อไหนมีจริง | `UserService` (`DUMMY_HASH`) |
-| Google Authenticator บังคับส่วนกลางบนเครื่องจริง · ร้านเลือกเปิดเอง · secret เข้ารหัสในฐานข้อมูล | `TwoFactorService`, `Libraries/Totp.php`, `Libraries/SecretBox.php` |
-| ยืนยันรหัส 6 หลักก่อนทำเรื่องอันตราย (elevation token 5 นาที ส่งทาง header `x-elevation`) | ด่าน `elevated` · `public/js/elevation.js` |
-| rate limit ล็อกอิน / รหัส 6 หลัก / อัปโหลด (นับในตาราง `rate_limits`) · ใส่ผิดจนล็อก = แจ้ง Telegram | ด่าน `limit.*`, `Libraries/RateLimiter.php` |
-| CSP เข้ม · ไม่มี CORS · ไม่บอกเวอร์ชัน PHP · ข้อความยาวเกิน 2,000 ตัวอักษรถูกปฏิเสธ | `Filters/SecurityHeaders.php`, `Filters/JsonBody.php` |
-| error ทุกแบบ (รวม 404 / URL แปลก ๆ) ตอบ JSON สั้น ๆ ไม่มี path/trace/ชื่อตาราง แม้ตั้ง development | `Libraries/JsonErrorHandler.php`, `BaseApiController` |
-| ไฟล์สลิป: ตรวจชนิดจาก magic bytes · ชื่อสุ่ม · อยู่นอก `public/` · เปิดได้เฉพาะลิงก์ที่เซ็นแล้วมีวันหมดอายุ | `Controllers/Api/Uploads.php`, `Libraries/SignedUrl.php` |
-| แก้บัญชีรับเงิน = แจ้งกลุ่มทันที + แถบเตือนทุกหน้าจนกว่าแอดมินจะกดรับทราบ | `BankAccountService` |
-| ดูมุมร้าน (view-as) ไม่ได้สวมตัวตนร้าน — ยังเป็น token ของแอดมิน แค่ส่ง `franchiseId` ไปด้วย · ปุ่มทำรายการถูกซ่อนที่หน้าเว็บ | `public/js/api.js`, `app.js` |
-| คำสั่งอันตรายไม่ยอมรันบน production: `db:seed DemoSeeder` (exit 1) · `app:reset` | `Seeds/DemoSeeder.php`, `Commands/DbSeed.php`, `Commands/AppReset.php` |
+รายละเอียดทุกด่านอยู่ใน **[SECURITY.md](SECURITY.md)** — กันอะไร ทำงานอย่างไร โค้ดอยู่ไหน และเรื่องฉุกเฉิน
+อ่านก่อนแก้ `Filters/ApiGuard.php` · `Controllers/Api/Auth.php` · `Filters/SecurityHeaders.php` · `Filters/JsonBody.php`
+
+สรุปสั้น ๆ: bcrypt + JWT 24 ชม. (`token_version`) · Google Authenticator บังคับส่วนกลาง · รหัส 6 หลักก่อนเรื่องอันตราย (`elevated`)
+· กันเดารหัส 3 ชั้น (บัญชี+IP · IP · captcha ตามชื่อบัญชี) · ร้านเห็นแค่ของตัวเอง · CSP เข้ม ไม่มี CORS
+· ไฟล์สลิปเปิดได้เฉพาะลิงก์ที่เซ็นแล้ว · secret ทุกตัวเข้ารหัสในฐานข้อมูล · เรื่องความปลอดภัยแจ้ง Telegram ปิดไม่ได้
 
 `composer test:pentest` ลองโจมตีจริง 93 แบบ (SQL injection, XSS, ปลอม token, ข้ามสิทธิ์ร้าน, อัปโหลดไฟล์ปลอม,
 เปิดไฟล์ `.env`/`secrets.json` ตรง ๆ ฯลฯ) — ทุกข้อต้องผ่าน
@@ -160,6 +153,7 @@ Telegram ในเทสต์เป็นเซิร์ฟเวอร์จ�
 - **แจ้งเตือนผ่าน Telegram เท่านั้น** — ไม่เอา LINE (มีค่าใช้จ่าย) · ไม่มีอีเมล
 - **ไม่ทำ PWA / แอปมือถือ** — ใช้ผ่านเบราว์เซอร์ มีแถบเมนูล่างบนมือถือแทน
 - **ล็อกอินหมดอายุ 24 ชม.** — ไม่เอา "จำฉันไว้ 30 วัน" (เจ้าของระบบมองว่าปลอดภัยกว่า)
+- **captcha ถามเฉพาะบัญชีที่ถูกใส่รหัสผิดเกิน 5 ครั้งใน 1 ชม.** — ไม่ถามทุกคนทุกครั้ง และไม่ล็อกบัญชี (`LOGIN_THRESHOLD` · รายละเอียดใน SECURITY.md)
 - **ไม่ทำไฟล์ PDF** ใบเรียกเก็บ/ใบรับเงิน — ดูบนจอได้
 - **ไม่ให้ตั้งค่าผ่าน `.env` ถ้าเลี่ยงได้** — `.env` มีแค่การต่อฐานข้อมูล (เลี่ยงไม่ได้) ค่าที่ต้องเปลี่ยนระหว่างใช้งานทำเป็นหน้าตั้งค่าในเว็บ
   (เรื่องอันตรายกันด้วยรหัส 6 หลัก)

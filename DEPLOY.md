@@ -147,6 +147,10 @@ sudo crontab -u www-data -e
    - วาง token → กดค้นหากลุ่ม → เลือกกลุ่ม → บันทึก
 5. หน้า **บัญชีรับเงิน** → เพิ่มบัญชีธนาคาร + รูป QR
 6. สร้างร้านที่หน้า **ร้านค้า** แล้วส่งชื่อผู้ใช้/รหัสผ่านให้ร้าน — ร้านเชื่อม Telegram ของตัวเองได้ที่หน้า "บัญชีของฉัน"
+7. (แนะนำ) หน้า **ตั้งค่า → กันบอทเดารหัสผ่าน → เปิด captcha** — ถามเฉพาะบัญชีที่ถูกใส่รหัสผิดเกิน 5 ครั้งใน 1 ชั่วโมง
+   - [Cloudflare](https://dash.cloudflare.com) (บัญชีฟรี) → Turnstile → Add widget → ใส่โดเมนของระบบ · Widget mode = Managed
+   - คัดลอก Site key + Secret key มาวาง → กด "ทดสอบและบันทึก" → ผ่านช่องที่ขึ้นมา (ระบบบันทึกเมื่อคีย์ใช้กับเว็บนี้ได้จริง)
+   - เครื่องต้องออกเน็ตไป `https://challenges.cloudflare.com` ได้ · รายละเอียดใน [SECURITY.md](SECURITY.md)
 
 ## 5. ตรวจว่าเว็บล่ม (UptimeRobot ฟรี)
 
@@ -236,6 +240,7 @@ sudo -u www php spark app:install                 # อัปเดตโคร�
 | แอดมินทำมือถือหาย | ล็อกอินด้วยรหัสสำรอง 1 ชุด → ตั้ง Google Authenticator ใหม่ · รหัสสำรองหมด: ให้แอดมินอีกคนกด "ปลด 2FA" หรือรัน `sudo -u www php spark 2fa:reset <username>` บนเซิร์ฟเวอร์ |
 | ร้านทำมือถือหาย (ร้านเปิด 2FA เอง) | แอดมินกด "ปลด 2FA" ที่หน้าร้านค้า (ต้องใส่รหัส 6 หลักของแอดมิน) |
 | สงสัยว่ารหัส/เครื่องแอดมินหลุด | เปลี่ยนรหัสผ่าน → ทุกเครื่องที่ล็อกอินไว้หลุดทันที · ดู "ประวัติรายการ" ว่ามีใครแก้บัญชีรับเงินไหม |
+| บัญชีถูกถาม captcha แต่ช่องขึ้นไม่ได้ (Cloudflare ล่ม / ลบ widget ไปแล้ว) | แอดมินที่ยังเข้าได้กด "ปิด" ที่หน้าตั้งค่า → กันบอทเดารหัสผ่าน · ไม่มีใครเข้าได้: `mysql -u paynest -p paynest -e "DELETE FROM app_settings WHERE name IN ('turnstile.siteKey', 'turnstile.secret');"` |
 | อยากเตะทุกคนออกจากระบบ | ลบบรรทัด `jwtSecret` ใน `writable/data/secrets.json` (ระบบสุ่มใหม่ในคำขอถัดไป · Google Authenticator ไม่กระทบ) |
 | `/health` บอก `schedule` | cron ไม่เดิน — ดูข้อ 3 · ลองสั่ง `sudo -u www php spark schedule:run --verbose` ดูว่ามี error อะไร |
 | ดิสก์เต็ม | ลบไฟล์ใน `writable/data/backups/db/` ที่เก่ามาก (ที่คัดลอกออกนอกเครื่องแล้ว) หรือตั้ง `paynest.backupKeepDays = 14` ใน `.env` |

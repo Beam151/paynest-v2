@@ -6,6 +6,7 @@ use App\Libraries\ApiResponse;
 use App\Libraries\Js;
 use App\Libraries\RequestBody;
 use App\Libraries\Undefined;
+use App\Services\TurnstileService;
 use CodeIgniter\Filters\FilterInterface;
 use CodeIgniter\HTTP\RequestInterface;
 use CodeIgniter\HTTP\ResponseInterface;
@@ -24,6 +25,9 @@ class JsonBody implements FilterInterface
 {
     public const LIMIT_BYTES = 256 * 1024;
     public const MAX_STRING  = 2000;
+
+    /** ช่องที่ยาวกว่าเพดานทั่วไปได้ — token ของ captcha ยาวได้ถึง 2,048 ตัว (Cloudflare กำหนด) */
+    private const LONGER = ['captchaToken' => TurnstileService::MAX_TOKEN];
 
     public function before(RequestInterface $request, $arguments = null)
     {
@@ -67,7 +71,7 @@ class JsonBody implements FilterInterface
     private static function findLongString(mixed $value, string $key): ?string
     {
         if (is_string($value)) {
-            return Js::len($value) > self::MAX_STRING ? $key : null;
+            return Js::len($value) > (self::LONGER[$key] ?? self::MAX_STRING) ? $key : null;
         }
         if ($value instanceof stdClass || is_array($value)) {
             foreach ((array) $value as $k => $v) {

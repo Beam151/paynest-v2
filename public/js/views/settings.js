@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { card, confirmAction, copyButton, dateTh, el, field, icon, infoModal, int, toast } from '../ui.js';
 import { elevated } from '../elevation.js';
+import { mountCaptcha } from '../turnstile.js';
 import { versionDetails } from '../version.js';
 import { render } from '../app.js';
 
@@ -11,8 +12,9 @@ import { render } from '../app.js';
  * เรื่องความปลอดภัยล็อกไว้ "แจ้งทันทีเสมอ" — ปิดไม่ได้ (ดู app/Services/NotificationService.php)
  */
 export async function settingsView() {
-  const [settings, backup, version] = await Promise.all([
+  const [settings, captcha, backup, version] = await Promise.all([
     api.get('/api/settings/notifications'),
+    api.get('/api/settings/turnstile').catch(() => null),
     api.get('/api/settings/backup').catch(() => null),
     api.get('/api/system/version').catch(() => null),
   ]);
@@ -133,6 +135,7 @@ export async function settingsView() {
         el('div', { class: 'time-range' }, el('span', {}, 'ส่งทุกวันเวลา'), digestAt, el('span', { class: 'sub-line' }, 'น.')),
         el('span', { class: 'hint' }, 'เวลาไทย · วันไหนไม่มีอะไรจะสรุป จะไม่ส่ง')))),
 
+    captcha ? captchaCard(captcha) : '',
     uptimeCard(),
     backup ? backupCard(backup) : '',
     // เนื้อหาเดียวกับที่กดดูจากท้ายเมนูซ้าย — ที่นี่เห็นคำเตือน "ยังไม่ได้รัน app:install" โดยไม่ต้องกด
@@ -325,4 +328,145 @@ function telegramSetupModal(tg) {
       chatList,
       field('หรือใส่ chat id เอง', manual, 'กลุ่มขึ้นต้นด้วยเครื่องหมายลบ'),
       el('div', { class: 'btn-row' }, save)));
+}
+
+/* ── captcha หน้าเข้าสู่ระบบ ─────────────────────────────── */
+
+/*
+ * captcha (Cloudflare Turnstile) — ถามเฉพาะบัญชีที่ถูกใส่รหัสผิดเกินกำหนด ไม่ล็อกบัญชี
+ * กันคนร้ายที่มีหลาย IP ผลัดกันเดารหัส (ด่าน rate limit เดิมนับตาม IP จึงกันไม่ได้)
+ */
+function captchaCard(ts) {
+  const turnOff = () => confirmAction('ปิด captcha? บัญชีที่ถูกเดารหัสจากหลาย IP จะไม่มีด่านนี้กันแล้ว (กลุ่ม Telegram จะได้รับแจ้ง)', async () => {
+    await elevated((opts) => api.del('/api/settings/turnstile', {}, opts),
+      'ปิด captcha — คนร้ายอาจปิดก่อนไล่เดารหัสร้าน ต้องยืนยันว่าเป็นคุณ');
+    toast('ปิด captcha แล้ว', 'success');
+    render();
+  });
+  return card('กันบอทเดารหัสผ่าน', el('div', {},
+    el('div', { class: 'channel-row' },
+      el('span', { class: `channel-ico${ts.configured ? ' on' : ''}` }, icon('shield-check')),
+      el('div', { class: 'channel-text' },
+        el('strong', {}, `Captcha หน้าเข้าสู่ระบบ — ${ts.configured ? 'เปิดอยู่' : 'ยังไม่ได้เปิด'}`),
+        el('span', { class: 'sub-line' }, ts.configured
+          ? `Cloudflare Turnstile · site key ${ts.siteKey.slice(0, 10)}… · ตั้งเมื่อ ${dateTh(ts.updatedAt)}`
+          : 'ใช้ Cloudflare Turnstile (ฟรี) — ต้องมีบัญชี Cloudflare')),
+      ts.configured
+        ? el('div', { class: 'btn-row' },
+          el('button', { class: 'btn ghost sm', onclick: () => captchaSetupModal(ts) }, 'เปลี่ยนคีย์'),
+          el('button', { class: 'btn ghost sm danger', onclick: turnOff }, 'ปิด'))
+        : el('button', { class: 'btn', onclick: () => captchaSetupModal(ts) }, 'เปิด captcha')),
+    el('p', { class: 'sub-line mt-8' },
+      `ถามเฉพาะบัญชีที่ถูกใส่รหัสผิดเกิน ${int(ts.threshold)} ครั้งใน 1 ชั่วโมง (นับรวมทุกเครื่อง) — คนใช้ปกติไม่เห็น`,
+      ' · ไม่ล็อกบัญชี เจ้าของตัวจริงผ่านช่องยืนยันแล้วเข้าได้ตามปกติ')));
+}
+
+/**
+ * ตั้งคีย์ — ต้องผ่านช่อง captcha ที่วาดด้วย site key ใหม่บนโดเมนนี้ เซิร์ฟเวอร์ถึงยอมบันทึก
+ * คีย์ผิด / ยังไม่ได้ใส่โดเมนใน Cloudflare จะรู้ตรงนี้ ไม่ใช่ไปรู้ตอนร้านล็อกอินไม่ได้
+ */
+function captchaSetupModal(ts) {
+  let widget = null;
+  const modal = infoModal({ title: 'เปิด captcha หน้าเข้าสู่ระบบ', width: 560, content: null, onClose: () => widget?.remove() });
+  const siteKey = el('input', { type: 'text', autocomplete: 'off', placeholder: '0x4AAAAAAA…', value: ts.siteKey ?? undefined });
+  const secret = el('input', { type: 'password', autocomplete: 'off', placeholder: '0x4AAAAAAA…' });
+  const errorBox = el('div', { class: 'error-box', hidden: true });
+  const captchaBox = el('div', { class: 'captcha-box', hidden: true });
+  const test = el('button', { class: 'btn' }, 'ทดสอบและบันทึก');
+  const local = /^(localhost|127\.|0\.0\.0\.0)/.test(location.hostname);
+  const fail = (message) => { errorBox.textContent = message; errorBox.hidden = false; };
+
+  let mountedKey = null;
+  let token = null;
+  let pending = false; // กดปุ่มแล้วแต่ยังไม่ผ่านช่อง — ผ่านเมื่อไรบันทึกให้เอง (ครั้งเดียวต่อการกด)
+
+  const save = async (captchaToken) => {
+    test.disabled = true;
+    try {
+      await elevated((opts) => api.put('/api/settings/turnstile', {
+        siteKey: siteKey.value.trim(), secret: secret.value.trim(), captchaToken,
+      }, opts), 'ตั้งค่า captcha หน้าเข้าสู่ระบบ — ต้องยืนยันว่าเป็นคุณ');
+      toast('เปิด captcha แล้ว — กลุ่ม Telegram ได้รับแจ้ง', 'success');
+      modal.close();
+      render();
+    } catch (err) {
+      fail(err.fullMessage ?? err.message);
+      widget?.reset(); // token ใช้ไปแล้ว — ขอใบใหม่ไว้ กดทดสอบอีกครั้งได้เลย
+    } finally {
+      test.disabled = false;
+    }
+  };
+
+  const onToken = (t) => {
+    token = t;
+    if (t && pending) {
+      pending = false;
+      token = null;
+      save(t);
+    }
+  };
+
+  test.addEventListener('click', async () => {
+    errorBox.hidden = true;
+    const key = siteKey.value.trim();
+    if (!key || !secret.value.trim()) {
+      fail('ใส่ทั้ง Site key และ Secret key');
+      return;
+    }
+    if (key !== mountedKey) {
+      // เปลี่ยน site key = วาดช่องใหม่ด้วยคีย์นั้น
+      widget?.remove();
+      widget = null;
+      token = null;
+      captchaBox.replaceChildren();
+      captchaBox.hidden = false;
+      mountedKey = key;
+      try {
+        widget = await mountCaptcha(captchaBox, {
+          siteKey: key,
+          action: 'setup',
+          onToken,
+          onError: (code) => fail(`ช่อง captcha ขึ้นไม่ได้ (รหัส ${code}) — ตรวจว่า site key ถูก และเพิ่มโดเมน ${location.hostname} ใน widget แล้ว`),
+        });
+      } catch (err) {
+        mountedKey = null;
+        captchaBox.hidden = true;
+        fail(err.message);
+        return;
+      }
+    }
+    if (token) {
+      const t = token;
+      token = null;
+      save(t);
+    } else {
+      pending = true;
+    }
+  });
+
+  modal.body.append(
+    el('ol', { class: 'steps' },
+      el('li', {}, 'เข้า ', el('a', { href: 'https://dash.cloudflare.com', target: '_blank', rel: 'noopener' }, 'Cloudflare'),
+        ' → Turnstile → Add widget · ใส่โดเมน ', el('strong', {}, location.hostname), ' · Widget mode เลือก Managed'),
+      el('li', {}, 'คัดลอก Site key และ Secret key มาวางด้านล่าง'),
+      el('li', {}, 'กด "ทดสอบและบันทึก" แล้วผ่านช่องที่ขึ้นมา — ระบบบันทึกให้เมื่อคีย์ใช้กับเว็บนี้ได้จริง')),
+    // คีย์ทดสอบมีเลข 0 ยาวเหยียด คัดลอก/พิมพ์เองแล้วขาดไปตัวเดียว Cloudflare ก็ไม่รับ — กดปุ่มใส่ให้แทน
+    local ? el('div', { class: 'notice-box channel-row' },
+      el('span', { style: 'flex:1;min-width:220px' },
+        'เครื่องทดสอบ (localhost): ใช้คีย์ทดสอบของ Cloudflare ได้ — ผ่านทุกครั้ง (เซิร์ฟเวอร์จริงไม่รับคีย์ชุดนี้)'),
+      el('button', {
+        class: 'btn ghost sm',
+        onclick: () => {
+          siteKey.value = '1x00000000000000000000AA';
+          secret.value = '1x0000000000000000000000000000000AA';
+          errorBox.hidden = true;
+        },
+      }, 'ใส่คีย์ทดสอบให้')) : '',
+    el('div', { style: 'display:grid;gap:12px' },
+      field('Site key', siteKey),
+      field('Secret key', secret, ts.configured ? 'ต้องใส่ใหม่ทุกครั้ง — ระบบไม่ส่ง secret เดิมกลับมาที่หน้าเว็บ' : 'เก็บแบบเข้ารหัส ไม่แสดงอีก'),
+      captchaBox,
+      // ไว้ติดปุ่ม — ตาคนมองอยู่ที่ช่อง captcha กับปุ่มด้านล่าง ถ้าไว้บนสุดจะไม่เห็นว่าบันทึกไม่ผ่าน
+      errorBox,
+      el('div', { class: 'btn-row' }, test)));
 }

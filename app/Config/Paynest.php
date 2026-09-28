@@ -59,6 +59,9 @@ class Paynest extends BaseConfig
     /** ปลายทาง Telegram — มีไว้ให้เทสต์ชี้ไป Telegram จำลอง (ของจริงตั้งบอทในหน้าตั้งค่า) */
     public string $telegramApiBase = 'https://api.telegram.org';
 
+    /** ที่ตรวจ token ของ Cloudflare Turnstile — มีไว้ให้เทสต์ชี้ไปตัวจำลอง (คีย์ของจริงตั้งในหน้าตั้งค่า) */
+    public string $turnstileVerifyUrl = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
+
     /**
      * บังคับ Google Authenticator กับบัญชีส่วนกลางบนเซิร์ฟเวอร์จริง — ปิด (false) = ล็อกอินด้วยรหัสผ่านอย่างเดียวได้
      * ตั้งได้จากไฟล์บนเซิร์ฟเวอร์เท่านั้น ไม่มีปุ่มในหน้าเว็บ · บัญชีที่เปิด 2FA ไว้แล้วยังต้องใส่รหัสจนกว่าจะปิดเอง
@@ -70,19 +73,20 @@ class Paynest extends BaseConfig
      * ชื่อตรงกับระบบเดิม (JWT_SECRET → PAYNEST_JWT_SECRET ฯลฯ) ให้คนดูแลเซิร์ฟเวอร์เทียบกันได้ง่าย
      */
     private const ENV_OVERRIDES = [
-        'PAYNEST_APP_NAME'          => 'appName',
-        'PAYNEST_TRUST_PROXY'       => 'trustProxy',
-        'PAYNEST_INVOICE_DUE_DAYS'  => 'invoiceDueDays',
-        'PAYNEST_DATA_DIR'          => 'dataDir',
-        'PAYNEST_BACKUP_DIR'        => 'backupDir',
-        'PAYNEST_BACKUP_KEEP_DAYS'  => 'backupKeepDays',
-        'PAYNEST_JWT_SECRET'        => 'jwtSecret',
-        'PAYNEST_ENCRYPTION_KEY'    => 'encryptionKey',
-        'PAYNEST_JWT_EXPIRES_IN'    => 'jwtExpiresIn',
-        'PAYNEST_SEED_ADMIN_USER'   => 'seedSuperAdminUser',
-        'PAYNEST_SEED_ADMIN_PASS'   => 'seedSuperAdminPass',
-        'PAYNEST_TELEGRAM_API_BASE' => 'telegramApiBase',
-        'PAYNEST_ENFORCE_ADMIN_2FA' => 'enforceAdmin2fa',
+        'PAYNEST_APP_NAME'             => 'appName',
+        'PAYNEST_TRUST_PROXY'          => 'trustProxy',
+        'PAYNEST_INVOICE_DUE_DAYS'     => 'invoiceDueDays',
+        'PAYNEST_DATA_DIR'             => 'dataDir',
+        'PAYNEST_BACKUP_DIR'           => 'backupDir',
+        'PAYNEST_BACKUP_KEEP_DAYS'     => 'backupKeepDays',
+        'PAYNEST_JWT_SECRET'           => 'jwtSecret',
+        'PAYNEST_ENCRYPTION_KEY'       => 'encryptionKey',
+        'PAYNEST_JWT_EXPIRES_IN'       => 'jwtExpiresIn',
+        'PAYNEST_SEED_ADMIN_USER'      => 'seedSuperAdminUser',
+        'PAYNEST_SEED_ADMIN_PASS'      => 'seedSuperAdminPass',
+        'PAYNEST_TELEGRAM_API_BASE'    => 'telegramApiBase',
+        'PAYNEST_TURNSTILE_VERIFY_URL' => 'turnstileVerifyUrl',
+        'PAYNEST_ENFORCE_ADMIN_2FA'    => 'enforceAdmin2fa',
     ];
 
     public function __construct()

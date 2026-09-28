@@ -2,9 +2,9 @@
 
 | ไฟล์ | ทดสอบอะไร |
 | --- | --- |
-| `e2e/smoke.mjs` | ทุกฟีเจอร์ผ่าน HTTP จริง 444 ข้อ — บิล ชำระเงิน ค่าคอม สิทธิ์ 2FA Telegram แจ้งเตือน สำรองข้อมูล ฯลฯ |
+| `e2e/smoke.mjs` | ทุกฟีเจอร์ผ่าน HTTP จริง 481 ข้อ — บิล ชำระเงิน ค่าคอม สิทธิ์ 2FA captcha Telegram แจ้งเตือน สำรองข้อมูล ฯลฯ |
 | `e2e/pentest.mjs` | ลองโจมตีจริง 93 แบบ — ทุกข้อ "ผ่าน" = ระบบกันได้ |
-| `e2e/lib/harness.mjs` | ตัวตั้งฉาก: ฐานข้อมูลเทสต์ใหม่ → `app:install` → เปิด `php -S` บนพอร์ตสุ่ม + Telegram จำลอง |
+| `e2e/lib/harness.mjs` | ตัวตั้งฉาก: ฐานข้อมูลเทสต์ใหม่ → `app:install` → เปิด `php -S` บนพอร์ตสุ่ม + Telegram / Cloudflare Turnstile จำลอง |
 | `unit/` | PHPUnit (`composer test:unit`) |
 
 ทั้งสองชุดพอร์ตมาจากชุดทดสอบของระบบเดิม (Node) แบบคำต่อคำ — เปลี่ยนเฉพาะส่วนที่เดิมเรียกโค้ดภายในโดยตรง
@@ -40,6 +40,7 @@ composer test:pentest
 - ค่าในเครื่องที่ชุดทดสอบทับให้: ฐานข้อมูล (`PAYNEST_DB_*`) · `CI_ENVIRONMENT` · โฟลเดอร์ข้อมูล · กุญแจลับ
   ส่วน `paynest.*` อื่น ๆ ใน `.env` ของเครื่องยังมีผล — ถ้าเทสต์พังแปลก ๆ ลองดูว่า `.env` ตั้งอะไรแปลกไว้ไหม
 - smoke รันแบบ production (บังคับ 2FA) · pentest รันแบบ development (ค่าที่ลืมเปลี่ยนตอน deploy แล้วอันตรายที่สุด)
+  `.env` ที่ตั้ง `paynest.enforceAdmin2fa = false` ทำให้ smoke 2 ข้อแรกเรื่องบังคับ 2FA ไม่ผ่าน — รันด้วย `PAYNEST_ENFORCE_ADMIN_2FA=true`
 
 ## เพิ่มเทสต์
 
@@ -49,6 +50,8 @@ composer test:pentest
 - อ่าน/แก้ฐานข้อมูลตรง ๆ: `db.prepare(sql).get(...)` / `.all(...)` / `.run(...)` — SQL แบบ MySQL
 - เรียกงานเบื้องหลัง: `call('runDueReminders', { now: thaiWall(date) })` — งานใหม่ต้องเพิ่มใน `app/Commands/E2eCall.php`
 - ข้อความ Telegram ที่ระบบส่ง: `telegram.messages` (Telegram จำลอง — ไม่ส่งออกจริง)
+- captcha: คีย์จำลองอยู่ใน `TURNSTILE` ของ harness · token `pass:<action>` (หรือ `pass:<action>:<อะไรก็ได้>`) ผ่านครั้งเดียว
+  อย่างอื่นไม่ผ่าน · `turnstile.down = true` = Cloudflare ล่ม · smoke ตั้ง `trustProxy = 1` จำลองหลาย IP ด้วย `X-Forwarded-For`
 - `db.prepare` / `call` เรียก `php spark` ครั้งละโปรเซส (ราว 0.3 วินาที) — ใช้เท่าที่จำเป็น
 - **section สุดท้ายต้องเป็นเรื่องใส่รหัสผิดจนล็อก** (มันล็อกการยืนยันตัวตนไป 15 นาที)
 

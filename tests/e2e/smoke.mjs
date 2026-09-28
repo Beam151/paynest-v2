@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { spawnSync } from 'node:child_process';
-import { DB, jwtSign, spark, startStack, thaiWall, totp } from './lib/harness.mjs';
+import { DB, TURNSTILE, jwtSign, spark, startStack, thaiWall, totp } from './lib/harness.mjs';
 
 const TG_TOKEN = '123456:SMOKE-SECRET-TOKEN';
 const TG_CHAT = '-1009876543210';
@@ -22,9 +22,11 @@ const stack = await startStack({
     PAYNEST_JWT_SECRET: 'smoke-test-secret-32-characters-min',
     PAYNEST_SEED_ADMIN_PASS: 'smoke-test-password-123456',
     // ไม่ตั้ง PAYNEST_ENCRYPTION_KEY — ให้ระบบสุ่มกุญแจเก็บใน secrets.json เองแบบเครื่องจริง (เทสต์สำรองข้อมูลเช็กว่าไฟล์นี้ถูกสำรองไปด้วย)
+    // เทสต์ captcha จำลองคนร้ายหลาย IP ผ่าน X-Forwarded-For · คำขอที่ไม่ส่ง header นี้ยังเป็น 127.0.0.1 เหมือนเดิม
+    PAYNEST_TRUST_PROXY: '1',
   },
 });
-const { base, telegram, db, call } = stack;
+const { base, telegram, turnstile, db, call } = stack;
 const server = { close: () => stack.stop() };
 const tgServer = { close: () => {} };
 process.env.SEED_SUPERADMIN_PASS = 'smoke-test-password-123456';
@@ -89,8 +91,8 @@ async function adminElevation() {
   return adminElev.token;
 }
 
-// เส้นทางที่ต้องยืนยันรหัส 6 หลัก (แก้บัญชีรับเงิน / ตั้งค่า Telegram)
-const ELEVATED_URL = /^\/api\/(bank-accounts(\/\d+)?|settings\/(telegram(\/discover)?|notifications))$/;
+// เส้นทางที่ต้องยืนยันรหัส 6 หลัก (แก้บัญชีรับเงิน / ตั้งค่า Telegram / captcha)
+const ELEVATED_URL = /^\/api\/(bank-accounts(\/\d+)?|settings\/(telegram(\/discover)?|notifications|turnstile))$/;
 
 async function api(method, url, { token, body, headers = {}, elevate = true } = {}) {
   // เทสต์ที่ต้องการทดสอบว่า "ไม่ยืนยันแล้วโดนกัน" ส่ง elevate: false
@@ -2428,6 +2430,104 @@ section('ดูแลระบบ: ตรวจสถานะ · แจ้ง�
       && readers.body.unread.some((x) => x.username === 'shopb') && readers.body.read.length + readers.body.unread.length === activeShops, readers.body);
   check('ร้านดูรายชื่อคนอ่านไม่ได้', (await api('GET', `/api/announcements/${a.body.id}/readers`, { token: tokenA })).status === 403);
   await api('DELETE', `/api/announcements/${a.body.id}`, { token: admin });
+}
+
+section('captcha หน้าเข้าสู่ระบบ: หลาย IP ผลัดกันเดารหัสบัญชีเดียว (botnet)');
+{
+  for (const u of ['botshop', 'botshop2', 'botshop3']) {
+    await api('POST', '/api/franchises', { token: admin, body: { username: u, password: `${u}-pass-1` } });
+  }
+  // IP ละครั้ง — ด่านเดิม (10 ครั้งต่อ IP) ไม่มีวันเห็น ต้องเป็นด่านที่นับตามชื่อบัญชี
+  let ipSeq = 0;
+  const loginAs = (username, password, extra = {}) => api('POST', '/api/auth/login', {
+    body: { username, password, ...extra }, headers: { 'x-forwarded-for': `203.0.113.${++ipSeq}` },
+  });
+
+  const initial = await api('GET', '/api/settings/turnstile', { token: admin });
+  check('ตั้งต้นยังไม่เปิด captcha · ถามเมื่อผิดเกิน 5 ครั้ง', initial.status === 200 && initial.body.configured === false && initial.body.threshold === 5, initial.body);
+  const limit = initial.body.threshold;
+  const captchaAlerts = (from, username) => telegram.messages.slice(from)
+    .filter((m) => m.text.includes(`ใส่รหัสผิดเกิน ${limit} ครั้งใน 1 ชั่วโมง`) && m.text.includes(`<b>${username}</b>`));
+  check('ร้านค้าดูค่าตั้ง captcha ไม่ได้', (await api('GET', '/api/settings/turnstile', { token: tokenA })).status === 403);
+
+  // ยังไม่เปิด captcha: ยังนับและแจ้งกลุ่ม แต่ไม่ถาม captcha
+  let mark = telegram.messages.length;
+  for (let i = 0; i <= limit; i++) await loginAs('botshop', `wrong-${i}`);
+  const noCaptcha = await loginAs('botshop', 'botshop-pass-1');
+  check('ยังไม่เปิด captcha: เดาจากหลาย IP เกินกำหนด เจ้าของยังล็อกอินได้ตามปกติ', noCaptcha.status === 200, noCaptcha.body);
+  await flushTelegram();
+  const offAlert = captchaAlerts(mark, 'botshop');
+  check('…แต่กลุ่มได้รับแจ้งว่าบัญชีนี้กำลังถูกเดา พร้อมแนะนำให้เปิด captcha',
+    offAlert.length === 1 && /ยังไม่ได้เปิด captcha/.test(offAlert[0].text), telegram.messages.slice(mark));
+
+  // ── เปิด captcha: ต้องผ่านช่องที่วาดด้วยคีย์ใหม่ก่อน ──
+  const keys = { siteKey: TURNSTILE.siteKey, secret: TURNSTILE.secret };
+  const put = (body, opts = {}) => api('PUT', '/api/settings/turnstile', { token: admin, body, ...opts });
+  check('เปิด captcha โดยไม่ใส่รหัส 6 หลักไม่ได้', (await put({ ...keys, captchaToken: 'pass:setup' }, { elevate: false })).status === 403);
+  const badSecret = await put({ ...keys, secret: 'not-the-secret-key', captchaToken: 'pass:setup' });
+  check('secret key ผิด → ไม่บันทึก', badSecret.status === 400 && /Secret key/.test(badSecret.body.error.message), badSecret.body);
+  check('ไม่ผ่านช่อง captcha → ไม่บันทึก', (await put({ ...keys, captchaToken: 'made-up' })).status === 400);
+  check('token จากช่องล็อกอินเอามาตั้งค่าไม่ได้ (action ไม่ตรง)', (await put({ ...keys, captchaToken: 'pass:login:setup' })).status === 400);
+  const dummy = await put({ siteKey: '1x00000000000000000000AA', secret: '1x0000000000000000000000000000000AA', captchaToken: 'XXXX.DUMMY.TOKEN.XXXX' });
+  check('เซิร์ฟเวอร์จริงไม่รับคีย์ทดสอบของ Cloudflare (ปล่อยผ่านทุกคน)', dummy.status === 400 && /คีย์ทดสอบ/.test(dummy.body.error.message), dummy.body);
+  mark = telegram.messages.length;
+  const on = await put({ ...keys, captchaToken: 'pass:setup' });
+  check('ผ่านช่อง captcha ด้วยคีย์ชุดใหม่ → บันทึก', on.status === 200 && on.body.configured === true && on.body.siteKey === TURNSTILE.siteKey, on.body);
+  check('secret ไม่ถูกส่งกลับหน้าเว็บ', !JSON.stringify(on.body).includes(TURNSTILE.secret));
+  const sealed = db.prepare("SELECT value FROM app_settings WHERE name = 'turnstile.secret'").get();
+  check('secret เก็บแบบเข้ารหัสในฐานข้อมูล', Boolean(sealed) && !sealed.value.includes(TURNSTILE.secret), sealed);
+  await flushTelegram();
+  check('เปิด captcha → กลุ่มได้รับแจ้ง', telegram.messages.slice(mark).some((m) => /เปิด captcha หน้าเข้าสู่ระบบ/.test(m.text)));
+
+  // ── botnet เดาบัญชีเดียว ──
+  check('เปิด captcha แล้ว คนใช้ปกติไม่ถูกถาม', (await loginAs('botshop2', 'botshop2-pass-1')).status === 200);
+  mark = telegram.messages.length;
+  const guesses = [];
+  for (let i = 0; i < limit; i++) guesses.push((await loginAs('botshop2', `guess-${i}`)).status);
+  check(`${limit} IP เดาคนละครั้ง — ยังไม่ถึงกำหนด (ตอบรหัสผิดตามปกติ)`, guesses.every((s) => s === 401), guesses);
+  const asked = await loginAs('botshop2', 'guess-next');
+  check(`ครั้งที่ ${limit + 1} จาก IP ใหม่ → ต้องผ่าน captcha ก่อน พร้อม site key ให้หน้าเว็บวาดช่อง`,
+    asked.status === 403 && asked.body.error.code === 'CAPTCHA_REQUIRED' && asked.body.error.details?.siteKey === TURNSTILE.siteKey, asked.body);
+  const owner = await loginAs('botshop2', 'botshop2-pass-1');
+  check('เจ้าของตัวจริงก็ต้องผ่าน captcha (ไม่ใช่ถูกล็อก)', owner.status === 403 && owner.body.error.code === 'CAPTCHA_REQUIRED', owner.body);
+  const fake = await loginAs('botshop2', 'botshop2-pass-1', { captchaToken: 'bot-made-this-up' });
+  check('token ปลอม → ไม่ผ่าน', fake.status === 403 && fake.body.error.code === 'CAPTCHA_INVALID', fake.body);
+  const setupTok = await loginAs('botshop2', 'botshop2-pass-1', { captchaToken: 'pass:setup:again' });
+  check('token จากช่องตั้งค่าเอามาล็อกอินไม่ได้', setupTok.status === 403 && setupTok.body.error.code === 'CAPTCHA_INVALID', setupTok.body);
+  const passed = await loginAs('botshop2', 'botshop2-pass-1', { captchaToken: 'pass:login:1' });
+  check('ผ่าน captcha + รหัสถูก → เข้าระบบได้', passed.status === 200 && Boolean(passed.body.token), passed.body);
+  const replay = await loginAs('botshop2', 'botshop2-pass-1', { captchaToken: 'pass:login:1' });
+  check('token เดิมใช้ซ้ำไม่ได้', replay.status === 403 && replay.body.error.code === 'CAPTCHA_INVALID', replay.body);
+  check('ผ่าน captcha แต่รหัสผิด → ยังเข้าไม่ได้', (await loginAs('botshop2', 'guess-11', { captchaToken: 'pass:login:2' })).status === 401);
+  const longTok = await loginAs('botshop2', 'botshop2-pass-1', { captchaToken: 'x'.repeat(2048) });
+  check('token ยาว 2,048 ตัว (ยาวสุดที่ Cloudflare ออกให้) ผ่านเพดานความยาวของ body',
+    longTok.status === 403 && longTok.body.error.code === 'CAPTCHA_INVALID', longTok.body);
+  turnstile.down = true;
+  const down = await loginAs('botshop2', 'botshop2-pass-1', { captchaToken: 'pass:login:3' });
+  turnstile.down = false;
+  check('ติดต่อ Cloudflare ไม่ได้ → ไม่ปล่อยผ่าน (503 ลองใหม่ได้)', down.status === 503 && down.body.error.code === 'CAPTCHA_UNAVAILABLE', down.body);
+  await flushTelegram();
+  const onAlert = captchaAlerts(mark, 'botshop2');
+  check('กลุ่มได้รับแจ้งครั้งเดียวตอนเริ่มถาม captcha — ไม่ท่วมกลุ่ม',
+    onAlert.length === 1 && /ต้องยืนยันว่าไม่ใช่บอท/.test(onAlert[0].text), onAlert);
+
+  check('เปิดทีหลังก็มีผลกับบัญชีที่ถูกเดาไว้ก่อนแล้ว', (await loginAs('botshop', 'botshop-pass-1')).body?.error?.code === 'CAPTCHA_REQUIRED');
+  check('บัญชีอื่นไม่โดนไปด้วย', (await loginAs('botshop3', 'botshop3-pass-1')).status === 200);
+  mark = telegram.messages.length;
+  for (let i = 0; i < limit; i++) await loginAs('no-such-user', 'x');
+  const ghost = await loginAs('no-such-user', 'x');
+  check('ชื่อที่ไม่มีจริงก็ถูกถาม captcha เหมือนกัน (เดาจาก captcha ไม่ได้ว่าชื่อไหนมีจริง)', ghost.body?.error?.code === 'CAPTCHA_REQUIRED', ghost.body);
+  await flushTelegram();
+  check('ชื่อที่ไม่มีจริงไม่แจ้งกลุ่ม (สุ่มชื่อมาเป็นร้อยจะท่วมกลุ่ม)', captchaAlerts(mark, 'no-such-user').length === 0);
+
+  // ── ปิด captcha ──
+  mark = telegram.messages.length;
+  check('ปิด captcha โดยไม่ใส่รหัส 6 หลักไม่ได้', (await api('DELETE', '/api/settings/turnstile', { token: admin, elevate: false })).status === 403);
+  const offNow = await api('DELETE', '/api/settings/turnstile', { token: admin });
+  check('ปิด captcha ได้', offNow.status === 200 && offNow.body.configured === false, offNow.body);
+  await flushTelegram();
+  check('ปิด captcha → กลุ่มได้รับแจ้ง (ปิดเงียบ ๆ ไม่ได้)', telegram.messages.slice(mark).some((m) => /ปิด captcha หน้าเข้าสู่ระบบ/.test(m.text)));
+  check('ปิดแล้ว บัญชีที่ถูกเดาอยู่ล็อกอินได้ตามปกติ', (await loginAs('botshop2', 'botshop2-pass-1')).status === 200);
 }
 
 section('ใส่รหัส 6 หลักผิดหลายครั้ง (ไว้ท้ายสุด — ล็อกการยืนยันตัวตนไป 15 นาที)');

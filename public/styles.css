@@ -1080,6 +1080,9 @@ tr.row-flash > td { animation: row-flash 1.5s ease-out 1; }
   background: var(--primary-soft); color: var(--primary); margin-bottom: 14px;
 }
 .login-step-ico .icon { width: 22px; height: 22px; }
+/* ช่อง captcha (Cloudflare Turnstile) — จองความสูงไว้ก่อน ปุ่มด้านล่างจะได้ไม่กระโดดตอนช่องโหลดเสร็จ */
+.captcha-box { min-height: 65px; }
+.captcha-box[hidden] { display: none; }
 @media (max-width: 860px) {
   .login-split { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   .login-brand { padding: 20px 22px; }

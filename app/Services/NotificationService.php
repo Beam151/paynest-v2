@@ -28,8 +28,10 @@ final class NotificationService
         ['key' => 'security.code_lockout', 'group' => 'security', 'label' => 'ใส่รหัส 6 หลักผิดจนถูกล็อก', 'locked' => true],
         ['key' => 'security.backup_code', 'group' => 'security', 'label' => 'ส่วนกลางล็อกอินด้วยรหัสสำรอง', 'locked' => true],
         ['key' => 'security.2fa_reset', 'group' => 'security', 'label' => 'ปลด Google Authenticator ของผู้ใช้', 'locked' => true],
+        ['key' => 'security.captcha', 'group' => 'security', 'label' => 'เปิด / ปิด captcha หน้าเข้าสู่ระบบ', 'locked' => true],
 
         ['key' => 'security.login_lockout', 'group' => 'login', 'label' => 'มีคนเดารหัสผ่านจนถูกล็อก', 'default' => 'instant'],
+        ['key' => 'security.login_captcha', 'group' => 'login', 'label' => 'บัญชีถูกใส่รหัสผิดหลายครั้ง จนต้องผ่าน captcha', 'default' => 'instant'],
         ['key' => 'login.admin', 'group' => 'login', 'label' => 'บัญชีส่วนกลางเข้าสู่ระบบ', 'default' => 'instant'],
         ['key' => 'login.shop', 'group' => 'login', 'label' => 'ร้านค้า / เซลเข้าสู่ระบบ', 'default' => 'off'],
 

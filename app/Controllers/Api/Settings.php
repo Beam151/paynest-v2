@@ -7,9 +7,10 @@ use App\Services\Audit;
 use App\Services\BackupService;
 use App\Services\NotificationService;
 use App\Services\TelegramService;
+use App\Services\TurnstileService;
 
 /**
- * หน้าตั้งค่าของส่วนกลาง — ช่องทางแจ้งเตือน (Telegram) เรื่องที่จะแจ้ง และสำรองข้อมูล — /api/settings
+ * หน้าตั้งค่าของส่วนกลาง — ช่องทางแจ้งเตือน (Telegram) เรื่องที่จะแจ้ง captcha หน้าเข้าสู่ระบบ และสำรองข้อมูล — /api/settings
  *
  * ทุกอย่างที่ "แก้" ต้องใส่รหัส 6 หลักก่อน (guard: elevated)
  * เพราะปิด/ย้ายการแจ้งเตือนได้ = คนร้ายที่ได้ session ไปจะปิดตาทุกคนก่อนลงมือ
@@ -68,6 +69,31 @@ class Settings extends BaseApiController
     public function disableTelegram()
     {
         return $this->json(TelegramService::disable($this->user()));
+    }
+
+    /* ── captcha หน้าเข้าสู่ระบบ (Cloudflare Turnstile) ─────────────── */
+
+    public function turnstile()
+    {
+        return $this->json(TurnstileService::status());
+    }
+
+    /** ต้องแนบ captchaToken จากช่องที่วาดด้วย site key ใหม่ — พิสูจน์ว่าคีย์คู่นี้ใช้กับโดเมนนี้ได้จริง */
+    public function saveTurnstile()
+    {
+        $key  = V::string()->regex('/^[\w-]{10,200}$/', 'คีย์ไม่ถูกรูปแบบ — คัดลอกจากหน้า widget ใน Cloudflare');
+        $body = V::parse(V::object([
+            'siteKey'      => $key,
+            'secret'       => $key,
+            'captchaToken' => V::string()->min(1, 'ติ๊กช่องยืนยันก่อนบันทึก'),
+        ]), $this->body());
+
+        return $this->json(TurnstileService::save($body, $this->user()));
+    }
+
+    public function disableTurnstile()
+    {
+        return $this->json(TurnstileService::disable($this->user()));
     }
 
     /* ── สำรองข้อมูล — ดูสถานะ / สั่งสำรองทันที (เช่นก่อนอัปเดตระบบ) ── */

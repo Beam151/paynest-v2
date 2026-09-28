@@ -12,14 +12,16 @@ use CodeIgniter\HTTP\ResponseInterface;
  * ไม่ใส่ upgrade-insecure-requests: ถ้าวันไหนเปิดผ่าน http เบราว์เซอร์จะบังคับโหลด js เป็น https
  * แล้วหน้าเว็บขาวทั้งหน้าโดยไม่มี error ให้เห็น — ให้ proxy เป็นคน redirect ไป https แทน
  * img-src blob: = รูปที่ผู้ใช้เลือกจากเครื่องตัวเอง (ย่อรูปสลิปก่อนอัปโหลด)
+ * challenges.cloudflare.com (script + frame) = ช่อง captcha ของ Turnstile — หน้าเว็บโหลดเฉพาะตอนต้องใช้
+ *   เปิดไว้ตลอดแม้ยังไม่ได้ตั้ง captcha เพราะหน้าตั้งค่าต้องวาดช่องทดสอบคีย์ก่อนบันทึก
  *
  * ไม่มี CORS โดยตั้งใจ — หน้าเว็บกับ API อยู่ origin เดียวกัน
  */
 class SecurityHeaders implements FilterInterface
 {
     public const CSP = "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';"
-        . "frame-ancestors 'self';img-src 'self' data: blob:;object-src 'none';script-src 'self';"
-        . "script-src-attr 'none';style-src 'self' https: 'unsafe-inline'";
+        . "frame-ancestors 'self';frame-src 'self' https://challenges.cloudflare.com;img-src 'self' data: blob:;object-src 'none';"
+        . "script-src 'self' https://challenges.cloudflare.com;script-src-attr 'none';style-src 'self' https: 'unsafe-inline'";
 
     public const HEADERS = [
         'Content-Security-Policy'           => self::CSP,

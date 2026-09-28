@@ -128,13 +128,39 @@ export const thaiWall = (date) => date.toISOString().slice(0, 19);
 
 /* ── Telegram จำลอง — เก็บข้อความที่ส่งมา และสั่งให้ล่มได้ ─────────── */
 
+/**
+ * คีย์ของ Cloudflare Turnstile จำลอง (ตัวตรวจ token อยู่ในเซิร์ฟเวอร์เดียวกับ Telegram จำลอง)
+ * token "pass:<action>" หรือ "pass:<action>:<อะไรก็ได้>" ผ่าน (ใช้ได้ครั้งเดียวแบบของจริง) · อย่างอื่นไม่ผ่าน
+ * turnstile.down = true → ตอบ 502 (Cloudflare ขัดข้อง)
+ */
+export const TURNSTILE = { siteKey: 'e2e-turnstile-site-key', secret: 'e2e-turnstile-secret-key' };
+
+function turnstileVerify(turnstile, raw, res) {
+  const { secret, response } = JSON.parse(raw || '{}');
+  turnstile.calls.push({ secret, response });
+  const reply = (body) => res.end(JSON.stringify({ 'error-codes': [], ...body }));
+  if (turnstile.down) {
+    res.statusCode = 502;
+    res.end('{}');
+    return;
+  }
+  if (secret !== TURNSTILE.secret) { reply({ success: false, 'error-codes': ['invalid-input-secret'] }); return; }
+  const action = /^pass:(\w+)(:\S*)?$/.exec(response ?? '')?.[1];
+  if (!action) { reply({ success: false, 'error-codes': ['invalid-input-response'] }); return; }
+  if (turnstile.spent.has(response)) { reply({ success: false, 'error-codes': ['timeout-or-duplicate'] }); return; }
+  turnstile.spent.add(response);
+  reply({ success: true, action, hostname: '127.0.0.1', challenge_ts: new Date().toISOString() });
+}
+
 export async function startTelegramMock() {
   const telegram = { messages: [], failNext: 0, updates: [] };
+  const turnstile = { calls: [], spent: new Set(), down: false };
   const server = http.createServer((req, res) => {
     let raw = '';
     req.on('data', (c) => { raw += c; });
     req.on('end', () => {
       res.setHeader('content-type', 'application/json');
+      if (req.url === '/turnstile/v0/siteverify') { turnstileVerify(turnstile, raw, res); return; }
       const [, token, method] = req.url.match(/^\/bot([^/]+)\/(\w+)$/) ?? [];
       if (token?.endsWith('BAD')) {
         res.statusCode = 401;
@@ -154,7 +180,7 @@ export async function startTelegramMock() {
     });
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  return { telegram, server, url: `http://127.0.0.1:${server.address().port}` };
+  return { telegram, turnstile, server, url: `http://127.0.0.1:${server.address().port}` };
 }
 
 /* ── เซิร์ฟเวอร์ PHP ─────────────────────────────────────── */
@@ -198,7 +224,7 @@ export async function startStack({ dbName, mode = 'production', env: extra = {},
     CI_ENVIRONMENT: mode,
     PAYNEST_DATA_DIR: dataDir,
     PAYNEST_BACKUP_DIR: path.join(dataDir, 'backups'),
-    ...(tg ? { PAYNEST_TELEGRAM_API_BASE: tg.url } : {}),
+    ...(tg ? { PAYNEST_TELEGRAM_API_BASE: tg.url, PAYNEST_TURNSTILE_VERIFY_URL: `${tg.url}/turnstile/v0/siteverify` } : {}),
     ...extra,
   });
   const install = sparkSync(['app:install'], env);
@@ -209,6 +235,7 @@ export async function startStack({ dbName, mode = 'production', env: extra = {},
     env,
     dataDir,
     telegram: tg?.telegram,
+    turnstile: tg?.turnstile,
     db: makeDb(env),
     call: makeCall(env),
     async stop() {
