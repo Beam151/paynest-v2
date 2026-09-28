@@ -284,7 +284,8 @@ export async function render() {
    * วาดหน้าเดิมซ้ำ (บันทึก เปลี่ยนตัวกรอง สลับแท็บ): คงเมนูและเนื้อหาเดิมไว้ แค่จางลงระหว่างโหลด
    * เดิมล้างทั้งหน้าเป็น "กำลังโหลด…" ทุกครั้ง หน้ากะพริบ scroll เด้ง แล้วค่อยกระโดดกลับ
    */
-  const reuse = !movedPage && mounted && root.contains(mounted.shell) && mounted.path === path;
+  const reuse = !movedPage && mounted && root.contains(mounted.shell) && mounted.path === path
+    && mounted.role === session.role; // เข้า/ออกโหมดดูมุมร้านบนหน้าเดิม ต้องวาดเมนูใหม่ตามบทบาท
   const keepScroll = movedPage ? 0 : window.scrollY;
 
   let main;
@@ -299,8 +300,10 @@ export async function render() {
     }, 250);
     main.addEventListener('rendered', () => clearTimeout(slow), { once: true });
 
+    // super admin ใช้เมนูคนละสีกับร้าน/เซล ดูปราดเดียวรู้ว่าอยู่หลังบ้านส่วนกลาง
+    // ใช้ session.role — ระหว่างดูมุมร้านจึงเห็นสีเดียวกับที่ร้านเห็นจริง
     // จอมือถือ: เมนูซ่อนเป็นลิ้นชัก เปิดด้วยปุ่ม ☰ บนแถบบน
-    const shell = el('div', { class: 'shell' });
+    const shell = el('div', { class: `shell${session.role === 'SUPER_ADMIN' ? ' is-super' : ''}` });
     const closeDrawer = () => shell.classList.remove('drawer-open');
     shell.append(
       el('header', { class: 'mobile-bar' },
@@ -319,7 +322,7 @@ export async function render() {
     // แตะเมนูแล้วปิดลิ้นชักเอง
     shell.querySelectorAll('.sidebar a').forEach((a) => a.addEventListener('click', closeDrawer));
     clear(root).append(shell);
-    mounted = { shell, main, path };
+    mounted = { shell, main, path, role: session.role };
   }
   loadNavCounts(mounted.shell);
 
