@@ -275,10 +275,14 @@ function twoFactorCard(tfa, me) {
   });
 
   // บอกแอดมินว่าตอนนี้ไม่บังคับเพราะเป็นโหมดทดสอบ — จะได้ไม่ตกใจตอนขึ้นเซิร์ฟเวอร์จริงแล้วโดนบังคับ
-  const testNote = tfa.testMode && me.role === 'SUPER_ADMIN'
-    ? el('div', { class: 'notice-box' },
-      'โหมดทดสอบ (CI_ENVIRONMENT = development) — ยังไม่บังคับ · เซิร์ฟเวอร์จริง (CI_ENVIRONMENT = production) จะบังคับบัญชีส่วนกลางทุกบัญชีตอนล็อกอิน')
-    : '';
+  const testNote = me.role !== 'SUPER_ADMIN' ? ''
+    : tfa.testMode
+      ? el('div', { class: 'notice-box' },
+        'โหมดทดสอบ (CI_ENVIRONMENT = development) — ยังไม่บังคับ · เซิร์ฟเวอร์จริง (CI_ENVIRONMENT = production) จะบังคับบัญชีส่วนกลางทุกบัญชีตอนล็อกอิน')
+      : tfa.enforceOff
+        ? el('div', { class: 'notice-box' },
+          'ปิดการบังคับไว้ในไฟล์ตั้งค่าเซิร์ฟเวอร์ (paynest.enforceAdmin2fa = false) — ใครได้รหัสผ่านแอดมินไปก็เข้าระบบได้ทันที แนะนำให้เปิดใช้')
+        : '';
 
   if (!tfa.enabled) {
     return card('ยืนยันตัวตนสองชั้น (Google Authenticator)',

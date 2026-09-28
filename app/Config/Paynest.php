@@ -60,6 +60,12 @@ class Paynest extends BaseConfig
     public string $telegramApiBase = 'https://api.telegram.org';
 
     /**
+     * บังคับ Google Authenticator กับบัญชีส่วนกลางบนเซิร์ฟเวอร์จริง — ปิด (false) = ล็อกอินด้วยรหัสผ่านอย่างเดียวได้
+     * ตั้งได้จากไฟล์บนเซิร์ฟเวอร์เท่านั้น ไม่มีปุ่มในหน้าเว็บ · บัญชีที่เปิด 2FA ไว้แล้วยังต้องใส่รหัสจนกว่าจะปิดเอง
+     */
+    public bool $enforceAdmin2fa = true;
+
+    /**
      * ตัวแปรสภาพแวดล้อมจริง (PAYNEST_*) ชนะค่าใน .env เสมอ — ใช้กับ Docker / ระบบเก็บ secret แยก / ชุดเทสต์
      * ชื่อตรงกับระบบเดิม (JWT_SECRET → PAYNEST_JWT_SECRET ฯลฯ) ให้คนดูแลเซิร์ฟเวอร์เทียบกันได้ง่าย
      */
@@ -76,6 +82,7 @@ class Paynest extends BaseConfig
         'PAYNEST_SEED_ADMIN_USER'   => 'seedSuperAdminUser',
         'PAYNEST_SEED_ADMIN_PASS'   => 'seedSuperAdminPass',
         'PAYNEST_TELEGRAM_API_BASE' => 'telegramApiBase',
+        'PAYNEST_ENFORCE_ADMIN_2FA' => 'enforceAdmin2fa',
     ];
 
     public function __construct()
@@ -84,18 +91,23 @@ class Paynest extends BaseConfig
         foreach (self::ENV_OVERRIDES as $env => $property) {
             $value = getenv($env);
             if ($value !== false) {
-                $this->{$property} = is_int($this->{$property}) ? (int) $value : $value;
+                $this->{$property} = match (true) {
+                    is_int($this->{$property}) => (int) $value,
+                    // "false" / "0" / "off" / "no" = ปิด — ค่าอื่นที่อ่านไม่ออกถือว่าเปิด (พิมพ์ผิดแล้วไม่หลุดเป็นปิด)
+                    is_bool($this->{$property}) => filter_var($value, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? true,
+                    default                     => $value,
+                };
             }
         }
     }
 
     /**
-     * บังคับ Google Authenticator กับบัญชีส่วนกลาง — เฉพาะเซิร์ฟเวอร์จริง (CI_ENVIRONMENT = production)
+     * บังคับ Google Authenticator กับบัญชีส่วนกลาง — เฉพาะเซิร์ฟเวอร์จริง (CI_ENVIRONMENT = production) และไม่ได้ปิดด้วย enforceAdmin2fa
      * ไม่มีปุ่มปิดในหน้าเว็บโดยตั้งใจ: ถ้าปิดได้จากหน้าเว็บ คนที่ได้รหัสผ่านไปก็ปิดเองได้
      */
     public function requireAdmin2fa(): bool
     {
-        return ENVIRONMENT === 'production';
+        return ENVIRONMENT === 'production' && $this->enforceAdmin2fa;
     }
 
     public function dataPath(string $relative = ''): string

@@ -46,7 +46,7 @@ php spark serve                   # เปิด http://localhost:8080
 | ผู้ช่วยร้าน | `bkk01-staff` | `staff123456` |
 | เซล | `sale01` … `sale04` | `sale1234567` |
 
-> `CI_ENVIRONMENT = development` = โหมดทดสอบ: ไม่บังคับ Google Authenticator · `production` = เซิร์ฟเวอร์จริง: บังคับทุกบัญชีส่วนกลาง
+> `CI_ENVIRONMENT = development` = โหมดทดสอบ: ไม่บังคับ Google Authenticator · `production` = เซิร์ฟเวอร์จริง: บังคับทุกบัญชีส่วนกลาง (ปิดได้ด้วย `paynest.enforceAdmin2fa = false` ใน `.env` — ไม่แนะนำ)
 > ถ้ารัน `php spark app:install` ก่อน `db:seed` แอดมินจะได้รหัสสุ่มแทน `admin1234` — อยู่ในไฟล์ `writable/data/initial-admin-password.txt`
 
 ### คำสั่งทั้งหมด

@@ -44,6 +44,11 @@ database.default.password = ''
 # ชื่อที่ขึ้นในแอป Google Authenticator
 # paynest.appName = 'ระบบจัดการร้าน'
 
+# บังคับ Google Authenticator กับบัญชีส่วนกลาง (มีผลเฉพาะ production) — false = ล็อกอินด้วยรหัสผ่านอย่างเดียวได้
+#   ปิดแล้ว เรื่องอันตราย (แก้บัญชีรับเงิน ฯลฯ) ยืนยันด้วยรหัสผ่านแทน · ใครได้รหัสผ่านแอดมินไปก็เข้าได้ทันที
+#   บัญชีที่เปิด 2FA ไว้แล้วยังต้องใส่รหัส — ปิดเองในหน้าบัญชี หรือ php spark 2fa:reset <username>
+# paynest.enforceAdmin2fa = true
+
 # ล็อกอินหมดอายุ (เจ้าของระบบตัดสินใจให้ล็อกอินใหม่วันละครั้ง)
 # paynest.jwtExpiresIn = 24h
 

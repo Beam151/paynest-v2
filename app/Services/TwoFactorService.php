@@ -149,7 +149,9 @@ final class TwoFactorService
             'required'  => $user['role'] === 'SUPER_ADMIN' && $required,
             // ยังไม่ตั้ง 2FA ในโหมดทดสอบ = ยืนยันเรื่องอันตรายด้วยรหัสผ่านแทน (หน้าเว็บใช้เลือกช่องที่จะถาม)
             'confirmWith'     => $user['totp_enabled_at'] || $required ? 'code' : 'password',
-            'testMode'        => ! $required,
+            'testMode'        => ! $required && ENVIRONMENT !== 'production',
+            // เซิร์ฟเวอร์จริงแต่เจ้าของระบบปิดการบังคับไว้ (paynest.enforceAdmin2fa = false)
+            'enforceOff'      => ! $required && ENVIRONMENT === 'production',
             'backupCodesLeft' => $user['totp_enabled_at'] ? self::backupCodesLeft((int) $user['id']) : 0,
         ];
     }
