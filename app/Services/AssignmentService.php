@@ -11,18 +11,23 @@ final class AssignmentService
 {
     private const OPEN_END = '9999-12-31';
 
-    /** สัญญาของสินค้าชิ้นนี้ที่ช่วงวันที่คาบเกี่ยวกับ [start, end] */
+    /**
+     * สัญญาของสินค้าชิ้นนี้ที่ช่วงวันที่คาบเกี่ยวกับ [start, end]
+     * ไม่นับสัญญาของร้านที่ถูกลบ (สัญญาถูกปิดวันที่ลบ แต่วันนั้นยังนับว่าถืออยู่) — ร้านนั้นรับยอด/ถือสินค้าอะไรไม่ได้อีกแล้ว
+     * สินค้าจึงมอบหมายต่อให้ร้านอื่นได้ตั้งแต่วันที่ลบ และบันทึกยอดรอบนั้นก็ไม่ติด "เปลี่ยนมือกลางรอบ" กับร้านที่ไม่มีอยู่แล้ว
+     * (ยอดที่ร้านเดิมออกบิลไปแล้วยังผูกสัญญาเดิมอยู่ — 1 สินค้า 1 รอบมีได้รายการเดียว จึงไม่ซ้อนกับของร้านใหม่)
+     */
     private static function overlapping(int $productId, string $start, ?string $end, ?int $excludeId = null): array
     {
         return Db::all(
-            'SELECT a.*, f.username AS franchise_username
+            "SELECT a.*, f.username AS franchise_username
                FROM product_assignments a
-               JOIN franchises f ON f.id = a.franchise_id
+               JOIN franchises f ON f.id = a.franchise_id AND f.status <> 'DELETED'
               WHERE a.product_id = ?
                 AND a.start_date <= ?
                 AND COALESCE(a.end_date, ?) >= ?
                 AND (? IS NULL OR a.id <> ?)
-              ORDER BY a.start_date',
+              ORDER BY a.start_date",
             [$productId, $end ?? self::OPEN_END, self::OPEN_END, $start, $excludeId, $excludeId],
         );
     }
@@ -34,10 +39,11 @@ final class AssignmentService
     public static function assign(array $input, ?int $actorUserId): array
     {
         $product = ProductService::getRow((int) $input['productId']);
-        if ($product['status'] !== 'ACTIVE') {
-            throw ApiException::badRequest("สินค้า {$product['sku']} ถูกปิดใช้งานแล้ว — เปิดใช้งานที่หน้าสินค้าก่อนจึงจะมอบหมายให้ร้านได้");
-        }
+        ProductService::assertActive($product, 'มอบหมายให้ร้าน');
         $franchise = Db::one('SELECT * FROM franchises WHERE id = ?', [(int) $input['franchiseId']]) ?? throw ApiException::notFound('ไม่พบร้านค้า');
+        if ($franchise['status'] === 'DELETED') {
+            throw ApiException::conflict("ร้าน {$franchise['username']} ถูกลบแล้ว — มอบหมายสินค้าให้ไม่ได้ · เลือกร้านอื่น");
+        }
         if ($franchise['status'] !== 'ACTIVE') {
             throw ApiException::badRequest("ร้านค้า {$franchise['username']} ไม่อยู่ในสถานะใช้งาน");
         }
@@ -79,7 +85,7 @@ final class AssignmentService
     private const SELECT = '
         SELECT a.*,
                p.sku, p.name AS product_name,
-               f.username AS franchise_username,
+               f.username AS franchise_username, f.status AS franchise_status,
                p.commission_pct_bp AS product_pct_bp
           FROM product_assignments a
           JOIN products p   ON p.id = a.product_id
@@ -114,10 +120,32 @@ final class AssignmentService
         ));
     }
 
+    /**
+     * สัญญาของสินค้าที่ลบแล้ว / ร้านที่ลบแล้ว เป็นประวัติอย่างเดียว — ตอนลบระบบปิดให้แล้ว
+     * แก้วันที่ทีหลัง = เปิดสัญญาให้ของที่ไม่มีอยู่แล้วกลับมาถือสินค้า (หรือย้ายยอดเก่าไปอยู่นอกช่วงสัญญา)
+     */
+    private static function assertLive(array $row): void
+    {
+        $who = Db::one(
+            'SELECT p.sku, p.status AS product_status, f.username, f.status AS franchise_status
+               FROM products p
+               JOIN franchises f ON f.id = ?
+              WHERE p.id = ?',
+            [$row['franchise_id'], $row['product_id']],
+        );
+        if (($who['product_status'] ?? null) === 'DELETED') {
+            throw ApiException::conflict("สินค้า {$who['sku']} ถูกลบแล้ว — สัญญาของสินค้านี้เป็นประวัติ แก้ไม่ได้");
+        }
+        if (($who['franchise_status'] ?? null) === 'DELETED') {
+            throw ApiException::conflict("ร้าน {$who['username']} ถูกลบแล้ว — สัญญาของร้านนี้เป็นประวัติ แก้ไม่ได้");
+        }
+    }
+
     /** ปิดสัญญา เพื่อให้สินค้าชิ้นนี้ว่างและมอบหมายให้ร้านอื่นต่อได้ */
     public static function end(int $id, ?string $endDate, int $actorUserId): array
     {
         $row  = Db::one('SELECT * FROM product_assignments WHERE id = ?', [$id]) ?? throw ApiException::notFound('ไม่พบข้อมูลการมอบหมายสินค้า');
+        self::assertLive($row);
         $date = Period::assertDate($endDate ?? Period::today(), 'endDate');
         if ($date < $row['start_date']) {
             throw ApiException::badRequest('endDate ต้องไม่น้อยกว่า startDate');
@@ -142,6 +170,7 @@ final class AssignmentService
     public static function update(int $id, array $patch, int $actorUserId): array
     {
         $row       = Db::one('SELECT * FROM product_assignments WHERE id = ?', [$id]) ?? throw ApiException::notFound('ไม่พบข้อมูลการมอบหมายสินค้า');
+        self::assertLive($row);
         $startDate = ! empty($patch['startDate']) ? Period::assertDate($patch['startDate'], 'startDate') : $row['start_date'];
         $endDate   = ! array_key_exists('endDate', $patch)
             ? $row['end_date']
@@ -222,7 +251,10 @@ final class AssignmentService
             'effectiveCommissionPct' => $effective === null ? null : Money::bpToPct($effective),
             'startDate'              => $row['start_date'],
             'endDate'                => $row['end_date'],
-            'isActive'               => $row['start_date'] <= $today && ($row['end_date'] === null || $row['end_date'] >= $today),
+            // ร้านที่ลบแล้วไม่ถือสินค้าอะไร แม้สัญญาที่ปิดวันที่ลบยังนับถึงสิ้นวัน (ดู overlapping) — หน้าเว็บไม่ต้องโชว์ปุ่มปิดสัญญา
+            'isActive'               => $row['start_date'] <= $today && ($row['end_date'] === null || $row['end_date'] >= $today)
+                && ($row['franchise_status'] ?? null) !== 'DELETED',
+            'franchiseStatus'        => $row['franchise_status'] ?? null,
             'note'                   => $row['note'],
             'createdAt'              => $row['created_at'],
         ];

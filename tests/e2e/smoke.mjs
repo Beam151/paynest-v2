@@ -93,7 +93,7 @@ async function adminElevation() {
 
 /*
  * เส้นทางที่ต้องยืนยันรหัส 6 หลัก — แอดมินในเทสต์ใส่ให้เองเหมือนหน้าเว็บ
- * แก้บัญชีรับเงิน / แก้หัวบิล (เปลี่ยนบัญชีของบิล) / ส่งเลขบัญชีให้ร้าน / สร้างลิงก์เข้าระบบใหม่ของร้าน / ตั้งค่า Telegram / captcha
+ * แก้บัญชีรับเงิน / แก้หัวบิล (เปลี่ยนบัญชีของบิล) / ส่งเลขบัญชีให้ร้าน / สร้างลิงก์เข้าระบบใหม่ของร้าน / ลบร้าน / ตั้งค่า Telegram / captcha
  * (ปลด 2FA ของผู้ใช้ไม่อยู่ในนี้ — เทสต์ส่ง header เองเพื่อพิสูจน์ว่าไม่ใส่แล้วโดนกัน)
  */
 const ELEVATED_URL = new RegExp('^/api/('
@@ -102,10 +102,13 @@ const ELEVATED_URL = new RegExp('^/api/('
   + '|franchises/\\d+/login-link/rotate'
   + '|settings/(telegram(/discover)?|notifications|turnstile)'
   + ')$');
+// ลบร้าน (DELETE /api/franchises/:id) — แยกตาม method เพราะ PATCH เส้นเดียวกัน (แก้ข้อมูลร้าน) ไม่ต้องใส่รหัส
+const ELEVATED_DELETE = /^\/api\/franchises\/\d+$/;
 
 async function api(method, url, { token, body, headers = {}, elevate = true } = {}) {
   // เทสต์ที่ต้องการทดสอบว่า "ไม่ยืนยันแล้วโดนกัน" ส่ง elevate: false
-  if (elevate && token && token === admin && method !== 'GET' && ELEVATED_URL.test(url)) {
+  const needsCode = ELEVATED_URL.test(url) || (method === 'DELETE' && ELEVATED_DELETE.test(url));
+  if (elevate && token && token === admin && method !== 'GET' && needsCode) {
     headers = { 'x-elevation': await adminElevation(), ...headers };
   }
   const res = await fetch(base + url, {
@@ -3048,22 +3051,29 @@ section('บัญชีรับเงิน USD = กระเป๋าคร�
     (await api('PATCH', `/api/bank-accounts/${wallet.body.id}`, { token: admin, body: { currency: 'THB' } })).status === 409);
 }
 
-/* ── สินค้าลบไม่ได้ ────────────────────────────────────────────
- * ประวัติยอดขาย/บิลอ้างถึงสินค้าเสมอ — เลิกขายใช้ "ปิดใช้งาน" แทน (เปิดกลับได้)
- * ใช้ร้านที่มีสินค้าชิ้นเดียวของเทสต์นี้เอง (ห้ามปิดสินค้าของร้าน A/B ค้างไว้ — หมวดออกบิลหลายร้านหยิบสินค้าตัวแรกของร้าน)
+/* ── ลบสินค้า / ปิดใช้งาน / เปิดใช้งาน ─────────────────────────────
+ * R5 (29 ก.ย.) "สินค้าลบไม่ได้" → เจ้าของระบบกลับคำ 30 ก.ย. (R19): ลบได้ถาวร (ส่วนกลางเท่านั้น) · "ปิดใช้งาน" ยังอยู่สำหรับหยุดขายชั่วคราว
+ * ลบ = ลองลบจริง (HARD) ก่อน ติด FK = มีบิล/ประวัติอ้างถึง → ซ่อนถาวร (SOFT) บิลเก่ายังแสดงสินค้าเดิมครบ
+ * ห้ามลบเมื่อยังมียอดที่ยังไม่ออกบิล (เงินที่ยังไม่ได้เรียกเก็บจะหายจากสายตา) หรือเป็นสินค้าย่อยชิ้นสุดท้ายของกลุ่ม
+ * ใช้ร้าน/สินค้า/เซลของหมวดนี้เอง (ห้ามปิด/ลบสินค้าของร้าน A/B — หมวดออกบิลหลายร้านหยิบสินค้าตัวแรกของร้าน)
  */
-section('สินค้าลบไม่ได้ — ปิดใช้งาน / เปิดใช้งานแทน');
+section('ลบสินค้า / ปิดใช้งาน / เปิดใช้งาน');
 {
+  const errOf = (r) => r.body?.error?.message ?? '';
+  const skus = (arr) => (arr ?? []).map((x) => x.sku).join(',');
   const rs = await api('POST', '/api/franchises', { token: admin, body: { username: 'r5shop', password: 'r5shop-pass-1' } });
   const rfid = rs.body.franchise?.id;
   const rtok = (await shopLogin('r5shop', 'r5shop-pass-1', rfid)).body.token;
-  const only = (await api('POST', '/api/products', {
-    token: admin, body: { sku: 'R5-ONLY', name: 'สินค้าชิ้นเดียวของร้าน', commissionPct: 10, franchiseId: rfid, startDate: '2026-01-01' },
-  })).body.product;
+  // ผู้ช่วยที่มีสิทธิ์ดูสินค้า — ต้องโดนกันเพราะ "ส่วนกลางเท่านั้น" ไม่ใช่เพราะไม่มีสิทธิ์ดูสินค้า
+  await api('POST', `/api/franchises/${rfid}/users`, { token: rtok, body: { username: 'r5shop-staff', password: 'r5staff-pass-1', permissions: ['products'] } });
+  const stok = (await shopLogin('r5shop-staff', 'r5staff-pass-1', rfid)).body.token;
+  const r5sale = (await api('POST', '/api/sales-agents', { token: admin, body: { username: 'r5sale', password: 'r5sale-pass-1', name: 'เซลหมวดลบสินค้า' } })).body.agent;
+  const saletok = (await api('POST', '/api/auth/login', { body: { username: 'r5sale', password: 'r5sale-pass-1' } })).body.token;
+  const mk = (sku, extra = {}) => api('POST', '/api/products', { token: admin, body: { sku, name: `สินค้า ${sku}`, commissionPct: 10, ...extra } });
+  const only = (await mk('R5-ONLY', { name: 'สินค้าชิ้นเดียวของร้าน', franchiseId: rfid, startDate: '2026-01-01' })).body.product;
   const kept = await api('POST', '/api/sales-entries', { token: admin, body: { periodCode: '2029-06-H2', productId: only?.id, grossAmount: 10000 } });
-  const del = await api('DELETE', `/api/products/${only?.id}`, { token: admin });
-  check('ลบสินค้าไม่ได้ — ไม่มีช่องทางลบ (404) และสินค้ายังอยู่',
-    del.status === 404 && (await api('GET', `/api/products/${only?.id}`, { token: admin })).status === 200, del.body);
+
+  // ── ปิดใช้งาน / เปิดใช้งาน = หยุดขายชั่วคราว (ของเดิม R5 ยังอยู่ครบ) ──
   const readyOf = async (periodCode) => (await api('GET', `/api/invoices/readiness?periodCode=${periodCode}`, { token: admin }))
     .body.items?.find((r) => r.franchiseId === rfid);
   check('ตั้งฉาก: ร้านที่มีสินค้าแต่ยังไม่กรอกยอด = "ยังไม่กรอกยอด"', (await readyOf('2029-06-H1'))?.status === 'NO_SALES');
@@ -3078,7 +3088,7 @@ section('สินค้าลบไม่ได้ — ปิดใช้งา
   check('สินค้าที่ปิดใช้งาน บันทึกยอดใหม่ไม่ได้ (บอกให้เปิดใช้งานก่อน)',
     blocked.status === 400 && /ปิดใช้งาน/.test(blocked.body.error?.message ?? ''), blocked.body);
   check('สินค้าที่ปิดใช้งาน ผูกดีลเซลใหม่ไม่ได้', (await api('POST', '/api/sales-agents/links', {
-    token: admin, body: { salesAgentId: agent2.body.agent.id, items: [{ productId: only?.id, commissionPct: 1 }] },
+    token: admin, body: { salesAgentId: r5sale?.id, items: [{ productId: only?.id, commissionPct: 1 }] },
   })).status === 400);
   const oldBill = await api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: rfid, periodCode: '2029-06-H2' } });
   check('ยอดที่บันทึกไว้ก่อนปิดใช้งาน ยังออกบิลได้', kept.status === 201 && oldBill.status === 201 && oldBill.body.lines?.length === 1, oldBill.body);
@@ -3087,10 +3097,333 @@ section('สินค้าลบไม่ได้ — ปิดใช้งา
   check('เปิดใช้งานอีกครั้งได้ และบันทึกยอดได้ตามเดิม', active.body.status === 'ACTIVE' && again.status === 201, again.body);
   check('เปิดใช้งานถูกจดประวัติ',
     db.prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'product.activate' AND entity_id = ?").get(only?.id).n === 1);
+
+  // ── ลบ = ส่วนกลางเท่านั้น ──
+  const denied = [];
+  for (const tok of [rtok, stok, saletok]) denied.push((await api('DELETE', `/api/products/${only?.id}`, { token: tok })).status);
+  check('ร้านค้า / ผู้ช่วยร้าน (มีสิทธิ์ดูสินค้า) / เซล ลบสินค้าไม่ได้ (403) และสินค้ายังอยู่',
+    denied.every((s) => s === 403) && (await api('GET', `/api/products/${only?.id}`, { token: admin })).body?.status === 'ACTIVE', denied);
+  const viaPatch = await api('PATCH', `/api/products/${only?.id}`, { token: admin, body: { status: 'DELETED' } });
+  check('ตั้งสถานะ "ลบแล้ว" ผ่านการแก้ไขไม่ได้ (400) — ลบต้องผ่านปุ่มลบที่มีด่านตรวจ', viaPatch.status === 400, viaPatch.body);
+
+  // ── ยอดที่ยังไม่ออกบิล = ห้ามลบ ──
+  const unbilled = await api('DELETE', `/api/products/${only?.id}`, { token: admin });
+  check('มียอดขายที่ยังไม่ออกบิล → ลบไม่ได้ (409 บอกจำนวนและทางไปต่อ) สินค้ายังใช้งานได้ตามเดิม',
+    unbilled.status === 409
+      && errOf(unbilled) === 'สินค้า R5-ONLY มียอดขายที่ยังไม่ออกบิล 1 รายการ — ออกบิลหรือลบยอดนั้นที่หน้า "ยอดขายรายรอบ" ก่อน'
+      && (await api('GET', `/api/products/${only?.id}`, { token: admin })).body?.status === 'ACTIVE', unbilled.body);
+
+  // ── ไม่เคยมียอดขาย → ลบทิ้งจริง (HARD) ──
+  const fresh = (await mk('R19-FRESH', { franchiseId: rfid, startDate: '2026-01-01' })).body.product;
+  const freshDeal = await api('POST', '/api/sales-agents/links', { token: admin, body: { salesAgentId: r5sale?.id, items: [{ productId: fresh?.id, commissionPct: 2 }] } });
+  const hard = await api('DELETE', `/api/products/${fresh?.id}`, { token: admin });
+  check('สินค้าที่ไม่เคยมียอดขาย (มีแค่สัญญาร้าน + ดีลเซล) → ลบทิ้งจริง (HARD)',
+    freshDeal.status === 201 && hard.status === 200 && hard.body.deleted === true && hard.body.id === fresh?.id
+      && hard.body.sku === 'R19-FRESH' && hard.body.mode === 'HARD', hard.body);
+  const freshLeft = db.prepare(`SELECT
+      (SELECT COUNT(*) FROM products WHERE id = ?) AS products,
+      (SELECT COUNT(*) FROM product_assignments WHERE product_id = ?) AS assignments,
+      (SELECT COUNT(*) FROM product_sales_links WHERE product_id = ?) AS deals`).get(fresh?.id, fresh?.id, fresh?.id);
+  check('ลบจริงแล้วเปิดดูได้ 404 · สัญญามอบหมายและดีลเซลของสินค้านี้หายไปด้วย',
+    (await api('GET', `/api/products/${fresh?.id}`, { token: admin })).status === 404
+      && freshLeft.products === 0 && freshLeft.assignments === 0 && freshLeft.deals === 0, freshLeft);
+  const reused = await mk('r19-fresh');
+  check('ลบจริงแล้วรหัสสินค้า (SKU) ว่าง ใช้สร้างสินค้าใหม่ได้', reused.status === 201, reused.body);
+  await api('PATCH', `/api/products/${reused.body.product?.id}`, { token: admin, body: { status: 'ARCHIVED' } });
+  const archivedDel = await api('DELETE', `/api/products/${reused.body.product?.id}`, { token: admin });
+  check('สินค้าที่ปิดใช้งานอยู่ก็ลบได้', archivedDel.status === 200 && archivedDel.body.mode === 'HARD', archivedDel.body);
+
+  // ── มีบิลแล้ว → ซ่อนถาวร (SOFT) ──
+  // เอายอดที่ยังไม่ออกบิลออกตามที่ข้อความบอก + ผูกดีลที่เริ่มในอนาคต (ตอนลบต้องปิดได้โดยไม่ติด "วันจบ ≥ วันเริ่ม")
+  await api('DELETE', `/api/sales-entries/${again.body.id}`, { token: admin });
+  const future = new Date(Date.parse(todayTh) + 10 * 86400000).toISOString().slice(0, 10);
+  const deal = (await api('POST', '/api/sales-agents/links', {
+    token: admin, body: { salesAgentId: r5sale?.id, startDate: future, items: [{ productId: only?.id, commissionPct: 3 }] },
+  })).body.items?.[0];
+  check('ตั้งฉาก: สินค้ามีบิลเก่า + สัญญาร้านที่เปิดอยู่ + ดีลเซลที่เริ่มในอนาคต', deal?.startDate === future && deal.endDate === null, deal);
+  const soft = await api('DELETE', `/api/products/${only?.id}`, { token: admin });
+  check('สินค้าที่มีบิลแล้ว → ลบแบบซ่อน (SOFT)',
+    soft.status === 200 && soft.body.deleted === true && soft.body.id === only?.id && soft.body.sku === 'R5-ONLY' && soft.body.mode === 'SOFT', soft.body);
+  const softRow = db.prepare('SELECT status, deleted_at, deleted_by_user_id FROM products WHERE id = ?').get(only?.id);
+  check('แถวสินค้ายังอยู่ (บิลเก่าอ้างถึง) · สถานะ DELETED + เวลาที่ลบ + คนลบ',
+    softRow?.status === 'DELETED' && Boolean(softRow.deleted_at) && softRow.deleted_by_user_id === adminId, softRow);
+  const leaked = [];
+  for (const q of ['', '?status=', '?status=ACTIVE', '?status=ARCHIVED', '?unassignedOnly=true', `?franchiseId=${rfid}`, '?q=R5-ONLY', '?isGroup=0']) {
+    const l = await api('GET', `/api/products${q}`, { token: admin });
+    if (l.status !== 200 || l.body.items.some((p) => p.id === only?.id)) leaked.push(q || '(ไม่กรอง)');
+  }
+  if ((await api('GET', '/api/products', { token: rtok })).body.items?.some((p) => p.id === only?.id)) leaked.push('หน้าร้าน');
+  check('หายจากรายการสินค้าทุกแท็บ / ทุกตัวกรอง / ตัวเลือกสินค้าว่าง และหน้าร้าน', leaked.length === 0, leaked);
+  check('เปิดดูสินค้าที่ลบแล้วได้ 404 (ส่วนกลางและร้าน)',
+    (await api('GET', `/api/products/${only?.id}`, { token: admin })).status === 404
+      && (await api('GET', `/api/products/${only?.id}`, { token: rtok })).status === 404);
+  const lineOf = async (token) => (await api('GET', `/api/invoices/${oldBill.body.id}`, { token })).body?.lines?.find((l) => l.productId === only?.id);
+  const adminLine = await lineOf(admin);
+  const shopLine = await lineOf(rtok);
+  check('บิลเก่ายังแสดงรหัสและชื่อสินค้าเดิมครบ (ส่วนกลางและร้าน)',
+    adminLine?.sku === 'R5-ONLY' && adminLine.productName === 'สินค้าชิ้นเดียวของร้าน' && shopLine?.sku === 'R5-ONLY' && shopLine.productName === adminLine.productName,
+    { adminLine, shopLine });
+  const oldSales = (await api('GET', '/api/sales-entries?periodCode=2029-06-H2', { token: admin })).body.items ?? [];
+  check('ยอดขายรอบเก่ายังแสดงสินค้านี้ (หน้ายอดขายรายรอบ)', oldSales.some((e) => e.id === kept.body.id && e.sku === 'R5-ONLY'), oldSales.map((e) => e.sku));
+  const ended = db.prepare(`SELECT
+      (SELECT end_date FROM product_assignments WHERE product_id = ? ORDER BY id DESC LIMIT 1) AS assignmentEnd,
+      (SELECT CONCAT(start_date, '|', end_date) FROM product_sales_links WHERE id = ?) AS deal`).get(only?.id, deal?.id);
+  check('สัญญาร้านที่เปิดอยู่ถูกปิดวันนี้ · ดีลที่ยังไม่ถึงวันเริ่มถูกปิดเป็นวันนี้ทั้งสองวัน',
+    ended.assignmentEnd === todayTh && ended.deal === `${todayTh}|${todayTh}`, ended);
+  const patched = await api('PATCH', `/api/products/${only?.id}`, { token: admin, body: { name: 'แก้หลังลบ' } });
+  const revived = await api('PATCH', `/api/products/${only?.id}`, { token: admin, body: { status: 'ACTIVE' } });
+  check('แก้ไขสินค้าที่ลบแล้วไม่ได้ (409) — เปิดใช้งานกลับก็ไม่ได้',
+    patched.status === 409 && errOf(patched).includes('สินค้านี้ถูกลบแล้ว') && revived.status === 409, [patched.body, revived.body]);
+  const sameSku = await mk('r5-only');
+  check('สร้างสินค้าใหม่ด้วยรหัสเดิมไม่ได้ (409 · ตัวพิมพ์เล็กก็ไม่ได้) — บิลเก่ายังอ้างถึงรหัสนี้',
+    sameSku.status === 409 && errOf(sameSku) === 'รหัส r5-only เคยใช้กับสินค้าที่ลบไปแล้ว (บิลเก่ายังอ้างถึง) — ใช้รหัสอื่น', sameSku.body);
+  const onDeleted = [
+    await api('POST', '/api/sales-entries', { token: admin, body: { periodCode: '2029-07-H1', productId: only?.id, grossAmount: 1000 } }),
+    await api('POST', '/api/assignments', { token: admin, body: { productId: only?.id, franchiseId: rfid, startDate: '2030-01-01' } }),
+    await api('POST', '/api/sales-agents/links', { token: admin, body: { salesAgentId: r5sale?.id, items: [{ productId: only?.id, commissionPct: 1 }] } }),
+    await mk('R19-GSET', { isGroup: true, itemProductIds: [only?.id] }),
+  ];
+  check('บันทึกยอด / มอบหมายร้าน / ผูกดีล / ใส่ในสินค้ากลุ่ม กับสินค้าที่ลบแล้วไม่ได้ (409 บอกว่าถูกลบแล้ว)',
+    onDeleted.every((r) => r.status === 409 && errOf(r).includes('ถูกลบแล้ว')), onDeleted.map((r) => [r.status, errOf(r)]));
+  const cand = (await api('GET', `/api/sales-agents/${r5sale?.id}/commission-candidates`, { token: admin })).body;
+  check('บรรทัดที่ออกบิลไปแล้วของสินค้าที่ลบ ยังติ๊กทำบิลค่าคอมได้ (เงินเรียกเก็บไปแล้ว)',
+    cand.items?.some((i) => i.entryId === kept.body.id && i.sku === 'R5-ONLY'), cand.items);
+  check('ลบซ้ำได้ 404', (await api('DELETE', `/api/products/${only?.id}`, { token: admin })).status === 404);
+  const delLogs = db.prepare("SELECT entity_id, detail FROM audit_logs WHERE action = 'product.delete' AND entity_id IN (?, ?, ?) ORDER BY id")
+    .all(fresh?.id, reused.body.product?.id, only?.id).map((r) => ({ id: r.entity_id, ...JSON.parse(r.detail) }));
+  check('ประวัติ "ลบสินค้า" จดวิธีลบ (HARD/SOFT) รหัส ชื่อ และจำนวนบรรทัดที่ออกบิลแล้ว (แถวที่ลบจริงหาชื่อจาก id ไม่ได้แล้ว)',
+    delLogs.length === 3 && delLogs[0].mode === 'HARD' && delLogs[0].sku === 'R19-FRESH' && delLogs[0].name === 'สินค้า R19-FRESH'
+      && delLogs[2].mode === 'SOFT' && delLogs[2].sku === 'R5-ONLY' && delLogs[2].name === 'สินค้าชิ้นเดียวของร้าน' && delLogs[2].invoicedEntries === 1, delLogs);
+  const acts = (await api('GET', '/api/activity?actions=product.delete&limit=10', { token: admin })).body.items ?? [];
+  check('หน้าประวัติรายการแสดง "ลบสินค้า" พร้อมรหัสสินค้า', acts.some((a) => a.what === 'ลบสินค้า' && a.target === 'R19-FRESH'), acts.map((a) => [a.what, a.target]));
+
+  // ── สินค้ากลุ่ม: กลุ่มต้องไม่ว่าง ──
+  const cA = (await mk('R19-CA')).body.product;
+  const cB = (await mk('R19-CB')).body.product;
+  const g1 = (await mk('R19-G1', { isGroup: true, itemProductIds: [cA?.id, cB?.id] })).body.product;
+  const g2 = (await mk('R19-G2', { isGroup: true, itemProductIds: [cA?.id] })).body.product;
+  const lastOne = await api('DELETE', `/api/products/${cA?.id}`, { token: admin });
+  check('สินค้าย่อยชิ้นสุดท้ายของกลุ่ม → ลบไม่ได้ (409 บอกชื่อกลุ่มที่จะว่าง)',
+    lastOne.status === 409 && errOf(lastOne) === 'สินค้า R19-CA เป็นสินค้าย่อยชิ้นสุดท้ายของสินค้ากลุ่ม R19-G2 — เพิ่มสินค้าย่อยอื่นหรือเปลี่ยนกลุ่มก่อน', lastOne.body);
+  const notLast = await api('DELETE', `/api/products/${cB?.id}`, { token: admin });
+  const g1After = (await api('GET', `/api/products/${g1?.id}`, { token: admin })).body;
+  check('สินค้าย่อยที่ไม่ใช่ชิ้นสุดท้าย → ลบได้ และหลุดออกจากกลุ่ม',
+    notLast.status === 200 && notLast.body.mode === 'HARD' && skus(g1After.items) === 'R19-CA', { del: notLast.body, items: g1After.items });
+  const groupDel = await api('DELETE', `/api/products/${g2?.id}`, { token: admin });
+  const cAAfter = await api('GET', `/api/products/${cA?.id}`, { token: admin });
+  check('ลบสินค้ากลุ่มได้ — สินค้าย่อยไม่ถูกลบตาม แค่หลุดจากกลุ่มนั้น',
+    groupDel.status === 200 && cAAfter.status === 200 && skus(cAAfter.body.inGroups) === 'R19-G1', { del: groupDel.body, inGroups: cAAfter.body.inGroups });
+
+  // ── สินค้ากลุ่มที่ลบแบบซ่อน แล้วบิลเดิมถูกยกเลิกและออกใหม่ ──
+  // ลบกลุ่ม = ล้างรายการย่อยของกลุ่ม · ถ้าออกบิลใหม่แล้วจดรายการย่อย "ตอนนี้" ทับ snapshot เดิม บรรทัดจะกลายเป็นสินค้าธรรมดา "ประกอบด้วย" หาย
+  const vs = await api('POST', '/api/franchises', { token: admin, body: { username: 'r19vshop', password: 'r19vshop-pass-1' } });
+  const vsid = vs.body.franchise?.id;
+  const vc1 = (await mk('R19-VC1')).body.product;
+  const vc2 = (await mk('R19-VC2')).body.product;
+  const vset = (await mk('R19-VSET', { isGroup: true, itemProductIds: [vc1?.id, vc2?.id], franchiseId: vsid, startDate: '2026-01-01' })).body.product;
+  await api('POST', '/api/sales-entries', { token: admin, body: { periodCode: '2029-08-H1', productId: vset?.id, grossAmount: 3000 } });
+  const vbill1 = await api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: vsid, periodCode: '2029-08-H1' } });
+  const vdel = await api('DELETE', `/api/products/${vset?.id}`, { token: admin });
+  const vvoid = await api('POST', `/api/invoices/${vbill1.body.id}/void`, { token: admin, body: { reason: 'แก้บิลหลังลบสินค้ากลุ่ม' } });
+  const ventry = (await api('GET', `/api/sales-entries?periodCode=2029-08-H1&franchiseId=${vsid}`, { token: admin })).body.items
+    ?.find((e) => e.productId === vset?.id);
+  const vbill2 = await api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: vsid, periodCode: '2029-08-H1' } });
+  const vline2 = vbill2.body.lines?.find((l) => l.productId === vset?.id);
+  check('สินค้ากลุ่มที่ลบแบบซ่อน: ยกเลิกบิลแล้วออกใหม่ บรรทัดยังเป็นสินค้ากลุ่มพร้อม "ประกอบด้วย" เดิม (ไม่กลายเป็นสินค้าธรรมดา)',
+    vbill1.status === 201 && vdel.body?.mode === 'SOFT' && vvoid.status === 200
+      && ventry?.isGroup === true && skus(ventry?.components) === 'R19-VC1,R19-VC2'
+      && vbill2.status === 201 && vline2?.isGroup === true && skus(vline2?.components) === 'R19-VC1,R19-VC2',
+    { del: vdel.body, entry: ventry, line: vline2 });
+}
+
+/* ── ลบร้านค้า (R20 · 30 ก.ย. 69 "อันนี้ด้วย ลบได้") ─────────────────────
+ * ถาวร · ส่วนกลาง + รหัส 6 หลัก (ผู้ใช้ทุกคนของร้านหลุดและเข้าไม่ได้อีก) · พักร้านชั่วคราวยังใช้สถานะ ระงับ/ปิด
+ * ไม่มีประวัติ = ลบทิ้งจริง ชื่อร้านว่างใช้ใหม่ได้ · มีบิล/ประวัติ = ซ่อนถาวร บิลเก่ายังอยู่ครบ (ฐานข้อมูลตัดสินผ่าน FK)
+ * ห้ามลบเมื่อยังมีเงินค้างทางใดทางหนึ่ง: สลิปรอตรวจ · บิลค้างชำระ · ยอดยังไม่ออกบิล · ยอดยกมาที่ทางเรายังติดร้าน
+ * ใช้ร้านของหมวดนี้เองทั้งหมด (ร้าน A/B ถูกใช้ต่อในหมวดอื่น)
+ */
+section('ลบร้านค้า');
+{
+  const DEL_CHAT = '7700501';
+  const errOf = (r) => r.body?.error?.message ?? '';
+  const mkShop = async (username) => (await api('POST', '/api/franchises', { token: admin, body: { username, password: `${username}-pass-1` } })).body;
+  const mkProd = async (sku, franchiseId) => (await api('POST', '/api/products', {
+    token: admin, body: { sku, name: `สินค้า ${sku}`, commissionPct: 10, franchiseId, startDate: '2026-01-01' },
+  })).body.product;
+  const entryOf = (productId, periodCode, grossAmount) => api('POST', '/api/sales-entries', { token: admin, body: { periodCode, productId, grossAmount } });
+  const del = (fid, opts = {}) => api('DELETE', `/api/franchises/${fid}`, { token: admin, ...opts });
+  const deleteMsgs = (from, username) => telegram.messages.slice(from).filter((m) => m.text.includes(`ลบร้าน ${username}</b>`));
+
+  // ── ร้านใหม่ที่ยังไม่เคยใช้งาน → ลบทิ้งจริง (HARD) ──
+  const fresh = await mkShop('delfresh');
+  const ffid = fresh.franchise?.id;
+  const fprod = await mkProd('DEL-FRESH-P', ffid);
+  const noCode = await del(ffid, { elevate: false });
+  check('ลบร้านโดยไม่ใส่รหัส 6 หลักไม่ได้', noCode.status === 403 && noCode.body.error?.code === 'ELEVATION_REQUIRED', noCode.body);
+  await flushTelegram();
+  let mark = telegram.messages.length;
+  const hard = await del(ffid);
+  check('ร้านที่ยังไม่เคยมีบิล/ประวัติ → ลบทิ้งจริง (HARD) พร้อมผู้ใช้ของร้าน',
+    hard.status === 200 && hard.body.deleted === true && hard.body.id === ffid && hard.body.username === 'delfresh'
+      && hard.body.mode === 'HARD' && hard.body.users === 1, hard.body);
+  const freshLeft = db.prepare(`SELECT
+      (SELECT COUNT(*) FROM franchises WHERE id = ?) AS shops,
+      (SELECT COUNT(*) FROM users WHERE franchise_id = ? OR username = 'delfresh') AS users,
+      (SELECT COUNT(*) FROM product_assignments WHERE franchise_id = ?) AS assignments`).get(ffid, ffid, ffid);
+  check('ร้าน ผู้ใช้ และสัญญามอบหมายหายจากฐานข้อมูล · เปิดดูได้ 404',
+    freshLeft.shops === 0 && freshLeft.users === 0 && freshLeft.assignments === 0
+      && (await api('GET', `/api/franchises/${ffid}`, { token: admin })).status === 404, freshLeft);
+  check('สินค้าที่ร้านถืออยู่กลับมาว่าง (ไม่ถูกลบตาม)',
+    (await api('GET', `/api/products/${fprod?.id}`, { token: admin })).body?.currentAssignment === null);
+  const reused = await api('POST', '/api/franchises', { token: admin, body: { username: 'delfresh', password: 'delfresh-pass-2' } });
+  check('ลบจริงแล้วชื่อร้านว่าง ใช้สร้างร้านใหม่ได้', reused.status === 201, reused.body);
+  await flushTelegram();
+  const hardMsg = deleteMsgs(mark, 'delfresh');
+  check('ลบร้าน → แจ้งกลุ่มส่วนกลาง (ลบทิ้งทั้งหมด · ใครลบ · เวลา)',
+    hardMsg.length === 1 && hardMsg[0].chat_id === TG_CHAT && /ลบทิ้งทั้งหมด/.test(hardMsg[0].text)
+      && /โดย: <b>.*superadmin/.test(hardMsg[0].text) && /เวลา:/.test(hardMsg[0].text), telegram.messages.slice(mark).map((m) => m.text));
+
+  // ── ด่าน: เงินที่ยังค้างอยู่ต้องจบก่อน ──
+  const ds = await mkShop('delshop');
+  const dfid = ds.franchise?.id;
+  const dprod = await mkProd('DEL-SHOP-P', dfid);
+  const ownerTok = (await shopLogin('delshop', 'delshop-pass-1', dfid)).body.token;
+  await api('POST', `/api/franchises/${dfid}/users`, { token: ownerTok, body: { username: 'delshop-staff', password: 'delstaff-pass-1' } });
+  const staffTok = (await shopLogin('delshop-staff', 'delstaff-pass-1', dfid)).body.token;
+  await api('POST', '/api/sales-agents', { token: admin, body: { username: 'delsale', password: 'delsale-pass-1', name: 'เซลหมวดลบร้าน' } });
+  const saleTok = (await api('POST', '/api/auth/login', { body: { username: 'delsale', password: 'delsale-pass-1' } })).body.token;
+  const byRole = [];
+  for (const tok of [ownerTok, staffTok, saleTok]) {
+    const r = await api('DELETE', `/api/franchises/${dfid}`, { token: tok });
+    byRole.push([r.status, r.body?.error?.code]);
+  }
+  check('เจ้าของร้าน / ผู้ช่วย / เซล ลบร้านไม่ได้ (403 เพราะไม่ใช่ส่วนกลาง ไม่ใช่แค่ไม่ได้ใส่รหัส)',
+    byRole.every(([s, code]) => s === 403 && code !== 'ELEVATION_REQUIRED'), byRole);
+
+  const dentry = await entryOf(dprod?.id, '2029-10-H1', 30000);
+  const gUnbilled = await del(dfid);
+  check('มียอดขายที่ยังไม่ออกบิล → ลบไม่ได้ (409)',
+    dentry.status === 201 && gUnbilled.status === 409 && errOf(gUnbilled) === 'ร้าน delshop มียอดขายที่ยังไม่ออกบิล 1 รายการ — ออกบิลหรือลบยอดก่อน', gUnbilled.body);
+  const dbill = await api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: dfid, periodCode: '2029-10-H1' } });
+  const owed = Number(dbill.body.netTotal ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const gOpen = await del(dfid);
+  check('มีบิลค้างชำระ → ลบไม่ได้ (409 บอกจำนวนบิลและยอดค้าง)',
+    dbill.status === 201 && gOpen.status === 409 && errOf(gOpen) === `ร้าน delshop มีบิลค้างชำระ 1 ใบ (${owed} บาท) — รับชำระหรือยกเลิกบิลก่อน`, gOpen.body);
+  const dsub = await api('POST', '/api/payments', {
+    token: ownerTok, body: { invoiceId: dbill.body.id, amount: dbill.body.netTotal, paidAt: todayTh, slipUrl: await uploadSlip(ownerTok) },
+  });
+  const gSlip = await del(dfid);
+  check('มีสลิปรอตรวจ → ลบไม่ได้ (409 ให้ตรวจสลิปก่อน)',
+    dsub.status === 201 && gSlip.status === 409 && errOf(gSlip) === 'ร้าน delshop มีสลิปรอตรวจ 1 รายการ — ตรวจสลิปก่อน', gSlip.body);
+  // ยอดติดลบทั้งรอบ = ทางเราติดเงินร้าน (ยอดยกไปหักรอบหน้า) — ร้านแยก เพราะยกเลิกยอดยกมาจากหน้าเว็บไม่ได้
+  const cs = await mkShop('delcredit');
+  const cfid = cs.franchise?.id;
+  await entryOf((await mkProd('DEL-CREDIT-P', cfid))?.id, '2029-10-H1', -5000);
+  const cbill = await api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: cfid, periodCode: '2029-10-H1' } });
+  const gCredit = await del(cfid);
+  check('ทางเรายังมียอดยกมาค้างให้ร้าน (รอบที่ยอดติดลบ) → ลบไม่ได้ (409)',
+    cbill.status === 201 && gCredit.status === 409 && errOf(gCredit) === 'ทางเรายังมียอดยกมาค้างให้ร้านนี้ 500.00 บาท — ใช้หักบิลหรือยกเลิกยอดยกมาก่อน', gCredit.body);
+  check('ลบไม่สำเร็จ = ไม่มีอะไรเปลี่ยน (ร้านยังอยู่ ผู้ใช้ยังใช้งานได้)',
+    (await api('GET', `/api/franchises/${dfid}`, { token: admin })).status === 200 && (await api('GET', `/api/franchises/${cfid}`, { token: admin })).status === 200
+      && (await api('GET', '/api/auth/me', { token: ownerTok })).status === 200
+      && db.prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'franchise.delete' AND entity_id IN (?, ?)").get(dfid, cfid).n === 0);
+
+  // ── มีบิลแล้ว → ซ่อนถาวร (SOFT) ──
+  await api('POST', `/api/payments/${dsub.body.id}/approve`, { token: admin, body: {} });
+  const paid = (await api('GET', `/api/invoices/${dbill.body.id}`, { token: admin })).body;
+  check('ตั้งฉาก: บิลของร้านจ่ายครบ + ร้านเชื่อม Telegram ของตัวเอง', paid.status === 'PAID' && await linkTelegram(ownerTok, DEL_CHAT), paid.status);
+  const oldKey = await shopLoginKey(dfid);
+  const tvBefore = db.prepare('SELECT id, token_version FROM users WHERE franchise_id = ? ORDER BY id').all(dfid);
+  await flushTelegram();
+  mark = telegram.messages.length;
+  const soft = await del(dfid);
+  check('ร้านที่มีบิลแล้ว → ลบแบบซ่อน (SOFT) · ผู้ใช้ของร้าน 2 คน',
+    soft.status === 200 && soft.body.deleted === true && soft.body.id === dfid && soft.body.username === 'delshop'
+      && soft.body.mode === 'SOFT' && soft.body.users === 2, soft.body);
+  const frow = db.prepare('SELECT status, deleted_at, deleted_by_user_id, login_key_hash, login_key_enc FROM franchises WHERE id = ?').get(dfid);
+  check('แถวร้านยังอยู่ (บิลเก่าอ้างถึง) · สถานะ DELETED + เวลา + คนลบ · กุญแจลิงก์เข้าระบบถูกล้าง',
+    frow?.status === 'DELETED' && Boolean(frow.deleted_at) && frow.deleted_by_user_id === adminId
+      && frow.login_key_hash === null && frow.login_key_enc === null, frow);
+  const urows = db.prepare('SELECT id, status, token_version, telegram_chat_id FROM users WHERE franchise_id = ? ORDER BY id').all(dfid);
+  check('ผู้ใช้ทุกคนของร้าน: ปิดใช้งาน + token_version + 1 + ล้างแชต Telegram',
+    urows.length === 2 && urows.every((u, i) => u.status === 'DISABLED' && u.token_version === tvBefore[i]?.token_version + 1 && u.telegram_chat_id === null), urows);
+  check('ทุกคนในร้านหลุดจากระบบทันที (เจ้าของและผู้ช่วย)',
+    (await api('GET', '/api/auth/me', { token: ownerTok })).status === 401 && (await api('GET', '/api/auth/me', { token: staffTok })).status === 401);
+  shopKeys.delete(dfid);
+  const loginOld = (username, password) => api('POST', '/api/auth/login', { body: { username, password, loginKey: oldKey } });
+  const oldOwner = await loginOld('delshop', 'delshop-pass-1');
+  const oldStaff = await loginOld('delshop-staff', 'delstaff-pass-1');
+  const wrongPw = await loginOld('delshop', 'not-the-password');
+  check('เข้าด้วยลิงก์เดิม + รหัสถูกไม่ได้ — 401 ข้อความเดียวกับรหัสผิด (ไม่บอกว่าร้านถูกลบ)',
+    [oldOwner, oldStaff, wrongPw].every((r) => r.status === 401 && !r.body?.token)
+      && errOf(oldOwner) === errOf(wrongPw) && errOf(oldStaff) === errOf(wrongPw), [oldOwner.body, oldStaff.body, wrongPw.body]);
+  const shopList = (await api('GET', '/api/franchises', { token: admin })).body.items ?? [];
+  const ready = (await api('GET', '/api/invoices/readiness?periodCode=2029-10-H1', { token: admin })).body.items ?? [];
+  check('หายจากรายการร้านและตัวเลือกร้าน (ออกบิล) · เปิดดู / ลิงก์เข้าระบบ / ผู้ใช้ของร้าน ได้ 404',
+    !shopList.some((f) => f.id === dfid) && !ready.some((r) => r.franchiseId === dfid)
+      && (await api('GET', `/api/franchises/${dfid}`, { token: admin })).status === 404
+      && (await api('GET', `/api/franchises/${dfid}/login-link`, { token: admin })).status === 404
+      && (await api('GET', `/api/franchises/${dfid}/users`, { token: admin })).status === 404);
+  const patchDeleted = await api('PATCH', `/api/franchises/${dfid}`, { token: admin, body: { contactName: 'แก้หลังลบ' } });
+  const sameName = await api('POST', '/api/franchises', { token: admin, body: { username: 'DelShop', password: 'delshop-pass-2' } });
+  check('แก้ไขร้านที่ลบแล้วไม่ได้ (409) · สร้างร้านใหม่ชื่อเดิมไม่ได้ (409 · ตัวพิมพ์ใหญ่ก็ไม่ได้)',
+    patchDeleted.status === 409 && errOf(patchDeleted).includes('ถูกลบแล้ว')
+      && sameName.status === 409 && errOf(sameName) === 'ชื่อ DelShop เคยใช้กับร้านที่ลบไปแล้ว (บิลเก่ายังอ้างถึง) — ใช้ชื่ออื่น', [patchDeleted.body, sameName.body]);
+  const billList = (await api('GET', '/api/invoices?status=PAID', { token: admin })).body.items ?? [];
+  check('บิลเก่ายังเปิดดูได้ครบพร้อมชื่อร้าน (ส่วนกลาง)',
+    paid.franchiseUsername === 'delshop' && (await api('GET', `/api/invoices/${dbill.body.id}`, { token: admin })).body?.franchiseUsername === 'delshop'
+      && billList.some((i) => i.id === dbill.body.id && i.franchiseUsername === 'delshop'), billList.filter((i) => i.id === dbill.body.id));
+  const oldSales = (await api('GET', '/api/sales-entries?periodCode=2029-10-H1', { token: admin })).body.items ?? [];
+  check('ยอดขายรอบเก่าของร้านยังอยู่ในหน้ายอดขาย (ยอดรวมกับบิลยังตรงกัน)',
+    oldSales.some((e) => e.id === dentry.body.id && e.franchiseUsername === 'delshop'), oldSales.map((e) => e.franchiseUsername));
+  const reissue = await api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: dfid, periodCode: '2029-10-H1' } });
+  const addCharge = await api('POST', `/api/invoices/${dbill.body.id}/adjustments`, { token: admin, body: { kind: 'CHARGE', label: 'ค่าหลังลบร้าน', amount: 10 } });
+  check('ออกบิลใหม่ / แก้บิลเก่าของร้านที่ลบแล้วไม่ได้ (409)',
+    reissue.status === 409 && addCharge.status === 409 && errOf(addCharge).includes('ถูกลบแล้ว'), [reissue.body, addCharge.body]);
+  const asgEnd = db.prepare('SELECT end_date FROM product_assignments WHERE franchise_id = ? ORDER BY id DESC LIMIT 1').get(dfid)?.end_date;
+  const next = await mkShop('delshop-next');
+  const moved = await api('POST', '/api/assignments', { token: admin, body: { productId: dprod?.id, franchiseId: next.franchise?.id, startDate: todayTh } });
+  check('สัญญาสินค้าของร้านปิดวันนี้ · สินค้ามอบหมายให้ร้านอื่นได้ตั้งแต่วันนี้',
+    asgEnd === todayTh && moved.status === 201, { asgEnd, moved: moved.body });
+  const toDeleted = await api('POST', '/api/assignments', { token: admin, body: { productId: fprod?.id, franchiseId: dfid, startDate: todayTh } });
+  check('มอบหมายสินค้าให้ร้านที่ลบแล้วไม่ได้ (409)', toDeleted.status === 409 && errOf(toDeleted).includes('ถูกลบแล้ว'), toDeleted.body);
+  await notifyShopForTest(dfid);
+  await flushTelegram();
+  const softMsg = deleteMsgs(mark, 'delshop');
+  check('ลบแบบซ่อน → แจ้งกลุ่มส่วนกลาง (ซ่อนถาวร · ลิงก์ใช้ไม่ได้) · ไม่มีข้อความไปหาแชตของร้านที่ลบแล้ว',
+    softMsg.length === 1 && softMsg[0].chat_id === TG_CHAT && /ซ่อนถาวร/.test(softMsg[0].text) && /ลิงก์เข้าระบบของร้านใช้ไม่ได้แล้ว/.test(softMsg[0].text)
+      && !telegram.messages.slice(mark).some((m) => String(m.chat_id) === DEL_CHAT), telegram.messages.slice(mark).map((m) => [m.chat_id, m.text]));
+  check('ลบซ้ำได้ 404', (await del(dfid)).status === 404);
+  const delLogs = db.prepare("SELECT entity_id, detail FROM audit_logs WHERE action = 'franchise.delete' AND entity_id IN (?, ?) ORDER BY id")
+    .all(ffid, dfid).map((r) => ({ id: r.entity_id, ...JSON.parse(r.detail) }));
+  const acts = (await api('GET', '/api/activity?actions=franchise.delete&limit=10', { token: admin })).body.items ?? [];
+  check('ประวัติ "ลบร้านค้า" จดชื่อร้านและวิธีลบ (HARD/SOFT)',
+    delLogs.length === 2 && delLogs[0].username === 'delfresh' && delLogs[0].mode === 'HARD' && delLogs[1].username === 'delshop' && delLogs[1].mode === 'SOFT'
+      && acts.some((a) => a.what === 'ลบร้านค้า' && a.target === 'delfresh'), { delLogs, acts: acts.map((a) => [a.what, a.target]) });
+
+  /*
+   * ── ฐานข้อมูลเป็นคนตัดสิน: ไม่มีบิลเลย แต่ผู้ใช้เคยเข้าระบบ (ประวัติอ้างถึงผู้ใช้) → ซ่อนแทนลบจริง ──
+   * การลองลบจริงลบสัญญามอบหมายไปก่อนจะชน FK ที่ผู้ใช้ — สัญญายังอยู่ (แล้วถูกปิดแบบซ่อน) = ทรานแซกชันแรกถูกย้อนทั้งก้อนจริง
+   */
+  const ls = await mkShop('dellogged');
+  const lfid = ls.franchise?.id;
+  const later = new Date(Date.parse(todayTh) + 20 * 86400000).toISOString().slice(0, 10);
+  const lprod = (await api('POST', '/api/products', {
+    token: admin, body: { sku: 'DEL-LOGGED-P', name: 'สินค้าเริ่มขายเดือนหน้า', commissionPct: 10, franchiseId: lfid, startDate: later },
+  })).body.product;
+  const loggedIn = await shopLogin('dellogged', 'dellogged-pass-1', lfid);
+  const lsDel = await del(lfid);
+  const lusers = db.prepare('SELECT status FROM users WHERE franchise_id = ?').all(lfid);
+  const lasg = db.prepare('SELECT start_date, end_date FROM product_assignments WHERE product_id = ?').all(lprod?.id);
+  check('ร้านที่ไม่มีบิลแต่ผู้ใช้เคยเข้าระบบ → ซ่อนแทนลบจริง และการลองลบจริงถูกย้อนทั้งก้อน (ผู้ใช้และสัญญายังอยู่ ผู้ใช้ถูกปิด)',
+    loggedIn.status === 200 && lsDel.status === 200 && lsDel.body.mode === 'SOFT' && lusers.length === 1 && lusers[0].status === 'DISABLED'
+      && lasg.length === 1, { del: lsDel.body, lusers, lasg });
+  check('สัญญาที่ยังไม่ถึงวันเริ่มของร้านที่ลบ ถูกปิดเป็นวันนี้ทั้งสองวัน (ไม่ติด "วันจบ ≥ วันเริ่ม")',
+    lasg[0]?.start_date === todayTh && lasg[0]?.end_date === todayTh, lasg);
 }
 
 /* ── ลบรายการค่าใช้จ่าย/ส่วนลดตั้งต้น ─────────────────────────
- * เจ้าของระบบ: "หน้านี้ต้องกดลบได้" — ต่างจากสินค้า (ลบไม่ได้) เพราะบิลเก็บชื่อ/% /ยอดของรายการไว้เองแล้ว
+ * เจ้าของระบบ: "หน้านี้ต้องกดลบได้" — ลบจริงได้เสมอ (ต่างจากสินค้าที่มีบิลแล้วได้แค่ซ่อน) เพราะบิลเก็บชื่อ/% /ยอดของรายการไว้เองแล้ว
  * ลบแล้วบิลเก่าต้องยังแสดงเหมือนเดิมทุกตัวเลข แค่หลุดความเชื่อมโยงกับรายการตั้งต้น */
 section('ลบรายการค่าใช้จ่าย/ส่วนลดตั้งต้น (บิลเก่าไม่เปลี่ยน)');
 {

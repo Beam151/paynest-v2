@@ -22,7 +22,7 @@
   <h2 class="m-sub">เรื่องอื่น ๆ</h2>
   <div class="m-tasks">
     <button class="m-task" data-guide="start"><span class="m-task-ico">{i:rocket}</span><strong>เริ่มต้นครั้งแรก</strong><small>ตั้งค่าก่อนเปิดใช้</small></button>
-    <button class="m-task" data-guide="shops"><span class="m-task-ico">{i:store}</span><strong>เพิ่มร้านและสินค้า</strong><small>มอบหมายสินค้าให้ร้าน · สินค้ากลุ่ม (ชุด)</small></button>
+    <button class="m-task" data-guide="shops"><span class="m-task-ico">{i:store}</span><strong>เพิ่มร้านและสินค้า</strong><small>มอบหมายสินค้าให้ร้าน · สินค้ากลุ่ม (ชุด) · เลิกขาย / ลบ</small></button>
     <button class="m-task" data-guide="logins"><span class="m-task-ico">{i:key-round}</span><strong>ส่งข้อมูลเข้าระบบ</strong><small>ลิงก์ของร้าน · คัดลอกทั้งชุด · ตั้งรหัสใหม่</small></button>
     <button class="m-task" data-guide="agents"><span class="m-task-ico">{i:handshake}</span><strong>เซลและค่าคอม</strong><small>ตั้งค่าคอม (ดีล + ทำบิลค่าคอม ในหน้าต่างเดียว) · จ่ายคอม</small></button>
     <button class="m-task" data-guide="account"><span class="m-task-ico">{i:landmark}</span><strong>เลขบัญชีกับร้าน</strong><small>ส่งเลขบัญชีทาง Telegram · เปลี่ยนบัญชีของบิล · กระเป๋า USD</small></button>
@@ -58,7 +58,7 @@
     </div>
     <div class="m-step-text"><span class="m-num">1</span><h3>เลือกรอบ แล้วกรอกยอดเต็ม</h3><p>{nav:sales} → เลือกรอบด้านบน → พิมพ์ยอดขายเต็มของแต่ละสินค้า → <span class="m-ui is-primary">💾 บันทึกทั้งหมด</span></p><p>ระบบคิดส่วนต่างให้เอง · ร้านคืนของมากกว่าขาย ใส่ติดลบได้</p></div>
   </div>
-  <div class="m-tip">{i:info}<span><b>สินค้าที่ปิดใช้งานแล้ว</b> กรอกยอดใหม่ไม่ได้ ยอดที่บันทึกไว้ก่อนยังโชว์เป็นแถว <span class="s-badge">ปิดใช้งาน</span> (ออกบิลได้ตามปกติ และไม่นับใน "กรอกแล้ว x/y") · ช่อง % ที่ขึ้น <span class="m-ui">กรอกยอดเอง</span> = ยอดนั้นกำหนดตอนออกบิล ไม่ได้คิดจาก %</span></div>
+  <div class="m-tip">{i:info}<span><b>สินค้าที่ปิดใช้งานแล้ว</b> กรอกยอดใหม่ไม่ได้ ยอดที่บันทึกไว้ก่อนยังโชว์เป็นแถว <span class="s-badge">ปิดใช้งาน</span> (ออกบิลได้ตามปกติ และไม่นับใน "กรอกแล้ว x/y") · สินค้าที่ถูกลบ ยอดรอบเก่าขึ้นเป็นแถวอ่านอย่างเดียว <span class="s-badge red">ลบแล้ว</span> · ช่อง % ที่ขึ้น <span class="m-ui">กรอกยอดเอง</span> = ยอดนั้นกำหนดตอนออกบิล ไม่ได้คิดจาก %</span></div>
   <div class="m-tip">{i:package}<span><b>สินค้ากลุ่ม (ชุด)</b> ขึ้นเป็นแถวเดียวมีป้าย <span class="s-badge">กลุ่ม</span> และรหัสสินค้าย่อยใต้ชื่อ — กรอก<b>ยอดขายรวมของทั้งชุด</b>ช่องเดียว ไม่ต้องกรอกยอดของสินค้าย่อย</span></div>
 </section>
 
@@ -221,11 +221,13 @@
         <div class="s-row"><span class="s-btn">ใช้งาน (12)</span><span class="s-btn ghost">ปิดใช้งาน (2)</span><span class="s-btn ghost">ทั้งหมด (14)</span></div>
         <div class="s-card">
           <div class="s-row"><b>KF-09</b><span class="s-badge green">ใช้งาน</span></div>
-          <div class="s-row" style="justify-content:flex-end;gap:4px"><span class="s-btn ghost">แก้ไข</span><span class="s-btn ghost s-hl" style="color:var(--danger)">ปิดใช้งาน<span class="s-tap">{i:hand}</span></span></div>
+          <div class="s-row" style="justify-content:flex-end;gap:4px"><span class="s-btn ghost">แก้ไข</span><span class="s-btn ghost s-hl">ปิดใช้งาน<span class="s-tap">{i:hand}</span></span><span class="s-btn ghost" style="color:var(--danger)">ลบ</span></div>
         </div>
       </div>
     </div>
-    <div class="m-step-text"><span class="m-num">3</span><h3>เลิกขายสินค้า = ปิดใช้งาน (ลบไม่ได้)</h3><p>{nav:products} → กด <span class="m-ui">ปิดใช้งาน</span> ที่สินค้านั้น — ร้านไม่เห็น และกรอกยอดใหม่ไม่ได้ · ยอดที่บันทึกไว้แล้วยังออกบิลได้ · สัญญากับร้านและดีลของเซลยังอยู่</p><p>ขายต่อ: แท็บ <span class="m-ui">ปิดใช้งาน</span> → <span class="m-ui">เปิดใช้งาน</span> กลับมาใช้ได้ทันที ไม่ต้องมอบหมายใหม่</p></div>
+    <div class="m-step-text"><span class="m-num">3</span><h3>หยุดขายชั่วคราว = ปิดใช้งาน · เลิกขายถาวร = ลบ</h3><p><b>ปิดใช้งาน</b> (เปิดกลับได้): {nav:products} → กด <span class="m-ui">ปิดใช้งาน</span> — ร้านไม่เห็น และกรอกยอดใหม่ไม่ได้ · ยอดที่บันทึกไว้แล้วยังออกบิลได้ · สัญญากับร้านและดีลของเซลยังอยู่ · ขายต่อ: แท็บ <span class="m-ui">ปิดใช้งาน</span> → <span class="m-ui">เปิดใช้งาน</span> ใช้ได้ทันที ไม่ต้องมอบหมายใหม่</p>
+      <p><b>ลบ</b> (ถาวร ย้อนกลับไม่ได้): กด <span class="m-ui">ลบ</span> แล้วยืนยัน — สินค้าที่ยังไม่เคยมียอดขาย = ลบทิ้งทั้งหมด (สัญญา/ดีลของสินค้านี้ด้วย) · มีบิลแล้ว = หายจากทุกหน้าถาวร แต่บิลเก่ายังแสดงรหัสและชื่อสินค้าเหมือนเดิม สัญญา/ดีลที่เปิดอยู่ปิดวันนั้น · เป็นสินค้าย่อยของกลุ่ม = ถูกเอาออกจากกลุ่มเอง</p>
+      <p>ลบไม่ได้เมื่อ: ยังมียอดขายที่ยังไม่ออกบิล (ออกบิลหรือลบยอดนั้นที่ {nav:sales} ก่อน) · เป็นสินค้าย่อยชิ้นสุดท้ายของสินค้ากลุ่ม (เพิ่มสินค้าย่อยอื่นในกลุ่มนั้นก่อน) · รหัสของสินค้าที่ลบแบบมีบิลแล้วใช้ตั้งสินค้าใหม่ไม่ได้ (บิลเก่ายังอ้างถึง)</p></div>
   </div>
   <div class="m-step">
     <div class="m-shot" data-nav="shops" data-tap-nav data-title="ร้านค้า">
@@ -237,6 +239,19 @@
       </div>
     </div>
     <div class="m-step-text"><span class="m-num">4</span><h3>สร้างร้าน แล้วส่งข้อมูลเข้าระบบทั้งชุด</h3><p>{nav:shops} → <span class="m-ui is-primary">+ สร้างร้านค้าใหม่</span> ตั้งชื่อผู้ใช้กับรหัสผ่าน → ระบบโชว์ <b>ลิงก์ของร้าน + ชื่อผู้ใช้ + รหัสผ่าน</b> กด <span class="m-ui is-primary">📋 คัดลอกทั้งชุด</span> แล้ววางส่งให้ร้าน (รหัสผ่านแสดงครั้งเดียว)</p><p><span class="m-ui">👁 ดูมุมมองนี้</span> = ดูระบบแบบที่ร้านเห็น (ดูอย่างเดียว) · <span class="m-ui">ยูสเซอร์</span> = คัดลอกข้อมูลเข้าระบบ / ตั้งรหัสใหม่ / <span class="m-ui">📱 ปลด 2FA</span> ทีละคน</p></div>
+  </div>
+  <div class="m-step">
+    <div class="m-shot" data-nav="shops" data-tap-nav data-title="ร้านค้า">
+            <div class="s-body">
+        <div class="s-card">
+          <div class="s-row"><b>bkk09</b><span class="s-badge">ปิด</span></div>
+          <div class="s-row" style="flex-wrap:wrap;justify-content:flex-end;gap:4px"><span class="s-btn ghost">ยูสเซอร์</span><span class="s-btn ghost">แก้ไข</span><span class="s-btn ghost s-hl" style="color:var(--danger)">ลบ<span class="s-tap">{i:hand}</span></span></div>
+        </div>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">5</span><h3>พักร้าน = แก้สถานะ · เลิกกันถาวร = ลบร้าน</h3><p><b>พักร้าน</b> (กลับมาใช้ได้): {nav:shops} → <span class="m-ui">แก้ไข</span> → สถานะ <span class="m-ui">ระงับชั่วคราว</span> หรือ <span class="m-ui">ปิดร้าน</span></p>
+      <p><b>ลบร้าน</b> (ถาวร ย้อนกลับไม่ได้ · ต้องใส่รหัส 6 หลัก): กด <span class="m-ui">ลบ</span> ที่แถวร้าน — ร้านที่ยังไม่มีบิลและยังไม่มีใครในร้านเคยเข้าระบบ = ลบทิ้งทั้งหมดรวมผู้ใช้ของร้าน (ชื่อร้านใช้ซ้ำได้) · มีบิลแล้ว หรือเคยเข้าระบบแล้ว = ร้านหายจากทุกหน้า <b>ผู้ใช้ทุกคนของร้านถูกออกและเข้าระบบไม่ได้อีก ลิงก์ของร้านใช้ไม่ได้</b> Telegram ของร้านหยุดส่ง แต่บิลและเงินที่รับไว้ยังดูได้ครบในหน้าบิล/รายงาน · สินค้าที่ร้านถืออยู่ว่างให้มอบหมายร้านอื่นได้ทันที · กลุ่ม Telegram ส่วนกลางได้แจ้งทุกครั้ง (ปิดไม่ได้)</p>
+      <p>ลบไม่ได้จนกว่าจะเคลียร์: บิลค้างชำระ (รับชำระหรือยกเลิกบิล) · สลิปรอตรวจ · ยอดขายที่ยังไม่ออกบิล · ยอดยกมาที่ทางเรายังค้างให้ร้าน · ชื่อร้านที่ถูกซ่อนไว้ (มีบิล หรือเคยเข้าระบบ) ใช้ตั้งร้านใหม่ไม่ได้</p></div>
   </div>
 </section>
 
@@ -500,7 +515,8 @@
     <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:file-pen-line}</span><strong>ยอดในบิลผิด</strong><small>"แก้ไขบิล" ได้ถ้ายังไม่มีเงินเข้า · ไม่งั้นยกเลิก (ใส่เหตุผล) แล้วออกใหม่</small></div>
     <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:calendar}</span><strong>เลื่อนวันครบกำหนด / เปลี่ยนบัญชี</strong><small>เปิดบิลโหมดแก้ไข → "🏦 เปลี่ยนบัญชี / วันครบกำหนด" · เปลี่ยนบัญชีต้องใส่รหัส 6 หลัก แล้วกด "📨 ส่งเลขบัญชีให้ร้าน"</small></div>
     <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:file-pen-line}</span><strong>ยอดสินค้าไม่ได้คิดจาก %</strong><small>บิลที่ยังไม่มีเงินเข้า: แก้ไขบิล → "แก้" ที่สินค้า → กรอกยอดเอง</small></div>
-    <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:package}</span><strong>เลิกขายสินค้า</strong><small>ลบไม่ได้ — กด "ปิดใช้งาน" ที่หน้าสินค้า เปิดกลับได้ทุกเมื่อ</small></div>
+    <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:package}</span><strong>เลิกขายสินค้า</strong><small>ชั่วคราว = "ปิดใช้งาน" (เปิดกลับได้) · ถาวร = "ลบ" (บิลเก่ายังแสดงสินค้าเดิม)</small></div>
+    <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:store}</span><strong>เลิกกับร้าน</strong><small>พักไว้ = "แก้ไข" สถานะ ปิด/ระงับ · ถาวร = "ลบ" (รหัส 6 หลัก · เคลียร์บิลค้างก่อน · ผู้ใช้ของร้านเข้าไม่ได้อีก)</small></div>
     <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:refresh-cw}</span><strong>ร้านคืนของมากกว่าขาย</strong><small>ไม่ต้องโอนคืน ระบบหักบิลรอบถัดไปให้เอง</small></div>
     <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:banknote}</span><strong>ร้านจ่ายเป็นดอลลาร์</strong><small>ตั้งอัตราของรอบข้างแถบรอบบิล → เลือก USD ตอนออกบิล → ร้านโอนเข้ากระเป๋า USD (เครือข่าย + ที่อยู่)</small></div>
     <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:key-round}</span><strong>ร้าน/เซลลืมรหัส</strong><small>"🔑 ตั้งรหัสใหม่ + คัดลอก" แล้วส่งชุดใหม่ให้ · รหัสเดิมดูย้อนหลังไม่ได้</small></div>
@@ -528,7 +544,9 @@
     <details class="m-faq"><summary>ทำบิลค่าคอมแล้วไม่เห็นสินค้าบางตัว</summary><div>ติ๊กได้เฉพาะสินค้าที่เซลคนนั้นถือดีล (ดีลที่ปิดแล้วก็ยังติ๊กได้) จากบิลร้านที่ออกแล้วและไม่ถูกยกเลิก · รายการที่อยู่ในบิลค่าคอมใบอื่นแล้วไม่โผล่ซ้ำ — ถ้าบิลค่าคอมใบนั้นผิด ยกเลิกก่อน (ยังไม่จ่าย) รายการจะกลับมา</div></details>
     <details class="m-faq"><summary>แก้ % ในดีลของเซลแล้ว บิลค่าคอมเก่าเปลี่ยนไหม</summary><div>ไม่เปลี่ยน — บิลค่าคอมเก็บตัวเลขตอนทำบิลไว้แล้ว % ใหม่เป็นค่าตั้งต้นตอนติ๊กรายการในบิลค่าคอมที่ทำหลังจากนี้ (ยังแก้ทีละรายการได้ตอนทำบิล) · บิลค่าคอมที่ยังไม่จ่ายและต้องการคิดใหม่: ยกเลิกบิลนั้น แล้วทำใหม่</div></details>
     <details class="m-faq"><summary>สินค้ากลุ่มคิดเงินซ้ำกับสินค้าย่อยไหม</summary><div>ไม่ — ยอดขายของชุดกรอกที่สินค้ากลุ่มช่องเดียว บิลมีบรรทัดเดียวตาม % ของกลุ่ม · สินค้าย่อยเป็นแค่รายการ "ประกอบด้วย" ให้ร้านเห็น ถ้าร้านขายสินค้าย่อยแยกชิ้นด้วย ยอดนั้นกรอกที่สินค้าย่อยตามปกติ (คนละยอดกัน)</div></details>
-    <details class="m-faq"><summary>ลบสินค้าไม่ได้</summary><div>ตั้งใจให้เป็นแบบนั้น สินค้าผูกกับยอดขาย บิล และดีลของเซล — ใช้ "ปิดใช้งาน" แทน ประวัติยังอยู่ครบ และเปิดกลับได้</div></details>
+    <details class="m-faq"><summary>กด "ลบ" สินค้าแล้วขึ้นข้อความแดง</summary><div>ระบบบอกเหตุผลในข้อความ — <b>มียอดขายที่ยังไม่ออกบิล</b>: ออกบิลหรือลบยอดนั้นที่ {nav:sales} ก่อน (ไม่ให้ยอดที่ยังไม่เรียกเก็บหายไปกับสินค้า) · <b>เป็นสินค้าย่อยชิ้นสุดท้ายของสินค้ากลุ่ม</b>: เพิ่มสินค้าย่อยอื่นในกลุ่มนั้นก่อน หรือลบ/แก้กลุ่มนั้นก่อน · ถ้าแค่อยากหยุดขายชั่วคราว ใช้ "ปิดใช้งาน" ได้เสมอ</div></details>
+    <details class="m-faq"><summary>ลบสินค้าหรือร้านแล้ว บิลเก่าเปลี่ยนไหม</summary><div>ไม่เปลี่ยน — ถ้ามีบิลอ้างถึง ระบบซ่อนไว้แทนการลบจริง บิล เงินที่รับ บิลค่าคอม และรายงานรอบเก่ายังแสดงรหัส/ชื่อเดิมครบ · ยอดขายรอบเก่าของสินค้าที่ลบขึ้นเป็นแถวอ่านอย่างเดียว ป้าย <span class="s-badge red">ลบแล้ว</span> · รายการของสินค้าที่ลบที่ออกบิลแล้วยังติ๊กทำบิลค่าคอมได้ตามปกติ</div></details>
+    <details class="m-faq"><summary>สร้างสินค้า/ร้านด้วยรหัสหรือชื่อเดิมไม่ได้</summary><div>รหัสสินค้าหรือชื่อร้านนั้นเคยใช้กับของที่ลบไปแล้วแต่บิลเก่ายังอ้างถึง — ใช้รหัส/ชื่ออื่น (สินค้าที่ไม่เคยมียอดขาย / ร้านที่ไม่มีบิลและยังไม่เคยมีใครเข้าระบบ ระบบลบทิ้งจริง ใช้ชื่อเดิมได้ — ร้านที่เคยเข้าระบบแม้ครั้งเดียวมีประวัติแล้ว จึงถูกซ่อนแทน)</div></details>
     <details class="m-faq"><summary>ลบรายการค่าใช้จ่าย/ส่วนลดแล้ว บิลเก่าเปลี่ยนไหม</summary><div>ไม่เปลี่ยน — {nav:charges} กด <span class="m-ui">ลบ</span> ได้เลย แม้เคยใส่ในบิลแล้ว เพราะบิลเก็บชื่อและยอดของรายการนั้นไว้เองตั้งแต่ตอนใส่ แค่เลือกรายการนี้ตอนออกบิลใหม่ไม่ได้แล้ว · ถ้าแค่ไม่อยากให้เลือกชั่วคราว ใช้ "แก้ไข" → สถานะ "ปิดใช้งาน" แทน (เปิดกลับได้)</div></details>
     <details class="m-faq"><summary>บัญชีรับเงินถูกแก้โดยไม่รู้ตัว</summary><div>ระบบแจ้งกลุ่มทันทีและขึ้นแถบเตือนทุกหน้า ถ้าไม่ได้แก้เอง ให้เปลี่ยนรหัสผ่านทันที (ทุกเครื่องหลุด) แล้วแก้บัญชีกลับ</div></details>
   </div>

@@ -251,10 +251,8 @@ final class SalesAgentService
             throw ApiException::badRequest("เซล {$agent['username']} ไม่อยู่ในสถานะใช้งาน");
         }
         $product = Db::one('SELECT * FROM products WHERE id = ?', [(int) $input['productId']]) ?? throw ApiException::notFound('ไม่พบสินค้า');
-        // สินค้าที่ปิดใช้งานแล้วบันทึกยอดใหม่ไม่ได้ — ผูกดีลใหม่ไว้ก็ไม่มีวันได้คอม คนตั้งจะเข้าใจผิดว่าเซลได้ดีลแล้ว
-        if ($product['status'] === 'ARCHIVED') {
-            throw ApiException::badRequest("สินค้า {$product['sku']} ถูกปิดใช้งานแล้ว — เปิดใช้งานก่อนจึงจะผูกดีลได้");
-        }
+        // สินค้าที่ปิดใช้งาน/ลบแล้วบันทึกยอดใหม่ไม่ได้ — ผูกดีลใหม่ไว้ก็ไม่มีวันได้คอม คนตั้งจะเข้าใจผิดว่าเซลได้ดีลแล้ว
+        ProductService::assertActive($product, 'ผูกดีล');
         $dated = ! empty($input['startDate']) || ! empty($input['endDate']);
         if ($dated) {
             $startDate = Period::assertDate($input['startDate'] ?? Period::today(), 'startDate');
@@ -392,6 +390,8 @@ final class SalesAgentService
             throw ApiException::badRequest('endDate ต้องไม่น้อยกว่า startDate');
         }
         if ($startDate !== $row['start_date'] || $endDate !== $row['end_date']) {
+            // สินค้าที่ลบแล้ว: ดีลถูกปิดตอนลบ — แก้ % / เหมา / หมายเหตุได้ (ค่าตั้งต้นของรายการที่ยังติ๊กทำบิลค่าคอมได้) แต่ขยับวันที่ = เปิดดีลให้ของที่ไม่มีอยู่แล้ว
+            self::assertProductNotDeleted((int) $row['product_id'], 'เปลี่ยนวันที่ของดีล');
             $clash = self::overlappingLinks((int) $row['product_id'], $startDate, $endDate, $id);
             if ($clash !== []) {
                 throw ApiException::conflict(
@@ -447,6 +447,8 @@ final class SalesAgentService
 
             return self::getLink($id);
         }
+        // ดีลของสินค้าที่ลบแล้วถูกปิดไปตอนลบ (กดปิดซ้ำแบบไม่ระบุวันจบที่บรรทัดบน) — ย้ายวันปิดทีหลังไม่ได้
+        self::assertProductNotDeleted((int) $row['product_id'], 'เปลี่ยนวันปิดดีล');
         $date = Period::assertDate($endDate ?? $today, 'endDate');
         if ($date < $row['start_date']) {
             throw ApiException::badRequest('ดีลนี้เริ่มวันที่ ' . Period::thDate($row['start_date']) . ' — วันปิดดีลต้องไม่ก่อนวันเริ่ม');
@@ -455,6 +457,14 @@ final class SalesAgentService
         Audit::write($actorUserId, 'sales_link.end', 'sales_link', $id, ['endDate' => $date]);
 
         return self::getLink($id);
+    }
+
+    private static function assertProductNotDeleted(int $productId, string $action): void
+    {
+        $p = Db::one('SELECT sku, status FROM products WHERE id = ?', [$productId]);
+        if (($p['status'] ?? null) === 'DELETED') {
+            throw ApiException::conflict("สินค้า {$p['sku']} ถูกลบแล้ว — {$action}ไม่ได้ (ดีลถูกปิดตอนลบสินค้า)");
+        }
     }
 
     public static function serializeLink(array $row): array

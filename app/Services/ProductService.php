@@ -21,10 +21,15 @@ final class ProductService
     {
         $taken = Db::one('SELECT status FROM products WHERE LOWER(sku) = LOWER(?)', [$input['sku']]);
         if ($taken !== null) {
-            // สินค้าลบไม่ได้ SKU จึงไม่เคยว่างคืน — ถ้าเป็นของที่ปิดใช้งานไว้ บอกทางให้เปิดของเดิมแทน
-            throw ApiException::conflict($taken['status'] === 'ARCHIVED'
-                ? "รหัสสินค้า (SKU) \"{$input['sku']}\" เป็นของสินค้าที่ปิดใช้งานไว้ — เปิดใช้งานสินค้าเดิมอีกครั้ง หรือใช้รหัสอื่น"
-                : "รหัสสินค้า (SKU) \"{$input['sku']}\" ถูกใช้ไปแล้ว");
+            /*
+             * ลบจริงแล้ว SKU ว่างคืน · ลบแบบซ่อน (บิลเก่ายังอ้างถึง) SKU ใช้ซ้ำไม่ได้ — บิลเก่าจะอ่านเป็นสินค้าใหม่ชื่อเดียวกัน
+             * ของที่ปิดใช้งานไว้ บอกทางให้เปิดของเดิมแทน
+             */
+            throw ApiException::conflict(match ($taken['status']) {
+                'ARCHIVED' => "รหัสสินค้า (SKU) \"{$input['sku']}\" เป็นของสินค้าที่ปิดใช้งานไว้ — เปิดใช้งานสินค้าเดิมอีกครั้ง หรือใช้รหัสอื่น",
+                'DELETED'  => "รหัส {$input['sku']} เคยใช้กับสินค้าที่ลบไปแล้ว (บิลเก่ายังอ้างถึง) — ใช้รหัสอื่น",
+                default    => "รหัสสินค้า (SKU) \"{$input['sku']}\" ถูกใช้ไปแล้ว",
+            });
         }
         // % ส่วนต่างผูกกับสินค้า ต้องกำหนดตั้งแต่สร้าง — เป็นแหล่งเดียวที่ระบบใช้คิดเงิน
         $bp = Money::pctToBp($input['commissionPct'] ?? null, 'commissionPct');
@@ -60,25 +65,36 @@ final class ProductService
     }
 
     /**
+     * สัญญาที่ "ถืออยู่" ณ วันที่ — ร้านที่ถูกลบไม่ถือสินค้าอะไรแล้ว (FranchiseService::delete ปิดสัญญาวันนี้ให้
+     * แต่สัญญาที่จบวันนี้ยังนับว่าถือถึงสิ้นวัน) ไม่งั้นสินค้าของร้านที่ลบไปขึ้นว่าอยู่กับร้านนั้นและมอบหมายต่อไม่ได้จนพรุ่งนี้
+     * วงเล็บ = join ร้านก่อนแล้วค่อย LEFT JOIN ทั้งก้อน สินค้าที่ไม่มีสัญญาเลยยังออกมาครบ
+     * ใช้ ? สองตัว (วันที่) — ต้องมาก่อนพารามิเตอร์ของ WHERE
+     */
+    private const CURRENT_ASSIGNMENT_JOIN = "
+               LEFT JOIN (product_assignments a
+                          JOIN franchises f ON f.id = a.franchise_id AND f.status <> 'DELETED')
+                      ON a.product_id = p.id
+                     AND a.start_date <= ?
+                     AND (a.end_date IS NULL OR a.end_date >= ?)";
+
+    /**
+     * สินค้าที่ลบแล้ว (DELETED) = ไม่พบ สำหรับทุกคน — ประวัติ (บิล ยอดขาย ดีล) join ชื่อ/รหัสจากตารางเองอยู่แล้ว ไม่ผ่านตัวนี้
+     *
      * @param bool $includeInGroups false = ไม่บอกว่าสินค้านี้อยู่ในกลุ่มไหน (ร้านค้า — กลุ่มนั้นอาจเป็นของร้านอื่น)
      */
     public static function get(int $id, bool $includeInGroups = true): array
     {
         $today = Clock::todayUtc();
         $row   = Db::one(
-            'SELECT p.*,
+            "SELECT p.*,
                     a.id           AS assignment_id,
                     a.franchise_id AS assigned_franchise_id,
                     a.start_date   AS assigned_start_date,
                     a.end_date     AS assigned_end_date,
                     f.username     AS assigned_franchise_username
                FROM products p
-               LEFT JOIN product_assignments a
-                      ON a.product_id = p.id
-                     AND a.start_date <= ?
-                     AND (a.end_date IS NULL OR a.end_date >= ?)
-               LEFT JOIN franchises f ON f.id = a.franchise_id
-              WHERE p.id = ?',
+               " . self::CURRENT_ASSIGNMENT_JOIN . "
+              WHERE p.id = ? AND p.status <> 'DELETED'",
             [$today, $today, $id],
         ) ?? throw ApiException::notFound('ไม่พบสินค้า');
 
@@ -89,13 +105,35 @@ final class ProductService
         );
     }
 
+    /**
+     * แถวดิบรวมสินค้าที่ลบแล้ว — ใช้ภายในเท่านั้น ผู้เรียกต้องตรวจ status เอง (assertActive)
+     * ไม่ส่งออกหน้าเว็บตรง ๆ
+     */
     public static function getRow(int $id): array
     {
         return Db::one('SELECT * FROM products WHERE id = ?', [$id]) ?? throw ApiException::notFound('ไม่พบสินค้า');
     }
 
     /**
-     * รายการสินค้า
+     * งานที่ทำได้เฉพาะสินค้าที่ยังใช้งาน (บันทึกยอด มอบหมาย ผูกดีล ใส่เป็นรายการย่อย) — ข้อความบอกสถานะจริงและทางไปต่อ
+     * ปิดใช้งาน = ชั่วคราว เปิดกลับได้ (400 แบบเดิม) · ลบแล้ว = ถาวร (409 — ต้องเลือกสินค้าอื่น)
+     *
+     * @param string $action เช่น 'บันทึกยอด' · 'มอบหมายให้ร้าน' · 'ผูกดีล' — ต่อท้าย "…ก่อนจึงจะ{action}ได้"
+     */
+    public static function assertActive(array $row, string $action): void
+    {
+        if ($row['status'] === 'ACTIVE') {
+            return;
+        }
+        if ($row['status'] === 'DELETED') {
+            throw ApiException::conflict("สินค้า {$row['sku']} ถูกลบแล้ว — {$action}ไม่ได้อีก (บิลเก่ายังแสดงสินค้านี้ตามเดิม) · ใช้สินค้าอื่นแทน");
+        }
+
+        throw ApiException::badRequest("สินค้า {$row['sku']} ถูกปิดใช้งานแล้ว — เปิดใช้งานที่หน้าสินค้าก่อนจึงจะ{$action}ได้");
+    }
+
+    /**
+     * รายการสินค้า — ไม่มีสินค้าที่ลบแล้วเสมอ ทุกตัวกรอง (แท็บ ใช้งาน/ปิดใช้งาน/ทั้งหมด · ตัวเลือกในหน้าอื่น · รายการย่อยของกลุ่ม)
      * - franchiseId: เห็นเฉพาะสินค้าที่ถูกมอบหมายให้ร้านนั้น (ณ วันที่ที่ระบุ / วันนี้)
      * - unassignedOnly: เฉพาะสินค้าที่ยังว่าง พร้อมมอบหมาย
      * - isGroup: true = เฉพาะสินค้ากลุ่ม · false = เฉพาะสินค้าเดี่ยว · null = ทั้งหมด
@@ -104,7 +142,7 @@ final class ProductService
     public static function list(?int $franchiseId = null, ?string $status = null, ?string $q = null, bool $unassignedOnly = false, ?string $onDate = null, ?bool $isGroup = null, bool $includeInGroups = true): array
     {
         $date   = $onDate ?? Period::today();
-        $where  = [];
+        $where  = ["p.status <> 'DELETED'"];
         $params = [$date, $date]; // ใช้ใน JOIN ก่อน จึงต้องมาก่อนพารามิเตอร์ของ WHERE
         if ($status) {
             $where[]  = 'p.status = ?';
@@ -132,12 +170,8 @@ final class ProductService
                     a.start_date AS assigned_start_date, a.end_date AS assigned_end_date,
                     f.username AS assigned_franchise_username
                FROM products p
-               LEFT JOIN product_assignments a
-                      ON a.product_id = p.id
-                     AND a.start_date <= ?
-                     AND (a.end_date IS NULL OR a.end_date >= ?)
-               LEFT JOIN franchises f ON f.id = a.franchise_id
-               ' . ($where ? 'WHERE ' . implode(' AND ', $where) : '') . '
+               ' . self::CURRENT_ASSIGNMENT_JOIN . '
+              WHERE ' . implode(' AND ', $where) . '
               ORDER BY p.sku',
             $params,
         );
@@ -153,17 +187,18 @@ final class ProductService
     /**
      * แก้ % ของสินค้า — มีผลกับยอดที่บันทึกใหม่เท่านั้น ยอดเก่าเก็บ snapshot ไว้แล้ว
      *
-     * สินค้าลบไม่ได้ (บิล/ยอดขาย/ดีลย้อนหลังอ้างถึงอยู่) — เลิกขายใช้ status ARCHIVED = "ปิดใช้งาน" แทน
+     * หยุดขายชั่วคราวใช้ status ARCHIVED = "ปิดใช้งาน" (เลิกขายถาวรใช้ delete())
      * ปิดใช้งานแล้วสัญญามอบหมายและดีลเซลที่ยังเปิดอยู่คงไว้เหมือนเดิม ไม่ตัดจบให้
      * เพราะเปิดใช้งานอีกครั้งต้องขายต่อได้ทันทีโดยไม่ต้องมอบหมาย/ผูกดีลใหม่
      * ระหว่างปิด บันทึกยอดใหม่ไม่ได้ (SalesService::upsert) แต่ยอดที่บันทึกไว้แล้วยังออกบิลได้ตามปกติ
+     * status ตั้งเป็น DELETED ทาง PATCH ไม่ได้ (controller รับแค่ ACTIVE/ARCHIVED) · สินค้าที่ลบแล้วแก้อะไรไม่ได้เลย (409)
      *
      * สินค้ากลุ่ม: isGroup เปิด/ปิด · itemProductIds = รายการย่อยทั้งชุด (ส่งมา = แทนที่ของเดิมทั้งหมด)
      *   ปิด isGroup = ล้างรายการย่อยทิ้ง · บิลที่ออกไปแล้วยังโชว์รายการย่อยเดิม (sales_entries.components_snapshot)
      */
     public static function update(int $id, array $patch, int $actorUserId): array
     {
-        self::getRow($id);
+        self::assertNotDeleted(self::getRow($id));
         $wantsGroup = array_key_exists('isGroup', $patch) ? $patch['isGroup'] === true : null;
         $itemIds    = array_key_exists('itemProductIds', $patch) ? self::uniqueIds($patch['itemProductIds']) : null;
         // ตรวจของที่ไม่ต้องอ่านฐานข้อมูลก่อน — ไม่ต้องล็อกแถวให้เสียเปล่า
@@ -197,6 +232,8 @@ final class ProductService
              */
             $locked = self::lockProducts([$id, ...($itemIds ?? [])]);
             $before = $locked[$id];
+            // ตรวจซ้ำหลังล็อก — อีกจอเพิ่งกดลบระหว่างที่คำขอนี้กำลังตรวจ input
+            self::assertNotDeleted($before);
             $plan   = self::planGroupChange($before, $wantsGroup, $itemIds, $locked);
             if ($plan['isGroup'] !== null) {
                 $sets[]   = 'is_group = ?';
@@ -237,6 +274,129 @@ final class ProductService
         });
 
         return self::get($id);
+    }
+
+    /* ── ลบสินค้า (R19 · 30 ก.ย. 69 — เจ้าของระบบกลับคำตัดสิน R5 "ลบไม่ได้") ─────────────── */
+
+    /**
+     * ลบสินค้าถาวร (ส่วนกลางเท่านั้น) — ต่างจาก "ปิดใช้งาน" ที่เปิดกลับได้
+     *
+     * ลองลบจริงก่อน (HARD) ถ้ามีประวัติอ้างถึง FK ของฐานข้อมูลจะกันไว้ แล้วเปลี่ยนเป็นลบแบบซ่อน (SOFT) ให้เอง — ดู Db::hardOrSoft
+     *   HARD: ไม่เคยมียอดขาย/บิลค่าคอม → ลบสัญญามอบหมาย ดีลเซล รายการย่อยของกลุ่ม และตัวสินค้าทิ้งทั้งหมด (SKU ว่างใช้ใหม่ได้)
+     *   SOFT: มีบิลแล้ว → status DELETED หายจากทุกรายการ/ตัวเลือก แต่บิล ยอดขาย บิลค่าคอมเก่ายัง join รหัส/ชื่อได้ตามเดิม
+     *         สัญญาและดีลที่ยังเปิดอยู่ปิดวันนี้ (ไม่ปิด = สินค้าที่ลบแล้วยังนับว่าร้าน/เซลถืออยู่)
+     *
+     * ด่าน (409) ตรวจบนแถวที่ล็อกแล้วในทั้งสองรอบ:
+     *   - ยอดขายที่ยังไม่ออกบิล — ลบแบบซ่อนแล้วยอดนั้นจะค้างไม่มีใครเห็น (ห้ามทิ้งเงินที่ยังไม่ได้เรียกเก็บ)
+     *   - เป็นรายการย่อยชิ้นสุดท้ายของกลุ่ม — เอาออกแล้วกลุ่มจะว่าง ผิดกติกา "กลุ่มต้องมีอย่างน้อย 1"
+     * ผ่านด่านแล้วเอาออกจากทุกกลุ่มที่สังกัด · ถ้าตัวเองเป็นกลุ่ม ล้างรายการย่อยของตัวเอง (บิลเก่าใช้ snapshot ไม่ได้อ่านตารางนี้)
+     *
+     * @return array{deleted: true, id: int, sku: string, mode: 'HARD'|'SOFT'}
+     */
+    public static function delete(int $id, array $actor): array
+    {
+        $actorId = (int) $actor['id'];
+
+        return Db::hardOrSoft(
+            static function () use ($id, $actorId): array {
+                $p = self::lockForDelete($id);
+                self::detachFromGroups($p);
+                Db::exec('DELETE FROM product_assignments WHERE product_id = ?', [$id]);
+                Db::exec('DELETE FROM product_sales_links WHERE product_id = ?', [$id]);
+                Db::exec('DELETE FROM products WHERE id = ?', [$id]);
+                Audit::write($actorId, 'product.delete', 'product', $id, [
+                    'sku'               => $p['row']['sku'],
+                    'name'              => $p['row']['name'],
+                    'mode'              => 'HARD',
+                    'removedFromGroups' => $p['parents'],
+                ]);
+
+                return ['deleted' => true, 'id' => $id, 'sku' => $p['row']['sku'], 'mode' => 'HARD'];
+            },
+            static function () use ($id, $actorId): array {
+                $p     = self::lockForDelete($id);
+                $today = Period::today();
+                self::detachFromGroups($p);
+                /*
+                 * ปิดสัญญา/ดีลที่ยังเปิดอยู่วันนี้ — แบบเดียวกับ endLink: ที่ยังไม่ถึงวันเริ่มตั้งทั้งสองวันเป็นวันนี้ (ผ่าน CHECK วันจบ ≥ วันเริ่ม)
+                 * SET เรียงแบบนี้เพราะ MySQL ใช้ค่าที่เพิ่งแก้ในบรรทัดเดียวกัน — start ต้องถูกดึงลงก่อนตั้ง end
+                 */
+                $assignments = Db::exec(
+                    'UPDATE product_assignments SET start_date = LEAST(start_date, ?), end_date = ?, updated_at = UTC_TIMESTAMP()
+                      WHERE product_id = ? AND (end_date IS NULL OR end_date > ?)',
+                    [$today, $today, $id, $today],
+                );
+                $deals = Db::exec(
+                    'UPDATE product_sales_links SET start_date = LEAST(start_date, ?), end_date = ?, updated_at = UTC_TIMESTAMP()
+                      WHERE product_id = ? AND (end_date IS NULL OR end_date > ?)',
+                    [$today, $today, $id, $today],
+                );
+                Db::exec(
+                    "UPDATE products SET status = 'DELETED', deleted_at = UTC_TIMESTAMP(), deleted_by_user_id = ?, updated_at = UTC_TIMESTAMP()
+                      WHERE id = ?",
+                    [$actorId, $id],
+                );
+                Audit::write($actorId, 'product.delete', 'product', $id, [
+                    'sku'               => $p['row']['sku'],
+                    'name'              => $p['row']['name'],
+                    'mode'              => 'SOFT',
+                    'invoicedEntries'   => Db::int("SELECT COUNT(*) FROM sales_entries WHERE product_id = ? AND status = 'INVOICED'", [$id]),
+                    'endedAssignments'  => $assignments,
+                    'endedDeals'        => $deals,
+                    'removedFromGroups' => $p['parents'],
+                ]);
+
+                return ['deleted' => true, 'id' => $id, 'sku' => $p['row']['sku'], 'mode' => 'SOFT'];
+            },
+        );
+    }
+
+    /**
+     * ล็อกสินค้าแล้วตรวจด่านของการลบ — คำสั่งแรกของทรานแซกชันเสมอ (อ่านอะไรก่อนล็อก = เห็นภาพเก่า ดู HANDOVER)
+     * แถวรายการย่อยที่ชี้มาหาสินค้านี้ล็อกไว้ด้วย · นับรายการย่อยของกลุ่มแม่แบบล็อก (share) ให้เห็นของที่อีกจอเพิ่ง commit
+     * ไม่ล็อกแถวสินค้ากลุ่มแม่ — จอที่กำลังแก้กลุ่มนั้นล็อกกลุ่มก่อนสินค้าย่อย (เรียงตาม id) ล็อกสวนกันจะ deadlock
+     *
+     * @return array{row: array, parents: list<string>}
+     */
+    private static function lockForDelete(int $id): array
+    {
+        $row = Db::one('SELECT id, sku, name, status, is_group FROM products WHERE id = ? FOR UPDATE', [$id]);
+        if ($row === null || $row['status'] === 'DELETED') {
+            throw ApiException::notFound('ไม่พบสินค้า');
+        }
+        $unbilled = Db::int("SELECT COUNT(*) FROM sales_entries WHERE product_id = ? AND status <> 'INVOICED' LOCK IN SHARE MODE", [$id]);
+        if ($unbilled > 0) {
+            throw ApiException::conflict("สินค้า {$row['sku']} มียอดขายที่ยังไม่ออกบิล {$unbilled} รายการ — ออกบิลหรือลบยอดนั้นที่หน้า \"ยอดขายรายรอบ\" ก่อน");
+        }
+
+        $parentIds = array_map('intval', array_column(
+            Db::all('SELECT group_product_id FROM product_group_items WHERE item_product_id = ? ORDER BY group_product_id FOR UPDATE', [$id]),
+            'group_product_id',
+        ));
+        $parents = [];
+        if ($parentIds !== []) {
+            $sizes = [];
+            foreach (Db::all('SELECT group_product_id, COUNT(*) AS n FROM product_group_items WHERE group_product_id IN ? GROUP BY group_product_id LOCK IN SHARE MODE', [$parentIds]) as $r) {
+                $sizes[(int) $r['group_product_id']] = (int) $r['n'];
+            }
+            $skus    = array_column(Db::all('SELECT id, sku FROM products WHERE id IN ? ORDER BY sku', [$parentIds]), 'sku', 'id');
+            $lastOf  = array_values(array_filter($parentIds, static fn ($g) => ($sizes[$g] ?? 0) <= 1));
+            if ($lastOf !== []) {
+                $groupSkus = implode(', ', array_map(static fn ($g) => $skus[$g] ?? "#{$g}", $lastOf));
+
+                throw ApiException::conflict("สินค้า {$row['sku']} เป็นสินค้าย่อยชิ้นสุดท้ายของสินค้ากลุ่ม {$groupSkus} — เพิ่มสินค้าย่อยอื่นหรือเปลี่ยนกลุ่มก่อน");
+            }
+            $parents = array_values($skus);
+        }
+
+        return ['row' => $row, 'parents' => $parents];
+    }
+
+    /** เอาสินค้าออกจากทุกกลุ่มที่สังกัด + ล้างรายการย่อยของตัวเอง (ถ้าเป็นกลุ่ม) — ต้องเกิดก่อน DELETE ตัวสินค้า (FK) */
+    private static function detachFromGroups(array $locked): void
+    {
+        $id = (int) $locked['row']['id'];
+        Db::exec('DELETE FROM product_group_items WHERE item_product_id = ? OR group_product_id = ?', [$id, $id]);
     }
 
     /* ── สินค้ากลุ่ม (ชุด) ─────────────────────────────────────────── */
@@ -321,13 +481,26 @@ final class ProductService
         if ($nested !== []) {
             throw ApiException::badRequest('สินค้ากลุ่มใส่สินค้ากลุ่มอื่นเป็นรายการย่อยไม่ได้ (' . implode(', ', $nested) . ') — เอาออกจากรายการที่ติ๊กไว้');
         }
+        // สินค้าที่ลบแล้วไม่อยู่ในกลุ่มไหนอยู่แล้ว (delete() เอาออกให้) — ติ๊กมาได้ก็แค่จากหน้าเว็บที่ค้างของเก่า/ยิง API ตรง
+        $deleted = array_column(array_filter($rows, static fn ($r) => $r['status'] === 'DELETED'), 'sku');
+        if ($deleted !== []) {
+            throw ApiException::conflict('สินค้า ' . implode(', ', $deleted) . ' ถูกลบแล้ว ใส่เป็นรายการย่อยไม่ได้ — โหลดหน้าใหม่แล้วเลือกสินค้าอื่น');
+        }
         $keep     = array_flip(array_map('intval', $currentIds));
-        $archived = array_column(array_filter($rows, static fn ($r) => $r['status'] === 'ARCHIVED' && ! isset($keep[(int) $r['id']])), 'sku');
+        $archived = array_column(array_filter($rows, static fn ($r) => $r['status'] !== 'ACTIVE' && ! isset($keep[(int) $r['id']])), 'sku');
         if ($archived !== []) {
             throw ApiException::badRequest('สินค้า ' . implode(', ', $archived) . ' ถูกปิดใช้งานแล้ว เพิ่มเป็นรายการย่อยใหม่ไม่ได้ — เปิดใช้งานสินค้านั้นก่อน หรือเลือกสินค้าอื่น');
         }
 
         return $rows;
+    }
+
+    /** สินค้าที่ลบแล้ว (แบบซ่อน) แก้อะไรไม่ได้อีก — ข้อความเดียวกันทั้งก่อนและหลังล็อก */
+    private static function assertNotDeleted(array $row): void
+    {
+        if ($row['status'] === 'DELETED') {
+            throw ApiException::conflict('สินค้านี้ถูกลบแล้ว — แก้ไขไม่ได้ (บิลเก่ายังแสดงสินค้านี้ตามเดิม) · โหลดหน้าใหม่');
+        }
     }
 
     /** @param list<int> $itemIds */

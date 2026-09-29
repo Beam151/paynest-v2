@@ -140,7 +140,11 @@ class ApiGuard implements FilterInterface
             [(int) $sub],
         ) : null;
 
-        if ($user === null || $user['status'] !== 'ACTIVE') {
+        /*
+         * ร้านที่ลบแล้ว: ตอนลบระบบปิดผู้ใช้ทุกคน + token_version + 1 ให้อยู่แล้ว — ตรวจร้านซ้ำอีกชั้น
+         * กันผู้ใช้ถูกเปิดกลับทีหลัง (แก้ฐานข้อมูลตรง ๆ) แล้วได้ session ของร้านที่ไม่มีอยู่แล้ว
+         */
+        if ($user === null || $user['status'] !== 'ACTIVE' || ($user['role'] === 'FRANCHISE' && $user['franchise_status'] === 'DELETED')) {
             throw ApiException::unauthorized('บัญชีนี้ถูกปิดใช้งาน');
         }
         // รหัสผ่านถูกเปลี่ยนหลังออก token นี้ — ต้องล็อกอินใหม่

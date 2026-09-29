@@ -231,6 +231,8 @@ final class InvoiceService
         $period    = PeriodService::getByCode($input['periodCode']);
         $franchise = Db::one('SELECT * FROM franchises WHERE id = ?', [(int) $input['franchiseId']]) ?? throw ApiException::notFound('ไม่พบร้านค้า');
         $currency  = $input['currency'] ?? 'THB';
+        // ลบได้เฉพาะตอนไม่มียอดค้างออกบิล และหลังลบก็บันทึกยอดใหม่ไม่ได้ — มาถึงตรงนี้ได้แค่จากหน้าเว็บที่ค้างของเก่า
+        self::assertShopNotDeleted($franchise);
 
         // 1 ร้าน / 1 รอบบิล = ใบเดียว — รายการที่ยังไม่ได้เรียกเก็บให้เพิ่มเข้าใบเดิมแทน
         $active = Db::one("SELECT * FROM invoices WHERE franchise_id = ? AND period_id = ? AND status <> 'VOID' LIMIT 1", [$franchise['id'], $period['id']]);
@@ -684,6 +686,7 @@ final class InvoiceService
         if ($inv['status'] === 'VOID') {
             throw ApiException::conflict('ใบเรียกเก็บนี้ถูกยกเลิกแล้ว');
         }
+        self::assertShopNotDeleted(Db::one('SELECT username, status FROM franchises WHERE id = ?', [$inv['franchise_id']]) ?? []);
         /*
          * PAID ที่ยังไม่มีเงินเข้าเลย = บิลยอด 0 (รอบที่ติดลบ หรือยอดยกมาหักจนหมดพอดี)
          * ใบพวกนี้ต้องแก้ได้ ไม่งั้นยอดบวกที่เข้ามาทีหลังในรอบเดียวกันจะขึ้นบิลไม่ได้เลย
@@ -698,6 +701,17 @@ final class InvoiceService
         }
         if (Db::int("SELECT COUNT(*) FROM payment_submissions WHERE invoice_id = ? AND status = 'PENDING'", [$inv['id']]) > 0) {
             throw ApiException::conflict('มีสลิปรอตรวจสอบอยู่ — ตรวจให้เสร็จ หรือให้ร้านยกเลิกการแจ้งก่อนจึงจะแก้บิลได้');
+        }
+    }
+
+    /**
+     * ร้านที่ลบแล้ว: บิลเก่าเป็นประวัติอ่านอย่างเดียว — ลบได้เฉพาะตอนไม่มีบิลค้าง จึงเหลือแค่บิลที่จ่ายครบ/ยอด 0/ยกเลิกแล้ว
+     * แก้/เพิ่มยอดทีหลัง = สร้างหนี้ให้ร้านที่ไม่มีใครเข้าระบบมาจ่ายได้
+     */
+    private static function assertShopNotDeleted(array $franchise): void
+    {
+        if (($franchise['status'] ?? null) === 'DELETED') {
+            throw ApiException::conflict("ร้าน {$franchise['username']} ถูกลบแล้ว — บิลของร้านนี้เก็บไว้เป็นประวัติ ออกใหม่/แก้/ยกเลิกไม่ได้");
         }
     }
 
@@ -1090,6 +1104,8 @@ final class InvoiceService
         if ((int) $inv['paid_satang'] > 0) {
             throw ApiException::conflict('ใบเรียกเก็บที่มีการชำระแล้วยกเลิกไม่ได้');
         }
+        // บิลยอด 0 ของร้านที่ลบแล้ว — ยกเลิกแล้วยอดขายจะกลับไปเป็น "ยังไม่ออกบิล" ของร้านที่ไม่มีอยู่ (ไม่มีใครออกบิลใหม่ได้อีก)
+        self::assertShopNotDeleted(Db::one('SELECT username, status FROM franchises WHERE id = ?', [$inv['franchise_id']]) ?? []);
 
         return Db::tx(static function () use ($id, $reason, $inv, $user) {
             /*

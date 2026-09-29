@@ -151,13 +151,33 @@ final class Db
         }
     }
 
+    /** อยู่ในทรานแซกชันของ tx() อยู่หรือเปล่า — งานที่ต้องเป็นชั้นนอกสุดใช้ตรวจตัวเอง (ดู hardOrSoft) */
+    public static function inTx(): bool
+    {
+        return self::$txDepth > 0;
+    }
+
     /**
      * error จากฐานข้อมูลที่เป็น "ข้อมูลขัดกับข้อกำหนด" (ซ้ำ / FK / CHECK / trigger)
      * ตอบ 409 โดยไม่เผยชื่อตาราง-คอลัมน์ออกไป
      */
     public static function isConstraintError(Throwable $e): bool
     {
-        $codes = [1022, 1048, 1062, 1169, 1216, 1217, 1451, 1452, 1557, 1644, 3819, 4025];
+        return self::hasCode($e, [1022, 1048, 1062, 1169, 1216, 1217, 1451, 1452, 1557, 1644, 3819, 4025]);
+    }
+
+    /**
+     * ลบแถวแม่ไม่ได้เพราะยังมีแถวลูกอ้างถึง (FK) — 1451 (MySQL/MariaDB ปัจจุบัน) · 1217 (รหัสเดิมของเรื่องเดียวกัน)
+     * ไม่รวม 1452 (ใส่แถวลูกที่ชี้ไปแม่ที่ไม่มี) — นั่นคือบั๊ก/ข้อมูลผิด ไม่ใช่สัญญาณว่า "มีประวัติ ให้ลบแบบซ่อนแทน"
+     */
+    public static function isForeignKeyError(Throwable $e): bool
+    {
+        return self::hasCode($e, [1451, 1217]);
+    }
+
+    /** exception ของ CI ห่อ mysqli_sql_exception ไว้ข้างใน — ไล่ดูรหัสทุกชั้น */
+    private static function hasCode(Throwable $e, array $codes): bool
+    {
         for ($x = $e; $x !== null; $x = $x->getPrevious()) {
             if (in_array((int) $x->getCode(), $codes, true)) {
                 return true;
@@ -165,5 +185,42 @@ final class Db
         }
 
         return false;
+    }
+
+    /**
+     * ลบจริงก่อน ติด FK ค่อยลบแบบซ่อน — ใช้กับของที่ "ลบได้ถ้าไม่มีใครอ้างถึง" (สินค้า ร้านค้า)
+     *
+     * ให้ฐานข้อมูลเป็นคนตัดสินว่ามีประวัติอ้างถึงหรือเปล่า แทนการไล่นับเองทีละตาราง:
+     * ตารางที่ชี้มาที่ users อย่างเดียวก็ราว 30 FK และทุกตารางใหม่ที่เพิ่มทีหลังจะถูกนับเองโดยไม่ต้องมีใครจำมาแก้ตรงนี้
+     * ลืมนับตารางเดียว = ลบของที่บิลเก่ายังอ้างถึง (ถ้าตารางนั้นไม่มี FK ก็ไม่มีอะไรกัน) หรือ DELETE ล้มกลางทางเป็น error 500
+     *
+     * $hard กับ $soft ต้องเริ่มด้วยการล็อกแถวแล้วตรวจเงื่อนไข (409) เองทั้งคู่ — ระหว่างสองก้อนมีช่องว่างที่อีกจออาจแก้ข้อมูลไปแล้ว
+     * $hard ล้มด้วย FK (1451) → CI rollback ทั้งก้อน (รวมที่ลบลูกไปแล้วในก้อนเดียวกัน) → เปิดทรานแซกชันใหม่ทำ $soft
+     * error อื่นโยนต่อตามปกติ (ไม่เดาว่าควรซ่อนแทน)
+     *
+     * ต้องเป็นทรานแซกชันชั้นนอกสุด: query ที่พังข้างใน CI rollback ทุกชั้นทันที (ไม่มี savepoint)
+     * ถ้าเรียกซ้อนอยู่ใน tx() ของคนอื่น งานที่ชั้นนอกทำไว้ก่อนหน้าจะหายไปเงียบ ๆ แล้ว $soft ไปทำต่อในทรานแซกชันที่ไม่ใช่ของมัน
+     *
+     * @template T
+     *
+     * @param callable(): T $hard
+     * @param callable(): T $soft
+     *
+     * @return T
+     */
+    public static function hardOrSoft(callable $hard, callable $soft): mixed
+    {
+        if (self::inTx()) {
+            throw new RuntimeException('Db::hardOrSoft() ต้องเรียกนอกทรานแซกชัน — ลบจริงไม่สำเร็จแล้ว rollback ทั้งก้อน จะลากงานของชั้นนอกหายไปด้วย');
+        }
+        try {
+            return self::tx($hard);
+        } catch (Throwable $e) {
+            if (! self::isForeignKeyError($e)) {
+                throw $e;
+            }
+        }
+
+        return self::tx($soft);
     }
 }

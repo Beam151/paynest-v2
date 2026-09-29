@@ -18,10 +18,11 @@ final class ActivityService
         'franchise.create'               => 'สร้างร้านค้า',
         'franchise.update'               => 'แก้ไขข้อมูลร้าน',
         'franchise.login_link_rotate'    => 'สร้างลิงก์เข้าระบบใหม่ของร้าน',
+        'franchise.delete'               => 'ลบร้านค้า',
         'user.reset_password'            => 'ตั้งรหัสผ่านใหม่ให้ผู้ใช้',
         'product.create'                 => 'เพิ่มสินค้า',
         'product.update'                 => 'แก้ไขสินค้า',
-        'product.delete'                 => 'ลบสินค้า', // ของเก่าก่อนเลิกให้ลบสินค้า — เก็บไว้ให้ประวัติเดิมยังอ่านรู้เรื่อง
+        'product.delete'                 => 'ลบสินค้า', // detail.mode: HARD = ลบทิ้งจริง · SOFT = ซ่อน (บิลเก่ายังอ้างถึง) · ไม่มี mode = ของรุ่นก่อน R5
         'product.archive'                => 'ปิดใช้งานสินค้า',
         'product.activate'               => 'เปิดใช้งานสินค้าอีกครั้ง',
         'product.group_items'            => 'แก้รายการย่อยของสินค้ากลุ่ม',

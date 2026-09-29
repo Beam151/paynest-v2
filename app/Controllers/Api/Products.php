@@ -112,7 +112,7 @@ class Products extends BaseApiController
             'description' => V::string()->nullable()->optional(),
             // แก้ % ได้ แต่มีผลกับยอดที่บันทึกใหม่เท่านั้น ยอดเก่าเก็บ snapshot ไว้แล้ว
             'commissionPct' => V::pct()->optional(),
-            // ARCHIVED = ปิดใช้งาน (สินค้าลบไม่ได้) · ACTIVE = เปิดใช้งานอีกครั้ง
+            // ARCHIVED = ปิดใช้งาน (ชั่วคราว) · ACTIVE = เปิดใช้งานอีกครั้ง · DELETED ตั้งทางนี้ไม่ได้ — ลบใช้ DELETE (มีด่านตรวจ)
             'status' => V::enum(['ACTIVE', 'ARCHIVED'])->optional(),
             // false = เลิกเป็นกลุ่ม (ล้างรายการย่อย) · itemProductIds ส่งมา = แทนที่รายการย่อยทั้งชุด
             'isGroup'        => V::boolean()->optional(),
@@ -122,5 +122,12 @@ class Products extends BaseApiController
         return $this->json(ProductService::update(V::parseId($id), $body, (int) $this->user()['id']));
     }
 
-    // ไม่มี delete() โดยตั้งใจ — สินค้าลบไม่ได้ ใช้ PATCH status ARCHIVED (ปิดใช้งาน) / ACTIVE (เปิดใช้งานอีกครั้ง) แทน
+    /**
+     * ลบสินค้าถาวร (ส่วนกลางเท่านั้น — guard) · ระบบเลือกเองว่าลบจริงหรือลบแบบซ่อน แล้วตอบ mode กลับมา
+     * หยุดขายชั่วคราวใช้ PATCH status ARCHIVED (ปิดใช้งาน) แทน — เปิดกลับได้ สัญญา/ดีลยังอยู่
+     */
+    public function delete(string $id)
+    {
+        return $this->json(ProductService::delete(V::parseId($id), $this->user()));
+    }
 }

@@ -38,11 +38,16 @@ final class ReportService
     /**
      * รวมยอดตามเงื่อนไข — ใช้ช่วงวันที่ของรอบบิลเป็นตัวกรอง
      * (รอบบิลที่ "อยู่ในช่วง" คือรอบที่ทั้งรอบอยู่ภายใน start–end)
+     * ยอดของสินค้า/ร้านที่ลบแล้วนับเสมอ (เงินเกิดขึ้นจริง ออกบิลแล้ว — ตัดทิ้งแล้วยอดรวมไม่ตรงกับบิล)
+     * ยกเว้น $liveProductsOnly: การจัดอันดับที่หน้าแรก — สินค้าที่ลบแล้วไม่ควรขึ้นเป็น "สินค้าขายดี" ของรอบนี้
      */
-    private static function aggregate(string $start, string $end, mixed $franchiseId = null, mixed $productId = null, mixed $statuses = null, ?string $groupBy = null): array
+    private static function aggregate(string $start, string $end, mixed $franchiseId = null, mixed $productId = null, mixed $statuses = null, ?string $groupBy = null, bool $liveProductsOnly = false): array
     {
         $where  = ['bp.start_date >= ?', 'bp.end_date <= ?'];
         $params = [$start, $end];
+        if ($liveProductsOnly) {
+            $where[] = "p.status <> 'DELETED'";
+        }
         $where[]  = 'se.status IN ?';
         $params[] = self::normalizeStatuses($statuses);
         if ($franchiseId) {
@@ -292,7 +297,7 @@ final class ReportService
               WHERE ps.status = 'PENDING' {$where}",
             $params,
         );
-        $top = self::aggregate($cur['startDate'], $cur['endDate'], $franchiseId, null, null, 'product');
+        $top = self::aggregate($cur['startDate'], $cur['endDate'], $franchiseId, null, null, 'product', true);
         usort($top, static fn ($a, $b) => $b['grossAmount'] <=> $a['grossAmount']);
 
         return [
@@ -316,9 +321,13 @@ final class ReportService
     public static function shopStanding(int $franchiseId, string $periodCode): array
     {
         $periodId = Db::val('SELECT id FROM billing_periods WHERE code = ?', [$periodCode]);
+        // อันดับเทียบเฉพาะร้านที่ยังอยู่ — ร้านที่ลบแล้วไม่ใช่คู่เทียบของใคร (ยอดของมันยังอยู่ในรายงานตามปกติ)
         $totals   = $periodId === null ? [] : Db::all(
-            'SELECT franchise_id, SUM(gross_amount_satang) AS gross FROM sales_entries
-              WHERE period_id = ? GROUP BY franchise_id HAVING SUM(gross_amount_satang) > 0 ORDER BY gross DESC, franchise_id',
+            "SELECT se.franchise_id, SUM(se.gross_amount_satang) AS gross
+               FROM sales_entries se
+               JOIN franchises f ON f.id = se.franchise_id AND f.status <> 'DELETED'
+              WHERE se.period_id = ?
+              GROUP BY se.franchise_id HAVING SUM(se.gross_amount_satang) > 0 ORDER BY gross DESC, se.franchise_id",
             [$periodId],
         );
         $position = null;

@@ -34,6 +34,8 @@ final class NotificationService
         ['key' => 'security.captcha', 'group' => 'security', 'label' => 'เปิด / ปิด captcha หน้าเข้าสู่ระบบ', 'locked' => true],
         // ลิงก์เข้าระบบของร้านคือ "ของที่ต้องมี" คู่กับรหัสผ่าน — สร้างใหม่ = ทุกคนในร้านถูกออกจากระบบ ใครทำต้องเห็นทันที
         ['key' => 'security.shop_login_link', 'group' => 'security', 'label' => 'สร้างลิงก์เข้าระบบใหม่ให้ร้าน', 'locked' => true],
+        // ลบร้าน = ผู้ใช้ทุกคนของร้านเข้าไม่ได้อีก ลิงก์ตาย ย้อนกลับไม่ได้ — คนที่ได้บัญชีแอดมินไปใช้ตัดร้านทิ้งได้ กลุ่มต้องเห็นเสมอ
+        ['key' => 'security.shop_deleted', 'group' => 'security', 'label' => 'ลบร้านค้า', 'locked' => true],
 
         ['key' => 'security.login_lockout', 'group' => 'login', 'label' => 'มีคนเดารหัสผ่านจนถูกล็อก', 'default' => 'instant'],
         ['key' => 'security.login_captcha', 'group' => 'login', 'label' => 'บัญชีถูกใส่รหัสผิดหลายครั้ง จนต้องผ่าน captcha', 'default' => 'instant'],

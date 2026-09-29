@@ -44,30 +44,42 @@ export async function salesView() {
     .map((p) => ({ product: p, entry: entryByProduct.get(p.id) ?? null }));
 
   /*
-   * สินค้าที่ถูกปิดใช้งานไปแล้ว แต่มียอดบันทึกไว้ในรอบนี้ — ไม่อยู่ในรายการสินค้าที่ใช้งาน
-   * ถ้าไม่โชว์ ยอดพวกนี้จะหายไปจากหน้าจอทั้งที่ยังถูกนับในยอดรวมและยังออกบิลได้
+   * ยอดที่บันทึกไว้ในรอบนี้แต่ไม่เข้าแถวของสินค้าที่ใช้งาน — สินค้าถูกปิดใช้งาน/ถูกลบ หรือร้านเจ้าของยอดถูกลบ
+   * (สัญญาของร้านที่ถูกลบไม่นับเป็นเจ้าของสิทธิ์ขายแล้ว แม้ในรอบเก่าที่ร้านเคยถือ — สินค้าจึงไม่มีแถวให้ยอดนั้นไปอยู่)
+   * ถ้าไม่โชว์ ยอดพวกนี้จะหายไปจากหน้าจอทั้งที่ยังถูกนับในยอดรวม (และของที่ปิดใช้งานยังออกบิลได้)
    * โชว์เป็นแถวอ่านอย่างเดียว (กรอกยอดใหม่ไม่ได้ — เซิร์ฟเวอร์ปฏิเสธ) แต่ยังลบยอดที่ยังไม่ออกบิลได้
-   * ดึงรายการสินค้าที่ปิดใช้งานเฉพาะตอนมียอด (หรือตัวเลขที่พิมพ์ค้าง) ที่ไม่เข้าแถวไหนเลย — ปกติไม่ต้องยิงเพิ่ม
+   * ของที่ถูกลบ = ลบแบบซ่อนเพราะมีบิลอ้างถึง (ที่ไม่เคยมียอดถูกลบทิ้งจริง ไม่มียอดให้โผล่ที่นี่) — ยอดของมันจึงออกบิลไปแล้วแทบทั้งหมด
+   * ดึงสถานะสินค้าเฉพาะตอนมียอด (หรือตัวเลขที่พิมพ์ค้าง) ที่ไม่เข้าแถวไหนเลย — ปกติไม่ต้องยิงเพิ่ม
    */
   const shownIds = new Set(activeRows.map((r) => r.product.id));
   const orphans = entriesRes.items.filter((e) => !shownIds.has(e.productId));
-  // ตัวเลขที่พิมพ์ค้างของสินค้าที่ไม่มีแถวในหน้านี้ — อาจถูกปิดใช้งานไปแล้ว หรือแค่ถูกตัวกรองร้านซ่อนไว้
+  // ตัวเลขที่พิมพ์ค้างของสินค้าที่ไม่มีแถวในหน้านี้ — อาจถูกปิดใช้งาน/ลบไปแล้ว หรือแค่ถูกตัวกรองร้านซ่อนไว้
   const strayDraftIds = [...drafts.keys()]
     .filter((k) => k.startsWith(`${periodCode}|`))
     .map((k) => Number(k.split('|')[1]))
     .filter((id) => !shownIds.has(id));
-  const archivedIds = (orphans.length || strayDraftIds.length)
-    ? new Set((await api.get(`/api/products${qs({ status: 'ARCHIVED' })}`)).items.map((p) => p.id))
-    : new Set();
-  const archivedRows = orphans
-    .filter((e) => archivedIds.has(e.productId))
+  /*
+   * รายการสินค้า/ร้านไม่เคยส่งของที่ถูกลบมา (ทุกแท็บ ทุกตัวกรอง) — ไม่อยู่ในรายการเลย = ถูกลบแล้ว
+   * ดึงสินค้าทุกสถานะทีเดียว (ไม่ใช่แค่ ARCHIVED) เพื่อแยก "ปิดใช้งาน" / "ลบแล้ว" / "ยังใช้งาน" ออกจากกันได้
+   * รายชื่อร้านโหลดไว้แล้วสำหรับตัวกรองด้านบน ใช้ตัวเดียวกันบอกว่าร้านไหนถูกลบ
+   */
+  const statusById = (orphans.length || strayDraftIds.length)
+    ? new Map((await api.get('/api/products')).items.map((p) => [p.id, p.status]))
+    : new Map();
+  const stateOf = (productId) => statusById.get(productId) ?? 'DELETED';
+  const liveShopIds = new Set(franchises.map((f) => f.id));
+  const retiredRows = orphans
+    .filter((e) => stateOf(e.productId) !== 'ACTIVE' || !liveShopIds.has(e.franchiseId))
     .map((e) => ({
-      archived: true,
+      readOnly: true,
+      // สถานะสินค้า 'ARCHIVED' | 'DELETED' หรือ null (สินค้ายังใช้งาน แต่ร้านถูกลบ) — ใช้เลือกป้ายและคำอธิบายว่าทำไมแก้ไม่ได้
+      retired: stateOf(e.productId) === 'ACTIVE' ? null : stateOf(e.productId),
+      shopDeleted: !liveShopIds.has(e.franchiseId),
       product: {
         id: e.productId,
         sku: e.sku,
         name: e.productName,
-        status: 'ARCHIVED',
+        status: stateOf(e.productId),
         commissionPct: e.commissionPct,
         isGroup: Boolean(e.isGroup),
         items: e.components ?? [],
@@ -76,13 +88,17 @@ export async function salesView() {
       entry: e,
     }));
   /*
-   * ตัวเลขที่พิมพ์ค้างไว้ของสินค้าที่เพิ่งถูกปิดใช้งาน บันทึกไม่ได้แล้ว — ไม่ให้ค้างนับในปุ่ม "บันทึกทั้งหมด"
+   * ตัวเลขที่พิมพ์ค้างไว้ของสินค้าที่เพิ่งถูกปิดใช้งาน/ลบ บันทึกไม่ได้แล้ว — ไม่ให้ค้างนับในปุ่ม "บันทึกทั้งหมด"
    * ต้องดูทุกตัวเลขค้างที่ไม่มีแถว ไม่ใช่แค่แถวที่มียอดบันทึกไว้แล้ว: สินค้าที่เพิ่งพิมพ์ยอดแรกแล้วถูกปิดใช้งาน
    * ไม่มีแถวให้เห็น แต่ปุ่มค้าง "(1)" กดแล้วพังทุกครั้ง และเบราว์เซอร์ถามทุกครั้งที่ปิด/รีเฟรช
-   * ลบเฉพาะของสินค้าที่ปิดใช้งานจริง — ของร้านอื่นที่ตัวกรองซ่อนไว้ยังบันทึกผ่าน "บันทึกทั้งหมด" ได้ตามปกติ
+   * ลบเฉพาะของสินค้าที่ปิดใช้งาน/ลบจริง — ของร้านอื่นที่ตัวกรองซ่อนไว้ยังบันทึกผ่าน "บันทึกทั้งหมด" ได้ตามปกติ
    */
-  for (const id of strayDraftIds) if (archivedIds.has(id)) drafts.delete(`${periodCode}|${id}`);
-  const rows = [...activeRows, ...archivedRows];
+  for (const id of strayDraftIds) if (stateOf(id) !== 'ACTIVE') drafts.delete(`${periodCode}|${id}`);
+  // นับทีละเหตุผล (แถวหนึ่งนับที่เดียว: สินค้าก่อน แล้วค่อยร้าน) — ใช้บอกใต้หัวตารางว่าแถวอ่านอย่างเดียวมาจากไหน
+  const archivedCount = retiredRows.filter((r) => r.retired === 'ARCHIVED').length;
+  const deletedCount = retiredRows.filter((r) => r.retired === 'DELETED').length;
+  const deletedShopCount = retiredRows.filter((r) => !r.retired && r.shopDeleted).length;
+  const rows = [...activeRows, ...retiredRows];
 
   // ยอดส่วนต่างรวมของรอบ ใช้โชว์ตัวอย่างการแปลงเป็นดอลลาร์ในฟอร์มตั้งอัตรา
   const summaryCommission = entriesRes.summary.commissionTotal;
@@ -139,13 +155,21 @@ export async function salesView() {
     }
   });
 
-  /** แถวของสินค้าที่ปิดใช้งาน — ยอดเป็นตัวหนังสือ แก้ไม่ได้ · ลบได้ถ้ายังไม่ออกบิล */
-  function archivedCells(row) {
+  /*
+   * แถวอ่านอย่างเดียว (สินค้าปิดใช้งาน/ถูกลบ หรือร้านถูกลบ) — ยอดเป็นตัวหนังสือ แก้ไม่ได้ · ลบยอดได้ถ้ายังไม่ออกบิล
+   * (ของที่ถูกลบมียอดยังไม่ออกบิลได้เฉพาะตอนบิลเก่าถูกยกเลิกทีหลัง — ลบยอดนั้นได้ แต่กรอกใหม่ไม่ได้อีกเลย)
+   * ข้อความบอกเหตุผลเรียงตามที่แก้ได้ยากสุดก่อน: สินค้าถูกลบ → ร้านถูกลบ → สินค้าปิดใช้งาน (เปิดกลับได้)
+   */
+  function retiredCells(row) {
     const invoiced = row.entry.status === 'INVOICED';
     const negative = row.entry.grossAmount < 0;
+    const [why, afterDelete] = row.retired === 'DELETED'
+      ? ['สินค้านี้ถูกลบแล้ว — ยอดนี้แก้ไม่ได้ (บิลเก่ายังแสดงสินค้านี้ตามเดิม)', 'สินค้านี้ถูกลบแล้ว ลบยอดแล้วกรอกใหม่ไม่ได้อีก']
+      : row.shopDeleted
+        ? [`ร้าน ${row.entry.franchiseUsername} ถูกลบแล้ว — ยอดนี้แก้ไม่ได้ (บิลเก่ายังแสดงร้านนี้ตามเดิม)`, `ร้าน ${row.entry.franchiseUsername} ถูกลบแล้ว ลบยอดแล้วกรอกให้ร้านนี้ใหม่ไม่ได้อีก`]
+        : ['สินค้านี้ถูกปิดใช้งานแล้ว — เปิดใช้งานที่หน้าสินค้าก่อนจึงจะกรอก/แก้ยอดได้', 'สินค้านี้ปิดใช้งานแล้ว ลบแล้วกรอกใหม่ไม่ได้จนกว่าจะเปิดใช้งาน'];
     return {
-      amount: el('div', { class: 'amount-cell', title: 'สินค้านี้ถูกปิดใช้งานแล้ว — เปิดใช้งานที่หน้าสินค้าก่อนจึงจะกรอก/แก้ยอดได้' },
-        el('strong', {}, money(row.entry.grossAmount))),
+      amount: el('div', { class: 'amount-cell', title: why }, el('strong', {}, money(row.entry.grossAmount))),
       commission: el('div', { class: 'commission-cell' },
         el('strong', { style: negative ? 'color:var(--danger)' : '' }, money(row.entry.commissionAmount)),
         negative ? el('div', { class: 'sub-line' }, 'ยอดคืน') : ''),
@@ -154,7 +178,7 @@ export async function salesView() {
           ? ''
           : el('button', {
             class: 'btn ghost sm danger',
-            onclick: () => confirmAction(`ลบยอดของ ${row.product.sku} ในรอบนี้? (สินค้านี้ปิดใช้งานแล้ว ลบแล้วกรอกใหม่ไม่ได้จนกว่าจะเปิดใช้งาน)`, async () => {
+            onclick: () => confirmAction(`ลบยอดของ ${row.product.sku} ในรอบนี้? (${afterDelete})`, async () => {
               await api.del(`/api/sales-entries/${row.entry.id}`);
               toast('ลบแล้ว', 'success');
               render();
@@ -165,8 +189,8 @@ export async function salesView() {
 
   function cellsOf(row) {
     if (cellCache.has(row)) return cellCache.get(row);
-    if (row.archived) {
-      const cells = archivedCells(row);
+    if (row.readOnly) {
+      const cells = retiredCells(row);
       cellCache.set(row, cells);
       return cells;
     }
@@ -328,14 +352,19 @@ export async function salesView() {
       sortValue: (r) => r.product.sku,
       render: (r) => el('div', {}, el('strong', {}, r.product.sku),
         isGroupRow(r) ? [' ', groupBadge()] : '',
-        r.archived ? el('span', { class: 'badge gray', style: 'margin-left:6px' }, 'ปิดใช้งาน') : '',
+        // ปิดใช้งาน (เทา · เปิดกลับได้) / ลบแล้ว (แดง · ถาวร) — ป้ายเดียวกับหน้าอื่นจาก badge()
+        r.retired ? [' ', badge(r.retired)] : '',
         el('div', { class: 'sub-line' }, r.product.name),
         isGroupRow(r) ? componentsLine(componentsOf(r), { short: true }) : ''),
     },
     {
       label: 'ร้านค้า',
       sortValue: (r) => r.product.currentAssignment.franchiseUsername,
-      render: (r) => avatar(r.product.currentAssignment.franchiseUsername, { sub: '' }),
+      // ร้านที่ถูกลบยังโชว์ชื่อเดิม (ยอด/บิลเก่าอ้างถึง) พร้อมป้าย "ลบแล้ว" — ไม่ให้เข้าใจว่ายังเป็นร้านที่ต้องกรอกยอด
+      render: (r) => (r.shopDeleted
+        ? el('div', { style: 'display:inline-flex;align-items:center;gap:6px' },
+          avatar(r.product.currentAssignment.franchiseUsername, { sub: '' }), badge('DELETED'))
+        : avatar(r.product.currentAssignment.franchiseUsername, { sub: '' })),
     },
     { label: 'ยอดขายเต็ม (บาท)', num: true, sortValue: (r) => r.entry?.grossAmount ?? -Infinity, render: (r) => cellsOf(r).amount },
     {
@@ -389,7 +418,9 @@ export async function salesView() {
     // ตัวกรองร้านอยู่ชิดขวาคู่กับหัวข้อตาราง แทนที่จะลอยเดี่ยว ๆ เป็นแถวของตัวเอง
     el('div', { class: 'toolbar' },
       el('h2', { class: 'section-title' }, `สินค้าที่ต้องกรอกยอดในรอบนี้ (${int(activeRows.length)})`,
-        archivedRows.length ? el('span', { class: 'sub-line' }, ` + ปิดใช้งานแล้วแต่มียอด ${int(archivedRows.length)}`) : ''),
+        archivedCount ? el('span', { class: 'sub-line' }, ` + ปิดใช้งานแล้วแต่มียอด ${int(archivedCount)}`) : '',
+        deletedCount ? el('span', { class: 'sub-line' }, ` + สินค้าที่ลบแล้วแต่มียอด ${int(deletedCount)}`) : '',
+        deletedShopCount ? el('span', { class: 'sub-line' }, ` + ยอดของร้านที่ลบแล้ว ${int(deletedShopCount)}`) : ''),
       el('div', { class: 'filters' },
         el('div', { class: 'field' }, el('label', {}, 'กรองตามร้านค้า'), franchisePicker),
         saveAll)),
@@ -399,8 +430,8 @@ export async function salesView() {
       search: 'ค้นหาสินค้าหรือร้าน…',
       empty: 'รอบนี้ยังไม่มีสินค้าที่ถูกมอบหมายให้ร้านใด — ไปหน้า "สินค้า" เพื่อมอบหมายก่อน',
       // รวมเฉพาะยอดที่บันทึกแล้ว — ตัวเลขที่ยังพิมพ์ค้างอยู่ยังไม่ใช่ข้อมูลจริง
-      footer: filled + archivedRows.length
-        ? ['', `รวม ${int(filled + archivedRows.length)} รายการที่กรอกแล้ว`,
+      footer: filled + retiredRows.length
+        ? ['', `รวม ${int(filled + retiredRows.length)} รายการที่กรอกแล้ว`,
           money(summary.grossTotal), '', money(summary.commissionTotal), '', '']
         : undefined,
     }), { tight: true }));

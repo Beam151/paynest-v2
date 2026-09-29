@@ -47,6 +47,8 @@ $routes->group('api', ['namespace' => 'App\Controllers\Api'], static function (R
     $routes->get('franchises/(:segment)/login-link', 'Franchises::loginLink/$1', $g('auth,staff'));
     $routes->post('franchises/(:segment)/login-link/rotate', 'Franchises::rotateLoginLink/$1', $g('auth,staff,super,elevated'));
     $routes->patch('franchises/(:segment)', 'Franchises::update/$1', $g('auth,staff,super'));
+    // ลบร้าน = ผู้ใช้ทุกคนของร้านหลุดและเข้าไม่ได้อีก ลิงก์เข้าระบบตาย — เรื่องอันตรายเท่าสร้างลิงก์ใหม่ จึงต้องใส่รหัส 6 หลัก
+    $routes->delete('franchises/(:segment)', 'Franchises::delete/$1', $g('auth,staff,super,elevated'));
     $routes->get('franchises/(:segment)/users', 'Franchises::users/$1', $g('auth,staff'));
     $routes->post('franchises/(:segment)/users', 'Franchises::addUser/$1', $g('auth,staff'));
     $routes->patch('franchises/(:segment)/users/(:segment)/permissions', 'Franchises::userPermissions/$1/$2', $g('auth,staff'));
@@ -58,7 +60,8 @@ $routes->group('api', ['namespace' => 'App\Controllers\Api'], static function (R
     $routes->get('products', 'Products::index', $g('auth,staff,perm.products'));
     $routes->get('products/(:segment)', 'Products::show/$1', $g('auth,staff,perm.products'));
     $routes->patch('products/(:segment)', 'Products::update/$1', $g('auth,staff,perm.products,super'));
-    // ไม่มี DELETE — สินค้าลบไม่ได้ ใช้ "ปิดใช้งาน" (PATCH status) แทน ประวัติยอดขาย/บิลจะได้อ้างถึงได้ครบ
+    // ลบถาวร: ไม่มีประวัติ = ลบจริง · มีบิลอ้างถึง = ซ่อน (ProductService::delete) — หยุดขายชั่วคราวใช้ PATCH status แทน
+    $routes->delete('products/(:segment)', 'Products::delete/$1', $g('auth,staff,perm.products,super'));
 
     $routes->post('assignments', 'Assignments::create', $g('auth,staff,super'));
     $routes->get('assignments', 'Assignments::index', $g('auth,staff,perm.products'));

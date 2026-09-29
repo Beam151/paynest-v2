@@ -63,7 +63,10 @@ class Franchises extends BaseApiController
      */
     public function credits(string $id)
     {
-        return $this->json(CreditService::list((int) AuthContext::franchiseScope($this->user(), $id)));
+        $franchiseId = (int) AuthContext::franchiseScope($this->user(), $id);
+        FranchiseService::get($franchiseId); // ร้านที่ลบแล้ว = 404 เหมือนดูตัวร้าน
+
+        return $this->json(CreditService::list($franchiseId));
     }
 
     public function update(string $id)
@@ -78,6 +81,15 @@ class Franchises extends BaseApiController
         ]), $this->body());
 
         return $this->json(FranchiseService::update(V::parseId($id), $body, (int) $this->user()['id']));
+    }
+
+    /**
+     * ลบร้านถาวร — ส่วนกลาง + รหัส 6 หลัก (guard) · ระบบเลือกเองว่าลบจริงหรือลบแบบซ่อน แล้วตอบ mode กลับมา
+     * พักร้านชั่วคราวใช้ PATCH status SUSPENDED / CLOSED แทน (เปลี่ยนกลับได้)
+     */
+    public function delete(string $id)
+    {
+        return $this->json(FranchiseService::delete(V::parseId($id), $this->user()));
     }
 
     /* ── ลิงก์เข้าระบบของร้าน ─────────────────────────────────────── */
@@ -128,6 +140,8 @@ class Franchises extends BaseApiController
 
     private function franchiseUser(int $franchiseId, int $userId): array
     {
+        // ร้านที่ลบแล้ว: ผู้ใช้ถูกปิดไว้ถาวร — ห้ามตั้งรหัส/เปิดใช้งาน/แก้สิทธิ์กลับ (ไม่งั้นเปิดทางกลับเข้าร้านที่ไม่มีอยู่แล้ว)
+        FranchiseService::get($franchiseId);
         foreach (UserService::list($franchiseId) as $u) {
             if ((int) $u['id'] === $userId) {
                 return $u;
@@ -141,6 +155,7 @@ class Franchises extends BaseApiController
     {
         $user        = $this->user();
         $franchiseId = AuthContext::franchiseScope($user, $id);
+        FranchiseService::get($franchiseId);
 
         return $this->json([
             'items'     => array_map([UserService::class, 'serialize'], UserService::list($franchiseId)),

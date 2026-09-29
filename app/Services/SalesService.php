@@ -21,7 +21,7 @@ final class SalesService
                bp.code AS period_code, bp.start_date AS period_start, bp.end_date AS period_end,
                bp.year AS period_year, bp.month AS period_month, bp.half AS period_half,
                bp.status AS period_status,
-               p.sku, p.name AS product_name, p.is_group AS product_is_group,
+               p.sku, p.name AS product_name, p.is_group AS product_is_group, p.status AS product_status,
                f.username AS franchise_username,
                i.invoice_no
           FROM sales_entries se
@@ -52,10 +52,9 @@ final class SalesService
             throw ApiException::conflict("รอบบิล {$period['code']} ถูกปิดแล้ว ไม่สามารถแก้ไขยอดได้");
         }
         $product = ProductService::getRow((int) $input['productId']);
-        // สินค้าที่ปิดใช้งานรับยอดใหม่ไม่ได้ (ยอดที่บันทึกไว้ก่อนปิดยังออกบิลได้ตามปกติ)
-        if ($product['status'] !== 'ACTIVE') {
-            throw ApiException::badRequest("สินค้า {$product['sku']} ถูกปิดใช้งานแล้ว — เปิดใช้งานที่หน้าสินค้าก่อนจึงจะบันทึกยอดได้");
-        }
+        // สินค้าที่ปิดใช้งาน/ลบแล้วรับยอดใหม่ไม่ได้ (ยอดที่บันทึกไว้ก่อนปิดยังออกบิลได้ตามปกติ · ลบได้เฉพาะตอนไม่มียอดค้างออกบิล)
+        ProductService::assertActive($product, 'บันทึกยอด');
+        // สัญญาของร้านที่ถูกลบไม่ถูกนับ (AssignmentService::overlapping) — ร้านที่ลบแล้วจึงรับยอดใหม่ไม่ได้ทุกรอบ แม้รอบเก่าที่เคยถือ
         $assignment = AssignmentService::resolveForPeriod((int) $product['id'], $period, $isSuper ? null : (int) $user['franchise_id']);
 
         if (! empty($input['franchiseId']) && (int) $input['franchiseId'] !== (int) $assignment['franchise_id']) {
@@ -229,6 +228,19 @@ final class SalesService
         if ($entries === []) {
             return;
         }
+        /*
+         * สินค้าที่ลบแล้ว (แบบซ่อน) ไม่มีรายการย่อย "ตอนนี้" ให้จด — ProductService::delete ล้างรายการย่อยของกลุ่มทิ้ง
+         * ยอดของมันขึ้นบิลได้อีกทางเดียวคือบิลเดิมถูกยกเลิก (ลบได้เฉพาะตอนไม่มียอดค้างออกบิล) ซึ่งยังถือ snapshot ของบิลเดิมอยู่
+         * (ยกเลิกบิลไม่ล้าง) → ไม่แตะแถวพวกนี้ ไม่งั้นออกบิลใหม่แล้วชุดนั้นกลายเป็นสินค้าธรรมดา "ประกอบด้วย" หายจากบิล
+         */
+        $deleted = array_flip(array_map('intval', array_column(Db::all(
+            "SELECT id FROM products WHERE id IN ? AND status = 'DELETED'",
+            [array_values(array_unique(array_map(static fn ($e) => (int) $e['product_id'], $entries)))],
+        ), 'id')));
+        $entries = array_values(array_filter($entries, static fn ($e) => ! isset($deleted[(int) $e['product_id']])));
+        if ($entries === []) {
+            return;
+        }
         $items  = ProductService::itemsOf(array_map(static fn ($e) => (int) $e['product_id'], $entries));
         $ids    = array_map(static fn ($e) => (int) $e['id'], $entries);
         $cases  = [];
@@ -298,7 +310,8 @@ final class SalesService
          *   หรือเปลี่ยนสินค้าเป็น/เลิกเป็นกลุ่ม) · ยังไม่ขึ้นบิล → ตามสินค้าตอนนี้
          * ร้านเห็นด้วย — เป็นสิ่งที่ร้านขายจริง
          */
-        if ($row['invoice_id'] !== null) {
+        if ($row['invoice_id'] !== null || ($row['product_status'] ?? null) === 'DELETED') {
+            // สินค้าที่ลบแล้วไม่มีรายการย่อยปัจจุบัน (ล้างตอนลบ) — ยอดที่กลับมายังไม่ขึ้นบิล (บิลเดิมถูกยกเลิก) ใช้ที่จดไว้ตอนออกบิลเดิม
             $components = self::billedComponents($row['components_snapshot'] ?? null);
             $isGroup    = $components !== null;
         } else {

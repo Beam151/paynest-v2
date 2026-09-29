@@ -165,13 +165,15 @@ export function toast(message, type = 'info') {
 }
 
 const BADGES = {
-  ACTIVE: 'green', SUSPENDED: 'amber', CLOSED: 'gray', ARCHIVED: 'gray', DISABLED: 'gray',
+  ACTIVE: 'green', SUSPENDED: 'amber', CLOSED: 'gray', ARCHIVED: 'gray', DISABLED: 'gray', DELETED: 'red',
   DRAFT: 'blue', SUBMITTED: 'blue', APPROVED: 'blue', INVOICED: 'green',
   OPEN: 'amber', PARTIAL: 'blue', PAID: 'green', VOID: 'red', LOCKED: 'gray',
 };
 const LABELS = {
-  // ARCHIVED ใช้ร่วมกันทั้งสินค้าและรายการค่าใช้จ่าย — เจ้าของระบบเรียกว่า "ปิดใช้งาน" (ลบไม่ได้ เปิดกลับได้)
-  ACTIVE: 'ใช้งาน', SUSPENDED: 'ระงับ', CLOSED: 'ปิด', ARCHIVED: 'ปิดใช้งาน', DISABLED: 'ปิดใช้งาน',
+  // ARCHIVED ใช้ร่วมกันทั้งสินค้าและรายการค่าใช้จ่าย — เจ้าของระบบเรียกว่า "ปิดใช้งาน" (ชั่วคราว เปิดกลับได้)
+  // DELETED = สินค้า/ร้านที่ถูกลบแต่บิลเก่ายังอ้างถึง (ลบแบบซ่อน ย้อนกลับไม่ได้) — โผล่เฉพาะในประวัติ เช่นยอดขายรอบเก่า
+  // สีแดงให้ต่างจาก "ปิดใช้งาน" ที่เป็นสีเทา: คนเห็นต้องรู้ทันทีว่าอันนี้เปิดกลับไม่ได้แล้ว
+  ACTIVE: 'ใช้งาน', SUSPENDED: 'ระงับ', CLOSED: 'ปิด', ARCHIVED: 'ปิดใช้งาน', DISABLED: 'ปิดใช้งาน', DELETED: 'ลบแล้ว',
   // ยอดที่บันทึกแล้วพร้อมเรียกเก็บทันที — สามสถานะแรกจึงสื่อความหมายเดียวกันกับผู้ใช้
   // (SUBMITTED/APPROVED เหลือไว้รองรับข้อมูลเก่าที่บันทึกตอนยังมีขั้นอนุมัติ)
   DRAFT: 'บันทึกแล้ว', SUBMITTED: 'บันทึกแล้ว', APPROVED: 'บันทึกแล้ว', INVOICED: 'ออกบิลแล้ว',
