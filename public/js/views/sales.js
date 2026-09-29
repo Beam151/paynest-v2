@@ -8,6 +8,7 @@ import { activityButton } from './activity.js';
 import { usdRateChip } from './periodRate.js';
 import { viewState } from '../viewState.js';
 import { avatar } from '../charts.js';
+import { componentsLine, groupBadge } from './billLines.js';
 
 const FRANCHISE_KEY = 'franchise.salesFranchise';
 
@@ -38,9 +39,50 @@ export async function salesView() {
   const entryByProduct = new Map(entriesRes.items.map((e) => [e.productId, e]));
 
   // สินค้าที่มีเจ้าของสิทธิ์ขายในรอบนี้ = แถวที่ต้องกรอกยอด
-  const rows = productsRes.items
+  const activeRows = productsRes.items
     .filter((p) => p.currentAssignment)
     .map((p) => ({ product: p, entry: entryByProduct.get(p.id) ?? null }));
+
+  /*
+   * สินค้าที่ถูกปิดใช้งานไปแล้ว แต่มียอดบันทึกไว้ในรอบนี้ — ไม่อยู่ในรายการสินค้าที่ใช้งาน
+   * ถ้าไม่โชว์ ยอดพวกนี้จะหายไปจากหน้าจอทั้งที่ยังถูกนับในยอดรวมและยังออกบิลได้
+   * โชว์เป็นแถวอ่านอย่างเดียว (กรอกยอดใหม่ไม่ได้ — เซิร์ฟเวอร์ปฏิเสธ) แต่ยังลบยอดที่ยังไม่ออกบิลได้
+   * ดึงรายการสินค้าที่ปิดใช้งานเฉพาะตอนมียอด (หรือตัวเลขที่พิมพ์ค้าง) ที่ไม่เข้าแถวไหนเลย — ปกติไม่ต้องยิงเพิ่ม
+   */
+  const shownIds = new Set(activeRows.map((r) => r.product.id));
+  const orphans = entriesRes.items.filter((e) => !shownIds.has(e.productId));
+  // ตัวเลขที่พิมพ์ค้างของสินค้าที่ไม่มีแถวในหน้านี้ — อาจถูกปิดใช้งานไปแล้ว หรือแค่ถูกตัวกรองร้านซ่อนไว้
+  const strayDraftIds = [...drafts.keys()]
+    .filter((k) => k.startsWith(`${periodCode}|`))
+    .map((k) => Number(k.split('|')[1]))
+    .filter((id) => !shownIds.has(id));
+  const archivedIds = (orphans.length || strayDraftIds.length)
+    ? new Set((await api.get(`/api/products${qs({ status: 'ARCHIVED' })}`)).items.map((p) => p.id))
+    : new Set();
+  const archivedRows = orphans
+    .filter((e) => archivedIds.has(e.productId))
+    .map((e) => ({
+      archived: true,
+      product: {
+        id: e.productId,
+        sku: e.sku,
+        name: e.productName,
+        status: 'ARCHIVED',
+        commissionPct: e.commissionPct,
+        isGroup: Boolean(e.isGroup),
+        items: e.components ?? [],
+        currentAssignment: { franchiseUsername: e.franchiseUsername },
+      },
+      entry: e,
+    }));
+  /*
+   * ตัวเลขที่พิมพ์ค้างไว้ของสินค้าที่เพิ่งถูกปิดใช้งาน บันทึกไม่ได้แล้ว — ไม่ให้ค้างนับในปุ่ม "บันทึกทั้งหมด"
+   * ต้องดูทุกตัวเลขค้างที่ไม่มีแถว ไม่ใช่แค่แถวที่มียอดบันทึกไว้แล้ว: สินค้าที่เพิ่งพิมพ์ยอดแรกแล้วถูกปิดใช้งาน
+   * ไม่มีแถวให้เห็น แต่ปุ่มค้าง "(1)" กดแล้วพังทุกครั้ง และเบราว์เซอร์ถามทุกครั้งที่ปิด/รีเฟรช
+   * ลบเฉพาะของสินค้าที่ปิดใช้งานจริง — ของร้านอื่นที่ตัวกรองซ่อนไว้ยังบันทึกผ่าน "บันทึกทั้งหมด" ได้ตามปกติ
+   */
+  for (const id of strayDraftIds) if (archivedIds.has(id)) drafts.delete(`${periodCode}|${id}`);
+  const rows = [...activeRows, ...archivedRows];
 
   // ยอดส่วนต่างรวมของรอบ ใช้โชว์ตัวอย่างการแปลงเป็นดอลลาร์ในฟอร์มตั้งอัตรา
   const summaryCommission = entriesRes.summary.commissionTotal;
@@ -97,8 +139,37 @@ export async function salesView() {
     }
   });
 
+  /** แถวของสินค้าที่ปิดใช้งาน — ยอดเป็นตัวหนังสือ แก้ไม่ได้ · ลบได้ถ้ายังไม่ออกบิล */
+  function archivedCells(row) {
+    const invoiced = row.entry.status === 'INVOICED';
+    const negative = row.entry.grossAmount < 0;
+    return {
+      amount: el('div', { class: 'amount-cell', title: 'สินค้านี้ถูกปิดใช้งานแล้ว — เปิดใช้งานที่หน้าสินค้าก่อนจึงจะกรอก/แก้ยอดได้' },
+        el('strong', {}, money(row.entry.grossAmount))),
+      commission: el('div', { class: 'commission-cell' },
+        el('strong', { style: negative ? 'color:var(--danger)' : '' }, money(row.entry.commissionAmount)),
+        negative ? el('div', { class: 'sub-line' }, 'ยอดคืน') : ''),
+      actions: el('div', { class: 'btn-row' },
+        invoiced
+          ? ''
+          : el('button', {
+            class: 'btn ghost sm danger',
+            onclick: () => confirmAction(`ลบยอดของ ${row.product.sku} ในรอบนี้? (สินค้านี้ปิดใช้งานแล้ว ลบแล้วกรอกใหม่ไม่ได้จนกว่าจะเปิดใช้งาน)`, async () => {
+              await api.del(`/api/sales-entries/${row.entry.id}`);
+              toast('ลบแล้ว', 'success');
+              render();
+            }),
+          }, 'ลบ')),
+    };
+  }
+
   function cellsOf(row) {
     if (cellCache.has(row)) return cellCache.get(row);
+    if (row.archived) {
+      const cells = archivedCells(row);
+      cellCache.set(row, cells);
+      return cells;
+    }
 
     // entry ที่บันทึกแล้วใช้ % ที่ snapshot ไว้ ส่วนแถวที่ยังไม่กรอกใช้ % ปัจจุบันของสินค้า
     const pctValue = row.entry?.commissionPct ?? row.product.commissionPct ?? 0;
@@ -119,7 +190,9 @@ export async function salesView() {
       class: 'amount-input',   // ไม่ใส่ min เพราะยอดคืนสินค้าเป็นค่าติดลบได้
       value: draft ?? (row.entry ? row.entry.grossAmount : ''),
       placeholder: '0.00',
-      title: invoiced ? 'ออกบิลไปแล้ว แก้ไม่ได้ — ต้องยกเลิกบิลก่อน' : undefined,
+      title: invoiced
+        ? 'ออกบิลไปแล้ว แก้ไม่ได้ — ต้องยกเลิกบิลก่อน'
+        : row.product.isGroup ? 'สินค้ากลุ่ม — กรอกยอดขายรวมของทั้งชุดเป็นยอดเดียว' : undefined,
     });
 
     const save = el('button', { class: 'btn sm' }, 'บันทึก');
@@ -153,7 +226,8 @@ export async function salesView() {
         const est = Math.round(Number(raw) * pctValue) / 100;
         commission.replaceChildren(
           el('strong', { class: 'unsaved' }, money(est)),
-          el('div', { class: 'sub-line' }, 'ยังไม่บันทึก'));
+          // บันทึกยอดใหม่ = เริ่มคิดตาม % ใหม่ ยอดที่เคยกำหนดเองตอนออกบิลไม่ติดมาด้วย
+          el('div', { class: 'sub-line' }, row.entry?.billMode === 'MANUAL' ? 'ยังไม่บันทึก · บันทึกแล้วกลับไปคิดตาม %' : 'ยังไม่บันทึก'));
       } else if (row.entry) {
         const negative = row.entry.grossAmount < 0;
         commission.replaceChildren(
@@ -228,12 +302,35 @@ export async function salesView() {
       r.entry.invoiceNo ? el('div', { class: 'sub-line' }, r.entry.invoiceNo) : '');
   }
 
+  /*
+   * ช่อง % — ยอดที่กำหนดเองตอนออกบิล (กรอกยอดเอง) ไม่ได้มาจาก % แล้ว
+   * โชว์ % เดิมข้างยอดนั้นจะทำให้คนคูณตามแล้วงงว่าทำไมไม่ตรง จึงบอกว่ากรอกยอดเองแทน
+   */
+  const pctCell = (r) => (r.entry?.billMode === 'MANUAL'
+    ? el('span', { class: 'badge blue', title: `กำหนดยอดตอนออกบิล (% ตั้งต้นของสินค้า ${pct(r.entry.commissionPct)})` }, 'กรอกยอดเอง')
+    : el('span', { class: 'muted' }, pct(r.entry?.commissionPct ?? r.product.commissionPct ?? 0)));
+
+  /*
+   * สินค้ากลุ่ม (ชุด) = แถวเดียว กรอกยอดรวมของทั้งชุด คิด % ของกลุ่ม — รายการย่อยเป็นแค่ข้อมูลว่าในชุดมีอะไร
+   * ยอดที่ออกบิลแล้วใช้รายการย่อยจากบรรทัดยอดขาย (เซิร์ฟเวอร์ส่ง snapshot ตอนออกบิลมา) ให้ตรงกับบิลใบนั้น
+   * ยังไม่ออกบิล/ยังไม่กรอก ใช้รายการปัจจุบันของสินค้า
+   * ออกบิลแล้วเชื่อบรรทัดยอดขายอย่างเดียว — สินค้าที่เพิ่งเปลี่ยนเป็นกลุ่มทีหลัง ต้องไม่โผล่ป้ายกลุ่มบนยอดที่บิลออกเป็นสินค้าเดี่ยว
+   */
+  const billed = (r) => Boolean(r.entry?.invoiceId);
+  const componentsOf = (r) => (billed(r) ? (r.entry.components ?? []) : (r.product.items ?? []));
+  const isGroupRow = (r) => (billed(r)
+    ? Boolean(r.entry.isGroup || r.entry.components?.length)
+    : Boolean(r.product.isGroup));
+
   const columns = [
     {
       label: 'สินค้า',
       sortValue: (r) => r.product.sku,
       render: (r) => el('div', {}, el('strong', {}, r.product.sku),
-        el('div', { class: 'sub-line' }, r.product.name)),
+        isGroupRow(r) ? [' ', groupBadge()] : '',
+        r.archived ? el('span', { class: 'badge gray', style: 'margin-left:6px' }, 'ปิดใช้งาน') : '',
+        el('div', { class: 'sub-line' }, r.product.name),
+        isGroupRow(r) ? componentsLine(componentsOf(r), { short: true }) : ''),
     },
     {
       label: 'ร้านค้า',
@@ -244,8 +341,8 @@ export async function salesView() {
     {
       label: '%',
       num: true,
-      sortValue: (r) => r.entry?.commissionPct ?? r.product.commissionPct ?? 0,
-      render: (r) => el('span', { class: 'muted' }, pct(r.entry?.commissionPct ?? r.product.commissionPct ?? 0)),
+      sortValue: (r) => (r.entry?.billMode === 'MANUAL' ? '' : r.entry?.commissionPct ?? r.product.commissionPct ?? 0),
+      render: pctCell,
     },
     { label: 'ส่วนต่างที่ต้องจ่าย', num: true, sortValue: (r) => r.entry?.commissionAmount ?? -Infinity, render: (r) => cellsOf(r).commission },
     { label: 'สถานะ', render: statusCell, sortValue: (r) => r.entry?.status ?? '' },
@@ -253,7 +350,8 @@ export async function salesView() {
   ];
 
   const summary = entriesRes.summary;
-  const filled = rows.filter((r) => r.entry).length;
+  // "กรอกแล้ว x / y" นับเฉพาะสินค้าที่ใช้งานอยู่ — ของที่ปิดใช้งานไม่ใช่งานที่ต้องกรอก
+  const filled = activeRows.filter((r) => r.entry).length;
   const notInvoiced = entriesRes.items.filter((e) => e.status !== 'INVOICED');
   const billable = notInvoiced.length;
   const pendingCommission = Number(notInvoiced.reduce((sum, e) => sum + e.commissionAmount, 0).toFixed(2));
@@ -275,8 +373,8 @@ export async function salesView() {
 
 
     el('div', { class: 'stat-grid' },
-      stat('กรอกแล้ว', `${filled} / ${rows.length}`, 'สินค้าที่มีสิทธิ์ขายในรอบนี้',
-        { tone: filled === rows.length && rows.length ? 'income' : 'due', icon: '📝' }),
+      stat('กรอกแล้ว', `${filled} / ${activeRows.length}`, 'สินค้าที่มีสิทธิ์ขายในรอบนี้',
+        { tone: filled === activeRows.length && activeRows.length ? 'income' : 'due', icon: '📝' }),
       stat('ยอดขายเต็ม', money(summary.grossTotal) + ' ฿', `${int(summary.count)} รายการ`, { tone: 'sales', icon: '🛒' }),
       stat('ออกบิลไปแล้ว', money(invoicedCommission) + ' ฿',
         `${int(entriesRes.items.length - billable)} รายการ — ตัวเลขนี้ตรงกับหน้า "ใบเรียกเก็บ"`,
@@ -290,7 +388,8 @@ export async function salesView() {
 
     // ตัวกรองร้านอยู่ชิดขวาคู่กับหัวข้อตาราง แทนที่จะลอยเดี่ยว ๆ เป็นแถวของตัวเอง
     el('div', { class: 'toolbar' },
-      el('h2', { class: 'section-title' }, `สินค้าที่ต้องกรอกยอดในรอบนี้ (${int(rows.length)})`),
+      el('h2', { class: 'section-title' }, `สินค้าที่ต้องกรอกยอดในรอบนี้ (${int(activeRows.length)})`,
+        archivedRows.length ? el('span', { class: 'sub-line' }, ` + ปิดใช้งานแล้วแต่มียอด ${int(archivedRows.length)}`) : ''),
       el('div', { class: 'filters' },
         el('div', { class: 'field' }, el('label', {}, 'กรองตามร้านค้า'), franchisePicker),
         saveAll)),
@@ -300,8 +399,8 @@ export async function salesView() {
       search: 'ค้นหาสินค้าหรือร้าน…',
       empty: 'รอบนี้ยังไม่มีสินค้าที่ถูกมอบหมายให้ร้านใด — ไปหน้า "สินค้า" เพื่อมอบหมายก่อน',
       // รวมเฉพาะยอดที่บันทึกแล้ว — ตัวเลขที่ยังพิมพ์ค้างอยู่ยังไม่ใช่ข้อมูลจริง
-      footer: filled
-        ? ['', `รวม ${int(filled)} รายการที่กรอกแล้ว`,
+      footer: filled + archivedRows.length
+        ? ['', `รวม ${int(filled + archivedRows.length)} รายการที่กรอกแล้ว`,
           money(summary.grossTotal), '', money(summary.commissionTotal), '', '']
         : undefined,
     }), { tight: true }));

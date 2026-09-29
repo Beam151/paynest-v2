@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Libraries\ApiException;
 use App\Libraries\AuthContext;
 use App\Libraries\Db;
+use App\Libraries\Json;
 use App\Libraries\Money;
 use App\Libraries\Period;
 use App\Libraries\SignedUrl;
@@ -72,13 +73,44 @@ final class PaymentSubmissionService
         if ($paidTime !== null && ! preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $paidTime)) {
             throw ApiException::badRequest('paidTime: ต้องเป็นเวลารูปแบบ HH:MM');
         }
+
+        /*
+         * ร้านยืนยันว่าตรวจเลขบัญชีกับ Telegram แล้ว — ต้องเป็นบัญชีเดียวกับที่บิลชี้อยู่ตอนนี้
+         * ถ้าส่วนกลางเปลี่ยนบัญชีของบิลระหว่างที่ร้านเปิดหน้าจ่ายค้างไว้ คำยืนยันนั้นเป็นของบัญชีเก่า ใช้ไม่ได้
+         */
+        $confirmed = ($input['accountConfirmed'] ?? null) === true;
+        $currentId = $inv['bank_account_id'] === null ? null : (int) $inv['bank_account_id'];
+        if ($confirmed) {
+            if (! array_key_exists('bankAccountId', $input)) {
+                throw ApiException::badRequest('bankAccountId: ต้องส่งบัญชีที่หน้าจอแสดงมาด้วยเมื่อยืนยันเลขบัญชี (ไม่มีบัญชี = null)');
+            }
+            $shownId = $input['bankAccountId'] === null ? null : (int) $input['bankAccountId'];
+            if ($shownId !== $currentId) {
+                throw ApiException::conflict('บัญชีรับเงินของบิลนี้เพิ่งเปลี่ยน — ตรวจเลขบัญชีกับ Telegram อีกครั้งก่อนแจ้งชำระ');
+            }
+        }
+        // เก็บ "ค่า" ของบัญชี ณ ตอนแจ้ง ไม่ใช่แค่ id — บัญชีแก้ทีหลังได้ หลักฐานต้องบอกได้ว่าตอนนั้นชี้ไปที่ไหน
+        $bankRow  = $currentId === null ? null : Db::one('SELECT * FROM bank_accounts WHERE id = ?', [$currentId]);
+        $snapshot = NotificationService::bankSnapshotFromRow($bankRow);
+        // ส่วนกลางแจ้งแทนร้านได้ แต่คำว่า "ร้านยืนยันแล้ว" ต้องมาจากคนของร้านเท่านั้น
+        $stampConfirm = $confirmed && ($user['role'] ?? null) === 'FRANCHISE';
+
         $id = Db::insert(
             'INSERT INTO payment_submissions
-               (invoice_id, franchise_id, amount_satang, paid_at, paid_time, method, reference, slip_url, note, submitted_by_user_id, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP())',
-            [$inv['id'], $inv['franchise_id'], $amount, $paidAt, $paidTime, $input['method'] ?? null, $input['reference'] ?? null, $input['slipUrl'] ?? null, $input['note'] ?? null, $user['id']],
+               (invoice_id, franchise_id, amount_satang, paid_at, paid_time, method, reference, slip_url, bank_snapshot, account_confirmed_at,
+                note, submitted_by_user_id, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ' . ($stampConfirm ? 'UTC_TIMESTAMP()' : 'NULL') . ', ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP())',
+            [
+                $inv['id'], $inv['franchise_id'], $amount, $paidAt, $paidTime, $input['method'] ?? null, $input['reference'] ?? null,
+                $input['slipUrl'] ?? null, Json::encode($snapshot), $input['note'] ?? null, $user['id'],
+            ],
         );
-        Audit::write((int) $user['id'], 'payment.submit', 'payment_submission', $id, ['invoiceId' => (int) $inv['id'], 'amount' => $amount]);
+        Audit::write((int) $user['id'], 'payment.submit', 'payment_submission', $id, [
+            'invoiceId'        => (int) $inv['id'],
+            'amount'           => $amount,
+            'accountConfirmed' => $stampConfirm,
+            'account'          => NotificationService::snapshotLabel($snapshot),
+        ]);
 
         // ส่วนกลางรู้ทันทีว่ามีสลิปรอตรวจ ไม่ต้องคอยเปิดเว็บเช็ค
         $submission = self::get($id, $user);
@@ -303,6 +335,24 @@ final class PaymentSubmissionService
             'reviewedBy'         => $row['reviewed_by'],
             'reviewedAt'         => $row['reviewed_at'],
             'createdAt'          => $row['created_at'],
+            // ร้านติ๊กยืนยันว่าตรวจเลขบัญชีกับ Telegram แล้ว (null = ไม่ได้ยืนยัน / ส่วนกลางแจ้งแทน / รายการก่อนอัปเดต)
+            'accountConfirmedAt' => $row['account_confirmed_at'] ?? null,
+            // บัญชีที่บิลชี้อยู่ตอนร้านแจ้ง (ค่า ณ ตอนนั้น ไม่ใช่ของปัจจุบัน)
+            'bankAccountLabel'   => self::bankLabelOf($row['bank_snapshot'] ?? null),
         ];
+    }
+
+    /**
+     * ป้ายบัญชีจาก bank_snapshot ที่เก็บตอนแจ้งชำระ — null = รายการก่อนระบบเก็บข้อมูลนี้
+     * ผ่าน snapshotLabel → BankAccountService::labelOf ที่เดียว: กระเป๋า USD ได้ "USD · เครือข่าย · ที่อยู่" แบบเดียวกับหน้าอื่น ผู้ตรวจสลิปเทียบได้ทันที
+     */
+    public static function bankLabelOf(?string $json): ?string
+    {
+        if ($json === null || $json === '') {
+            return null;
+        }
+        $snapshot = json_decode($json, true);
+
+        return is_array($snapshot) ? NotificationService::snapshotLabel($snapshot) : null;
     }
 }

@@ -2,7 +2,7 @@ import { api, session } from './api.js';
 import { beginRender, clear, el, icon, iconFor, toast } from './ui.js';
 import { scopeStateTo } from './viewState.js';
 import { versionButton } from './version.js';
-import { loginView } from './views/login.js';
+import { loginView, passwordSetupView, rememberShopLoginKey } from './views/login.js';
 import { dashboardView } from './views/dashboard.js';
 import { franchisesView } from './views/franchises.js';
 import { productsView } from './views/products.js';
@@ -251,20 +251,64 @@ function viewAsBanner() {
     }, 'กลับเป็นผู้ดูแลระบบ'));
 }
 
+/*
+ * ลิงก์เข้าระบบของร้าน #/s/<key> — จำกุญแจไว้ แล้วเปลี่ยนที่อยู่เป็น #/login ทันที
+ * ใช้ replaceState ไม่ให้กุญแจค้างในประวัติเบราว์เซอร์ (ปุ่มย้อนกลับ / ใครมาเปิดดูประวัติก็ไม่เห็น)
+ * เข้าระบบอยู่แล้วแค่พาไปหน้าแรก ไม่เตะออก — แต่ยังจำกุญแจไว้ใช้ตอนเข้าครั้งหน้า
+ * กุญแจเป็น base64url 32 ตัว · ลิงก์ที่ถูกแอปแชตตัดท้าย/ต่อท้ายจนผิดรูป ไม่จำ แล้วบอกให้คัดลอกใหม่
+ */
+const SHOP_LINK = /^#\/s\/([A-Za-z0-9_-]{16,128})\/?$/;
+
+function takeShopLink() {
+  if (!location.hash.startsWith('#/s/')) return;
+  const match = location.hash.match(SHOP_LINK);
+  if (match) rememberShopLoginKey(match[1]);
+  else toast('ลิงก์เข้าระบบของร้านไม่ครบ — คัดลอกลิงก์มาทั้งบรรทัดแล้วเปิดใหม่ หรือขอลิงก์ใหม่จากทางเรา', 'error');
+  history.replaceState(null, '', `${location.pathname}${location.search}#${session.token ? homePath() : '/login'}`);
+}
+
+/*
+ * ไปที่อยู่ใหม่ — ถ้าอยู่ที่อยู่นั้นแล้ว hashchange ไม่ยิง จึงวาดเองเฉพาะกรณีนั้น
+ * (ตั้ง hash แล้วเรียก render() ซ้ำอีกรอบ = หน้าตั้ง Google Authenticator ขอ QR สองชุดแข่งกัน สแกนแล้วรหัสไม่ผ่าน)
+ */
+const go = (hash) => {
+  if (location.hash === hash) render();
+  else location.hash = hash;
+};
+
 // หน้าที่แสดงอยู่ตอนนี้ — วาดหน้าเดิมซ้ำจะใช้เมนู/กรอบเดิม ไม่สร้างใหม่ทั้งหมด
 let mounted = null;
 let renderToken = 0;
 
 export async function render() {
+  takeShopLink();
+
   if (!session.token) {
     scopeStateTo(null); // ออกจากระบบแล้วล้างตัวกรองที่ค้างอยู่ทิ้ง
-    clear(root).append(loginView(() => { location.hash = `#${homePath()}`; render(); }));
+    // ต้องเปลี่ยนรหัสเริ่มต้น/ตั้ง 2FA ก่อน → หน้าตั้งค่า · ไม่งั้นหน้าแรกของบทบาท
+    clear(root).append(loginView((res) => go(res?.mustChangePassword || res?.enrollRequired ? '#/setup' : `#${homePath()}`)));
     return;
   }
 
+  /*
+   * รหัสที่คนอื่นตั้งให้ (สร้างบัญชี / "ตั้งรหัสใหม่ + คัดลอก") ต้องเปลี่ยนก่อนทำอย่างอื่น
+   * เซิร์ฟเวอร์กันทุกเส้นทางไว้แล้ว (PASSWORD_CHANGE_REQUIRED) — ตรงนี้พาไปหน้าตั้งรหัสตรง ๆ
+   * แม้รีเฟรชหรือพิมพ์ที่อยู่อื่นเอง แทนที่จะวาดหน้าที่ขึ้น error แดงก่อนแล้วค่อยเด้ง
+   */
+  if (session.user?.mustChangePassword && location.hash !== '#/setup') {
+    history.replaceState(null, '', `${location.pathname}${location.search}#/setup`);
+  }
+
   // ต้องเปลี่ยนรหัสเริ่มต้น/ตั้ง 2FA ก่อน — เต็มจอแบบหน้าล็อกอิน ไม่มีเมนูให้กดไปที่อื่น
+  // ส่วนกลาง: รหัสจากไฟล์ + Google Authenticator · ร้าน/เซล: ตั้งรหัสของตัวเองแทนรหัสที่ได้รับมา
   if (location.hash === '#/setup') {
-    clear(root).append(await setupView(() => { location.hash = `#${homePath()}`; }));
+    // หน้าตั้งค่าเรียก done เมื่อเซิร์ฟเวอร์ยืนยันแล้วว่าไม่มีอะไรค้าง — ล้างธงใน session ด้วย
+    // (เปลี่ยนรหัสจากอีกแท็บ/เครื่องแล้วธงยังค้าง = เด้งกลับมาหน้านี้วนไม่จบ)
+    const done = () => {
+      if (session.user?.mustChangePassword) session.save(session.token, { ...session.user, mustChangePassword: false });
+      location.hash = `#${homePath()}`;
+    };
+    clear(root).append(session.user?.role === 'SUPER_ADMIN' ? await setupView(done) : passwordSetupView(done));
     return;
   }
 

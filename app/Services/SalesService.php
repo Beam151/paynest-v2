@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Libraries\ApiException;
 use App\Libraries\AuthContext;
 use App\Libraries\Db;
+use App\Libraries\Json;
 use App\Libraries\Money;
 use App\Libraries\Period;
 
@@ -20,7 +21,7 @@ final class SalesService
                bp.code AS period_code, bp.start_date AS period_start, bp.end_date AS period_end,
                bp.year AS period_year, bp.month AS period_month, bp.half AS period_half,
                bp.status AS period_status,
-               p.sku, p.name AS product_name,
+               p.sku, p.name AS product_name, p.is_group AS product_is_group,
                f.username AS franchise_username,
                i.invoice_no
           FROM sales_entries se
@@ -36,7 +37,7 @@ final class SalesService
             throw ApiException::forbidden();
         }
 
-        return self::serialize($row);
+        return self::serializeMany([$row])[0];
     }
 
     /**
@@ -50,7 +51,11 @@ final class SalesService
         if ($period['status'] === 'LOCKED' && ! $isSuper) {
             throw ApiException::conflict("รอบบิล {$period['code']} ถูกปิดแล้ว ไม่สามารถแก้ไขยอดได้");
         }
-        $product    = ProductService::getRow((int) $input['productId']);
+        $product = ProductService::getRow((int) $input['productId']);
+        // สินค้าที่ปิดใช้งานรับยอดใหม่ไม่ได้ (ยอดที่บันทึกไว้ก่อนปิดยังออกบิลได้ตามปกติ)
+        if ($product['status'] !== 'ACTIVE') {
+            throw ApiException::badRequest("สินค้า {$product['sku']} ถูกปิดใช้งานแล้ว — เปิดใช้งานที่หน้าสินค้าก่อนจึงจะบันทึกยอดได้");
+        }
         $assignment = AssignmentService::resolveForPeriod((int) $product['id'], $period, $isSuper ? null : (int) $user['franchise_id']);
 
         if (! empty($input['franchiseId']) && (int) $input['franchiseId'] !== (int) $assignment['franchise_id']) {
@@ -71,11 +76,18 @@ final class SalesService
             if ($existing['status'] === 'INVOICED') {
                 throw ApiException::conflict('รายการนี้ถูกออกใบเรียกเก็บแล้ว ต้องยกเลิกใบเรียกเก็บก่อนจึงจะแก้ไขได้');
             }
+            /*
+             * บันทึกยอดใหม่ = เริ่มจากค่าตั้งต้นทั้งหมด: % ของสินค้า · วิธีคิดยอด "คิดตาม %"
+             * ยอด "กรอกเอง" ที่เลือกตอนออกบิลผูกกับยอดเดิม — ยอดเปลี่ยนแล้วต้องเลือกใหม่ตอนออกบิล
+             * (มาถึงตรงนี้ได้เฉพาะรายการที่ยังไม่ขึ้นบิล คือยังไม่เคยออก หรือบิลเดิมถูกยกเลิกแล้ว)
+             * ค่าคอมเซลไม่ได้เก็บที่รายการนี้แล้ว — อยู่ในบิลค่าคอม (sales_commission_lines) ซึ่งเก็บยอดเต็ม ณ ตอนทำบิลไว้เอง
+             */
             Db::exec(
-                'UPDATE sales_entries
+                "UPDATE sales_entries
                     SET units = ?, gross_amount_satang = ?, commission_pct_bp = ?, commission_amount_satang = ?,
+                        bill_mode = 'PCT',
                         note = ?, assignment_id = ?, updated_by_user_id = ?, updated_at = UTC_TIMESTAMP()
-                  WHERE id = ?',
+                  WHERE id = ?",
                 [
                     array_key_exists('units', $input) ? $input['units'] : $existing['units'],
                     $grossSatang,
@@ -87,7 +99,12 @@ final class SalesService
                     $existing['id'],
                 ],
             );
-            Audit::write((int) $user['id'], 'entry.update', 'sales_entry', (int) $existing['id'], ['grossSatang' => $grossSatang, 'pctBp' => $pctBp]);
+            Audit::write((int) $user['id'], 'entry.update', 'sales_entry', (int) $existing['id'], [
+                'grossSatang' => $grossSatang,
+                'pctBp'       => $pctBp,
+                // ให้ประวัติบอกได้ว่ายอดกรอกเองที่เคยเลือกไว้ถูกล้างกลับเป็น "คิดตาม %" เพราะการแก้ครั้งนี้
+                'modesReset'  => ($existing['bill_mode'] ?? 'PCT') !== 'PCT',
+            ]);
 
             return self::get((int) $existing['id'], $user);
         }
@@ -135,7 +152,7 @@ final class SalesService
             $params[] = array_column(Period::between($filters['fromPeriod'], $filters['toPeriod']), 'code');
         }
 
-        $rows = array_map([self::class, 'serialize'], Db::all(
+        $rows = self::serializeMany(Db::all(
             self::SELECT_ENTRY . ($where ? ' WHERE ' . implode(' AND ', $where) : '') . ' ORDER BY bp.start_date DESC, p.sku',
             $params,
         ));
@@ -197,8 +214,104 @@ final class SalesService
         return ['deleted' => true, 'id' => $id];
     }
 
-    public static function serialize(array $row): array
+    /* ── สินค้ากลุ่ม: รายการย่อยที่โชว์ใต้บรรทัด ─────────────────────── */
+
+    /**
+     * จดรายการย่อยของสินค้ากลุ่มไว้กับรายการยอดขายตอนขึ้นบิล (InvoiceService::generate / addEntries เรียกใน transaction เดียวกัน)
+     * บิลเก่าจึงโชว์ว่าในชุดมีอะไร ณ วันที่ออกบิล แม้ภายหลังจะแก้รายการย่อยของกลุ่ม
+     * ทับค่าเก่าเสมอ (สินค้าที่ไม่ใช่กลุ่ม = NULL) — รายการจากบิลที่ถูกยกเลิกแล้วออกใหม่ต้องได้รายการย่อย ณ ตอนออกใหม่
+     * รายการย่อยทั้งหมดดึงคิวรีเดียว + UPDATE คำสั่งเดียว ไม่ว่าจะกี่บรรทัด
+     *
+     * @param list<array> $entries แถว sales_entries (ต้องมี id, product_id, components_snapshot)
+     */
+    public static function snapshotComponents(array $entries): void
     {
+        if ($entries === []) {
+            return;
+        }
+        $items  = ProductService::itemsOf(array_map(static fn ($e) => (int) $e['product_id'], $entries));
+        $ids    = array_map(static fn ($e) => (int) $e['id'], $entries);
+        $cases  = [];
+        $params = [];
+        foreach ($entries as $e) {
+            $list = $items[(int) $e['product_id']] ?? [];
+            if ($list === []) {
+                continue;
+            }
+            $cases[] = 'WHEN ? THEN ?';
+            array_push($params, (int) $e['id'], Json::encode(array_map(
+                static fn ($c) => ['id' => $c['id'], 'sku' => $c['sku'], 'name' => $c['name']],
+                $list,
+            )));
+        }
+        if ($cases === []) {
+            // ไม่มีสินค้ากลุ่มในชุดนี้ — ล้างเฉพาะแถวที่ยังมีค่าค้างจากบิลที่ถูกยกเลิก (ส่วนใหญ่ไม่มีเลย)
+            Db::exec('UPDATE sales_entries SET components_snapshot = NULL WHERE id IN ? AND components_snapshot IS NOT NULL', [$ids]);
+
+            return;
+        }
+        Db::exec(
+            'UPDATE sales_entries SET components_snapshot = CASE id ' . implode(' ', $cases) . ' ELSE NULL END WHERE id IN ?',
+            [...$params, $ids],
+        );
+    }
+
+    /**
+     * รายการย่อยที่จดไว้ตอนขึ้นบิล → [{sku, name}] · null = ตอนขึ้นบิลไม่ใช่สินค้ากลุ่ม
+     * (SalesAgentService ใช้ตัวเดียวกันกับรายการที่ติ๊กทำบิลค่าคอม — เป็นบรรทัดของบิลร้านเหมือนกัน)
+     */
+    public static function billedComponents(?string $snapshot): ?array
+    {
+        $list = $snapshot === null ? null : json_decode($snapshot, true);
+
+        return is_array($list)
+            ? array_map(static fn ($c) => ['sku' => (string) ($c['sku'] ?? ''), 'name' => (string) ($c['name'] ?? '')], $list)
+            : null;
+    }
+
+    /**
+     * serialize หลายแถว — รายการย่อยของสินค้ากลุ่มที่ยังไม่ขึ้นบิลดึงคิวรีเดียวทั้งชุด (แถวที่อยู่ในบิลใช้ snapshot ไม่ต้องดึง)
+     *
+     * @param list<array> $rows
+     */
+    public static function serializeMany(array $rows): array
+    {
+        $groupIds = [];
+        foreach ($rows as $r) {
+            if ($r['invoice_id'] === null && (int) ($r['product_is_group'] ?? 0) === 1) {
+                $groupIds[] = (int) $r['product_id'];
+            }
+        }
+        $items = ProductService::itemsOf($groupIds);
+
+        return array_map(static fn ($r) => self::serialize($r, $items), $rows);
+    }
+
+    /**
+     * @param array<int, list<array>>|null $itemsByGroup รายการย่อยปัจจุบันที่ดึงรวบไว้แล้ว (serializeMany) · null = ดึงเองถ้าจำเป็น
+     */
+    public static function serialize(array $row, ?array $itemsByGroup = null): array
+    {
+        /*
+         * สินค้ากลุ่ม + รายการย่อยที่โชว์ใต้ชื่อสินค้า
+         * อยู่ในบิลแล้ว → ตามที่จดไว้ตอนขึ้นบิลเท่านั้น (บิลต้องโชว์เหมือนวันที่ออก แม้ภายหลังแก้รายการย่อย
+         *   หรือเปลี่ยนสินค้าเป็น/เลิกเป็นกลุ่ม) · ยังไม่ขึ้นบิล → ตามสินค้าตอนนี้
+         * ร้านเห็นด้วย — เป็นสิ่งที่ร้านขายจริง
+         */
+        if ($row['invoice_id'] !== null) {
+            $components = self::billedComponents($row['components_snapshot'] ?? null);
+            $isGroup    = $components !== null;
+        } else {
+            $productId = (int) $row['product_id'];
+            $isGroup   = (int) ($row['product_is_group'] ?? Db::val('SELECT is_group FROM products WHERE id = ?', [$productId])) === 1;
+            if ($isGroup) {
+                $itemsByGroup ??= ProductService::itemsOf([$productId]);
+            }
+            $components = $isGroup
+                ? array_map(static fn ($c) => ['sku' => $c['sku'], 'name' => $c['name']], $itemsByGroup[$productId] ?? [])
+                : null;
+        }
+
         return [
             'id'     => (int) $row['id'],
             'period' => [
@@ -221,6 +334,11 @@ final class SalesService
             'grossAmount'       => Money::toBaht($row['gross_amount_satang']),
             'commissionPct'     => Money::bpToPct($row['commission_pct_bp']),
             'commissionAmount'  => Money::toBaht($row['commission_amount_satang']),
+            // PCT = ส่วนต่างคิดจาก % · MANUAL = ส่วนกลางกำหนดยอดเอง (% ด้านบนเป็นแค่ค่าเดิมที่เก็บไว้)
+            // ห้ามใส่ข้อมูลค่าคอมเซลที่นี่ — ร้านเห็นบรรทัดบิลผ่านตัวนี้ (ค่าคอมอยู่ในบิลค่าคอมแยกต่างหาก)
+            'billMode'          => $row['bill_mode'] ?? 'PCT',
+            'isGroup'           => $isGroup,
+            'components'        => $components ?? [],
             'netAmount'         => Money::toBaht((int) $row['gross_amount_satang'] - (int) $row['commission_amount_satang']),
             'note'              => $row['note'],
             'status'            => $row['status'],

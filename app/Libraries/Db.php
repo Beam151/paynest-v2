@@ -4,6 +4,7 @@ namespace App\Libraries;
 
 use CodeIgniter\Database\BaseConnection;
 use Config\Database;
+use RuntimeException;
 use Throwable;
 
 /**
@@ -19,11 +20,22 @@ final class Db
 {
     private static ?BaseConnection $prepared = null;
 
+    /** ความลึกของ tx() ที่ซ้อนกันอยู่ — ชั้นนอกสุดล้างธงผิดพลาดของ CI ก่อนเริ่ม */
+    private static int $txDepth = 0;
+
     public static function conn(): BaseConnection
     {
         $db = Database::connect();
         if (self::$prepared !== $db) {
             $db->initialize();
+            /*
+             * query ที่พังภายใน transaction ต้องโยน exception เหมือนนอก transaction
+             * ค่าตั้งต้นของ CI4 คือ "เงียบ" (คืน false + ตั้ง transStatus) แล้ว tx() ก็ commit ต่อไปทั้งที่บางคำสั่งไม่ได้ลง
+             * เคยเกิดจริง: สองจอทำบิลค่าคอมพร้อมกัน → INSERT บรรทัดชน UNIQUE เงียบ ๆ แต่หัวบิลที่มียอดเต็มถูก commit
+             * ได้บิลค่าคอม PENDING ที่ไม่มีรายการแต่มียอดให้จ่าย (ด่าน 409 ที่เขียนไว้ไม่เคยทำงาน)
+             * เปิดแล้ว CI rollback ทั้งก้อนเองก่อนโยน → tx() rollback ซ้ำเป็น no-op แล้วโยนต่อ
+             */
+            $db->transException(true);
             $db->query("SET time_zone = '+00:00'");
             $db->query("SET SESSION sql_mode = CONCAT(@@sql_mode, ',STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION')");
             self::$prepared = $db;
@@ -112,9 +124,21 @@ final class Db
     public static function tx(callable $fn): mixed
     {
         $db = self::conn();
+        if (self::$txDepth === 0) {
+            // ธง transStatus ของ CI ค้างเป็น false หลัง query พังครั้งก่อน (โหมด strict) — ก้อนใหม่ต้องเริ่มจากสะอาด
+            $db->resetTransStatus();
+        }
         $db->transBegin();
+        self::$txDepth++;
         try {
             $result = $fn();
+            /*
+             * กันอีกชั้น: มีคำสั่งไหนพังโดยไม่โยน (เช่นโค้ดใน callback จับ exception ไว้เองแล้วทำต่อ)
+             * ห้าม commit เงียบ ๆ — ยอดหัวบิลกับรายการจะไม่ตรงกัน
+             */
+            if ($db->transStatus() === false) {
+                throw new RuntimeException('transaction ล้มเหลว: มีคำสั่งฐานข้อมูลที่ไม่สำเร็จภายในทรานแซกชัน — ยกเลิกทั้งก้อน');
+            }
             $db->transCommit();
 
             return $result;
@@ -122,6 +146,8 @@ final class Db
             $db->transRollback();
 
             throw $e;
+        } finally {
+            self::$txDepth--;
         }
     }
 

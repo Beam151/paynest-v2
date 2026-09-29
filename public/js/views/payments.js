@@ -1,12 +1,13 @@
 import { api, qs, session } from '../api.js';
 import {
-  alertBanner, badge, card, confirmAction, copyButton, dateTh, el, flashRows, formModal, infoModal, int, money, slipBadge, stat, table, toast,
+  alertBanner, badge, card, confirmAction, copyButton, dateTh, dateTimeTh, el, flashRows, formModal, infoModal, int, money, pct, slipBadge, stat, table, toast,
 } from '../ui.js';
 import { periodLabel, todayIso } from '../period.js';
 import { render } from '../app.js';
 import { viewState } from '../viewState.js';
 import { activityButton } from './activity.js';
 import { avatar } from '../charts.js';
+import { lineProductCell } from './billLines.js';
 
 const STATUS_KEY = 'franchise.paySubStatus';
 
@@ -48,11 +49,25 @@ export async function payCenterView({ embedded = false } = {}) {
     ? await api.get(`/api/franchises/${franchiseId}/credits`).catch(() => null)
     : null;
 
+  /*
+   * สลิปที่อัปโหลดไปแล้วรอบนี้ — ส่งไม่ผ่าน (ยอดผิด / บัญชีของบิลเพิ่งเปลี่ยน) แล้วกดส่งใหม่ ไม่ต้องอัปโหลดซ้ำ
+   * โควตาอัปโหลดต่อชั่วโมงไม่คืนเมื่อส่งไม่สำเร็จ และไฟล์ที่อัปซ้ำก็ค้างบนเซิร์ฟเวอร์เปล่า ๆ
+   * จำด้วยชื่อ+ขนาด+เวลาแก้ไฟล์ — ฟอร์มที่เปิดใหม่ต้องเลือกไฟล์เดิมอีกครั้ง (ได้ File คนละตัว) ก็ยังจำได้
+   */
+  const uploadedSlips = new Map();
+  const uploadSlip = async (file) => {
+    const key = `${file.name}|${file.size}|${file.lastModified}`;
+    if (!uploadedSlips.has(key)) uploadedSlips.set(key, (await api.upload(file)).url);
+    return uploadedSlips.get(key);
+  };
+
   /**
    * ฟอร์มชำระเงินของร้าน — จ่ายทีละบิล จะจ่ายครบหรือทยอยจ่ายก็ได้
    * ต้องแนบสลิปและพิมพ์ยอดซ้ำอีกครั้ง เพราะตัวเลขนี้คือสิ่งที่ส่วนกลางจะเอาไปตัดยอดจริง
+   *
+   * accountJustChanged = ข้อความจากเซิร์ฟเวอร์ตอนเปิดฟอร์มใหม่ เพราะบัญชีของบิลเพิ่งเปลี่ยนระหว่างที่ร้านกรอกอยู่
    */
-  const submitModal = (invoice) => {
+  const submitModal = (invoice, { accountJustChanged = null } = {}) => {
     /*
      * แจ้งได้ไม่เกิน "ยอดค้าง − ยอดที่แจ้งไว้แล้วแต่ยังรอตรวจ"
      * ไม่งั้นพอทยอยจ่ายหลายงวด ฟอร์มจะตั้งยอดเต็มไว้แล้วโดนเซิร์ฟเวอร์ปฏิเสธทีหลัง
@@ -87,12 +102,50 @@ export async function payCenterView({ embedded = false } = {}) {
     };
 
     /*
+     * กติกาของเจ้าของระบบ: เลขบัญชีในระบบต้องตรงกับที่ทางเราแจ้งทาง Telegram — ไม่ตรง ห้ามโอน
+     * ร้านต้องติ๊กยืนยันทุกครั้ง และข้อความที่ให้ติ๊กต้องเป็นเรื่องที่ร้านทำได้จริง:
+     *   MATCH     = Telegram ล่าสุดตรงกับบัญชีของบิล → เทียบกับ Telegram ได้
+     *   NOT_SENT  = ยังไม่เคยส่งเลขบัญชีทาง Telegram · CHANGED = บัญชีเปลี่ยนหลังส่งไปแล้ว
+     *               → ไม่มีอะไรให้เทียบ ต้องยืนยันกับทางเราโดยตรงแทน
+     * เซิร์ฟเวอร์รุ่นเก่าที่ยังไม่ส่ง accountCheck มา ถือเป็น NOT_SENT — ให้ยืนยันตรงไว้ก่อนปลอดภัยกว่า
+     */
+    const check = invoice.bankAccount ? (invoice.accountCheck ?? 'NOT_SENT') : 'NO_ACCOUNT';
+    // กระเป๋า USD ไม่มีชื่อบัญชี/แอปธนาคาร — สิ่งที่ร้านต้องเทียบจริงคือเครือข่ายกับที่อยู่ทุกตัวอักษร
+    const wallet = isWalletAccount(invoice.bankAccount);
+    const tick = check === 'MATCH'
+      ? (wallet
+        ? {
+          label: 'ตรวจแล้ว — เครือข่าย (chain) และที่อยู่กระเป๋าที่แอปแสดงตรงกับที่ทางเราแจ้งทาง Telegram ทุกตัวอักษร',
+          hint: 'เทียบกับข้อความล่าสุดจากทางเราใน Telegram — ไม่ตรงกัน ห้ามโอน · โอนผิดเครือข่ายเงินจะสูญหายและกู้คืนไม่ได้',
+        }
+        : {
+          label: 'ตรวจแล้ว — ชื่อบัญชีและเลขบัญชีที่แอปธนาคารแสดงตรงกับที่ทางเราแจ้งทาง Telegram',
+          hint: 'เทียบกับข้อความล่าสุดจากทางเราใน Telegram — ไม่ตรงกัน ห้ามโอน และติดต่อทางเราทันที',
+        })
+      : (wallet
+        ? {
+          label: 'ยืนยันเครือข่ายและที่อยู่กระเป๋ากับทางเราโดยตรงแล้ว',
+          hint: 'สอบถามเครือข่าย (chain) และที่อยู่กระเป๋ากับทางเราโดยตรงก่อนโอน — ห้ามโอนตามที่อยู่ที่ไม่ได้ยืนยัน',
+        }
+        : {
+          label: 'ยืนยันเลขบัญชีกับทางเราโดยตรงแล้ว',
+          hint: 'สอบถามเลขบัญชีกับทางเราโดยตรงก่อนโอน — ห้ามโอนตามเลขที่ไม่ได้ยืนยัน',
+        });
+
+    /*
     * โชว์เฉพาะสกุลที่บิลใบนี้กำหนดให้จ่าย
     * บิลบาทไม่ต้องเห็นยอดดอลลาร์ให้รก และบิลดอลลาร์ก็ไม่ต้องเห็นบาทเป็นตัวหลัก
     * (super เป็นคนเลือกสกุลตั้งแต่ตอนออกบิลแล้ว ร้านแค่ทำตาม)
     */
     const bankBox = el('div', { style: 'margin-bottom:14px' },
-      bankAccountBox(invoice.bankAccount),
+      // เปิดใหม่หลังเซิร์ฟเวอร์ตอบว่าบัญชีเพิ่งเปลี่ยน — บอกให้ชัดว่ากล่องด้านล่างคือบัญชีล่าสุดแล้ว
+      accountJustChanged
+        ? el('div', { class: 'alert-box' },
+          el('strong', {}, accountJustChanged),
+          el('div', {}, 'ระบบโหลดบัญชีล่าสุดของบิลนี้มาให้แล้ว — ถ้าโอนไปแล้ว ติดต่อทางเราพร้อมสลิปก่อนแจ้งชำระ'))
+        : '',
+      accountCheckNotice(invoice),
+      bankAccountBox(invoice.bankAccount, { shopWarning: true }),
       invoice.isUsd ? usdLine(invoice, { amountUsd: invoice.outstandingUsd }) : '',
       // ยอดที่ต้องพิมพ์ในแอปธนาคาร — ไอคอนคัดลอกติดข้างตัวเลข แบบเดียวกับเลขบัญชี
       payableInBillCcy > 0
@@ -103,7 +156,7 @@ export async function payCenterView({ embedded = false } = {}) {
             copyButton(payableInBillCcy.toFixed(2), 'คัดลอกยอดเงิน', { iconOnly: true })))
         : '');
 
-    return formModal({
+    const form = formModal({
     title: `ชำระเงิน — ${invoice.invoiceNo}`,
     submitLabel: 'ยืนยันแจ้งชำระ',
     fields: [
@@ -144,12 +197,35 @@ export async function payCenterView({ embedded = false } = {}) {
       { name: 'paidAt', label: 'วันที่โอน', type: 'date', required: true, value: todayIso() },
       // ไม่เติมเวลาตอนนี้ให้ — เกือบทุกครั้งโอนก่อนมาแจ้ง เวลาที่เติมให้จึงผิด
       { name: 'paidTime', label: 'เวลาที่โอน (ตามสลิป)', type: 'time', hint: 'ไม่ใส่ก็ได้ — ใส่แล้วทางเราตรวจกับรายการเดินบัญชีได้เร็วขึ้น' },
-      { name: 'method', label: 'ช่องทาง', placeholder: 'โอนธนาคาร / พร้อมเพย์ / เงินสด' },
-      { name: 'note', label: 'หมายเหตุ' },
+      { name: 'method', label: 'ช่องทาง', placeholder: wallet ? 'เช่น USDT ผ่าน TRC20' : 'โอนธนาคาร / พร้อมเพย์ / เงินสด' },
+      {
+        name: 'note',
+        label: 'หมายเหตุ',
+        // โอนคริปโตไม่มีรายการเดินบัญชีให้ไล่ — เลขรายการ (TxID) คือสิ่งเดียวที่ทางเราใช้หาเงินเข้าได้เร็ว
+        hint: wallet ? 'ใส่เลขรายการโอน (TxID / Hash) จากแอปกระเป๋า — ทางเราตรวจได้เร็วขึ้น' : undefined,
+      },
+      {
+        /*
+         * อยู่ท้ายสุดติดปุ่มยืนยัน — เป็นสิ่งสุดท้ายที่ร้านเห็นก่อนกด
+         * ติ๊กแล้วเก็บเป็นหลักฐาน (accountConfirmed) ว่าร้านตรวจเลขบัญชีแล้ว ตามข้อตกลง "ไม่ตรง ห้ามโอน"
+         */
+        name: 'accountOk',
+        label: 'ยืนยันบัญชีปลายทาง',
+        type: 'checklist',
+        required: true,
+        options: [{ value: 'yes', label: tick.label, hint: tick.hint }],
+        hint: 'ต้องติ๊กก่อนจึงจะกดยืนยันแจ้งชำระได้',
+      },
     ],
 
     preview: (v) => {
-      if (v.amount === undefined) return bankBox;
+      /*
+       * ยังไม่ติ๊กยืนยันบัญชี = กดยืนยันไม่ได้ — required ของ checklist กันไม่ได้ (ติ๊กว่างก็ยังเป็นอาเรย์)
+       * กล่องบัญชีและสรุปยอดยังโชว์ตามปกติ ร้านจะได้เห็นทุกอย่างก่อนติ๊ก
+       */
+      const ticked = Array.isArray(v.accountOk) && v.accountOk.length > 0;
+      const gate = (node) => (ticked ? node : { canSubmit: false, node });
+      if (v.amount === undefined) return gate(bankBox);
       const amount = Number(v.amount);
       if (amount > payableInBillCcy) {
         return {
@@ -169,7 +245,7 @@ export async function payCenterView({ embedded = false } = {}) {
         };
       }
       const left = Number((payableInBillCcy - amount).toFixed(2));
-      return el('div', {}, bankBox,
+      return gate(el('div', {}, bankBox,
         el('div', { class: 'notice-box m-0' },
           left > 0
             ? el('span', {}, 'จ่ายบางส่วน — เมื่อยืนยันรับเงินแล้วจะเหลือค้างอีก ',
@@ -179,10 +255,11 @@ export async function payCenterView({ embedded = false } = {}) {
           invoice.isUsd
             ? el('div', { class: 'sub-line mt-6' },
               `ระบบบันทึกเป็นเงินบาท ${money(toBaht(amount))} ฿ (อัตรา ${money(invoice.usdRate)} ฿/USD ที่ตรึงไว้กับบิลนี้)`)
-            : ''));
+            : '')));
     },
 
     onSubmit: async (v) => {
+      if (!v.accountOk?.length) throw new Error(`ติ๊ก "${tick.label}" ก่อนแจ้งชำระ`);
       if (Number(v.amount) !== payableInBillCcy && Number(v.amountConfirm) !== Number(v.amount)) {
         throw new Error('ยอดยืนยันไม่ตรงกับยอดที่กรอกไว้');
       }
@@ -192,21 +269,56 @@ export async function payCenterView({ embedded = false } = {}) {
        * อัปโหลดไฟล์ก่อน แล้วค่อยส่งแบบฟอร์มพร้อม URL ที่ได้กลับมา
        * ถ้าอัปโหลดไม่ผ่านจะหยุดตรงนี้ ไม่บันทึกการแจ้งชำระที่ไม่มีสลิปแนบ
        */
-      const { amountConfirm, slipFile, ...body } = v;
-      body.slipUrl = (await api.upload(v.slipFile)).url;
-      // แปลงเป็นบาทก่อนส่ง — ทั้งระบบคิดเงินเป็นบาทหน่วยเดียว
-      await api.post('/api/payments', {
-        ...body,
-        amount: toBaht(Number(v.amount)),
-        note: invoice.isUsd
-          ? [`โอนเป็น $${money(v.amount)} (อัตรา ${money(invoice.usdRate)} ฿/USD)`, v.note].filter(Boolean).join(' · ')
-          : v.note,
-        invoiceId: invoice.id,
-      });
+      const { amountConfirm, slipFile, accountOk, ...body } = v;
+      body.slipUrl = await uploadSlip(slipFile);
+      /*
+       * บัญชีที่ฟอร์มนี้โชว์ให้ร้านโอน — เซิร์ฟเวอร์เทียบกับบัญชีปัจจุบันของบิล
+       * ส่วนกลางเพิ่งเปลี่ยนบัญชีระหว่างที่ร้านเปิดฟอร์มค้างไว้ = ได้ 409 แทนการรับเรื่องเงียบ ๆ
+       * (ร้านยืนยันบัญชีหนึ่ง แต่บิลชี้อีกบัญชี หลักฐานการยืนยันจะไม่มีความหมาย)
+       */
+      const bankAccountId = invoice.bankAccount?.id ?? null;
+      try {
+        // แปลงเป็นบาทก่อนส่ง — ทั้งระบบคิดเงินเป็นบาทหน่วยเดียว
+        await api.post('/api/payments', {
+          ...body,
+          amount: toBaht(Number(v.amount)),
+          note: invoice.isUsd
+            ? [`โอนเป็น $${money(v.amount)} (อัตรา ${money(invoice.usdRate)} ฿/USD)`, v.note].filter(Boolean).join(' · ')
+            : v.note,
+          invoiceId: invoice.id,
+          accountConfirmed: true,
+          bankAccountId,
+        });
+      } catch (err) {
+        /*
+         * 409 มีหลายสาเหตุ (บิลถูกยกเลิก / จ่ายครบแล้ว ฯลฯ) — ดูจากบิลจริงว่าบัญชีเปลี่ยนไหม
+         * แทนการเดาจากข้อความ แล้วเปิดฟอร์มใหม่ด้วยบัญชีล่าสุด ให้ร้านตรวจกับ Telegram อีกรอบ
+         * (ฟอร์มนี้ปิดเองหลัง onSubmit จบ · ตารางข้างหลังก็ถือบัญชีเก่าอยู่ จึงวาดใหม่ด้วย)
+         */
+        if (err.status === 409) {
+          const fresh = await api.get(`/api/invoices/${invoice.id}`).catch(() => null);
+          if (fresh && (fresh.bankAccount?.id ?? null) !== bankAccountId) {
+            toast(err.message, 'error');
+            render();
+            submitModal(fresh, { accountJustChanged: err.message });
+            return;
+          }
+        }
+        throw err;
+      }
       toast(`แจ้งชำระ ${payMoney(invoice, v.amount)} แล้ว รอตรวจสอบ`, 'success');
       render();
     },
     });
+
+    /*
+     * ช่องติ๊กยืนยันบัญชีกินเต็มแถว — ประโยคยาว ถ้าอยู่ครึ่งช่องบนจอคอมจะถูกบีบจนอ่านยาก
+     * formModal ไม่มีตัวเลือกความกว้างรายช่อง จึงจัดหลังโมดัลขึ้นจอแล้ว (โมดัลล่าสุดคืออันนี้เสมอ)
+     */
+    const confirmBox = [...document.querySelectorAll('.modal-backdrop')].pop()?.querySelector('.checklist');
+    confirmBox?.closest('.field')?.style.setProperty('grid-column', '1 / -1');
+    confirmBox?.querySelector('.check-item')?.classList.add('check-confirm');
+    return form;
   };
 
   /**
@@ -234,13 +346,25 @@ export async function payCenterView({ embedded = false } = {}) {
       inv.isUsd ? usdLine(inv) : '',
       el('h3', { style: 'margin:6px 0 8px' }, 'รายการในบิล'),
       breakdownTable(inv),
+      billLinesDetails(inv),
+      /*
+       * รูปประกอบบิลที่ทางเราแนบมา — ร้านเปิดบิลจากแท็บ "ที่ต้องจ่าย" เป็นหลัก (หน้าต่างนี้)
+       * ข้อความ Telegram บอกว่า "ดูได้ในระบบ" จึงต้องเห็นที่นี่ด้วย ไม่ใช่เฉพาะหน้าบิลทั้งหมด
+       */
+      inv.attachments?.length
+        ? el('div', { class: 'mt-16' },
+          el('h3', { style: 'margin:0 0 8px' }, `📎 รูปประกอบบิล (${int(inv.attachments.length)})`),
+          attachmentGrid(inv.attachments))
+        : '',
       // รอบที่ติดลบ: ไม่มีอะไรต้องโอน และยอดที่ค้างจะไปโผล่เป็นส่วนลดในบิลรอบหน้า
       inv.creditCarried > 0
         ? el('div', { class: 'notice-box', style: 'margin:16px 0 0' },
           `รอบนี้ยอดติดลบ ${money(inv.creditCarried)} ฿ — ทางเราติดค้างร้านไว้`,
           el('div', { class: 'sub-line mt-4' },
             'ยกไปหักจากบิลรอบถัดไปให้อัตโนมัติ รอบนี้ไม่ต้องโอนอะไร'))
-        : el('div', { class: 'mt-16' }, bankAccountBox(inv.bankAccount)));
+        : el('div', { class: 'mt-16' },
+          inv.outstanding > 0 ? accountCheckNotice(inv) : '',
+          bankAccountBox(inv.bankAccount, { shopWarning: true })));
   };
 
   /**
@@ -351,7 +475,7 @@ export async function payCenterView({ embedded = false } = {}) {
       table([
         {
           label: 'เลขที่',
-          render: (r) => el('div', {}, el('strong', {}, r.invoiceNo), ' ', currencyTag(r),
+          render: (r) => el('div', {}, el('strong', {}, r.invoiceNo), ' ', currencyTag(r), ' ', attachmentBadge(r),
             el('div', { class: 'sub-line' }, `รอบ ${periodLabel(r.periodCode)}`)),
         },
         { label: 'ส่วนต่าง', num: true, render: (r) => money(r.commissionTotal) },
@@ -584,6 +708,7 @@ function reviewModal(first, queue = [first]) {
           el('div', { class: 'sub-line mt-8' },
             `แจ้งโดย ${row.submittedBy ?? '—'} · ช่องทาง ${row.method ?? '—'}${row.reference ? ` · อ้างอิง ${row.reference}` : ''}`),
           row.note ? el('div', { class: 'sub-line' }, `หมายเหตุร้าน: ${row.note}`) : '',
+          accountConfirmLine(row, inv),
           row.status === 'PENDING'
             ? el('div', { class: 'review-actions' },
               errorBox,
@@ -645,7 +770,10 @@ export async function slipReviewTab(periodCode = '') {
         render: (r) => el('div', {},
           slipBadge(r.status),
           r.rejectReason ? el('div', { class: 'sub-line' }, r.rejectReason) : '',
-          r.reviewNote ? el('div', { class: 'sub-line' }, r.reviewNote) : ''),
+          r.reviewNote ? el('div', { class: 'sub-line' }, r.reviewNote) : '',
+          // เห็นตั้งแต่ในตารางว่าร้านติ๊กยืนยันเลขบัญชีหรือเปล่า — ชี้บัญชีไหนดูได้จากการชี้ค้าง/ในหน้าตรวจ
+          el('div', { class: 'sub-line', title: r.bankAccountLabel ? `บัญชีของบิลตอนร้านแจ้ง: ${r.bankAccountLabel}` : undefined },
+            r.accountConfirmedAt ? '✓ ยืนยันเลขบัญชีแล้ว' : 'เลขบัญชี: — ไม่ได้ยืนยัน')),
       },
       {
         label: '',
@@ -708,12 +836,18 @@ export function usdLine(inv, { amountUsd = inv?.netTotalUsd } = {}) {
  *
  * ใช้ร่วมกันทั้งในใบเรียกเก็บและในฟอร์มแจ้งชำระ จะได้ไม่มีที่ไหนแสดงเลขบัญชีคนละแบบ
  * ข้อมูลมาจากบัญชีที่ตรึงไว้กับบิล ไม่ใช่บัญชีหลักปัจจุบัน — บิลเก่าต้องโอนเข้าที่เดิมเสมอ
+ *
+ * shopWarning = ร้านเป็นคนดู: แทรกคำเตือน "ตรวจให้ตรงกับ Telegram ก่อนโอน" ใต้เลขบัญชี (ก่อนถึง QR)
+ * ส่วนกลางเปิดบิลเดียวกันไม่ต้องเห็น — ข้อความชวนเชื่อม Telegram ที่หน้าบัญชีของฉันไม่มีความหมายกับแอดมิน
  */
-export function bankAccountBox(bankAccount, { compact = false } = {}) {
+export function bankAccountBox(bankAccount, { compact = false, shopWarning = false } = {}) {
   if (!bankAccount) {
-    return el('div', { class: 'alert-box m-0' },
+    const missing = el('div', { class: 'alert-box m-0' },
       'บิลใบนี้ยังไม่ได้ระบุบัญชีปลายทาง — สอบถามเลขบัญชีก่อนโอน');
+    // ไม่มีเลขในระบบ ร้านจะได้เลขจากที่อื่น — ยิ่งต้องย้ำว่าเลขนั้นต้องตรงกับที่ทางเราแจ้งทาง Telegram
+    return shopWarning ? el('div', {}, missing, shopTransferWarning()) : missing;
   }
+  if (isWalletAccount(bankAccount)) return walletBox(bankAccount, { compact, shopWarning });
   return el('div', { class: 'notice-box bank-box m-0' },
     `🏦 โอนเข้าบัญชี ${bankAccount.bankName}`,
     // ปุ่มคัดลอกเป็นไอคอนติดเลขบัญชี — กดตรงที่ตาดูอยู่ ไม่ต้องหาปุ่มใหญ่อีกบรรทัด
@@ -725,6 +859,11 @@ export function bankAccountBox(bankAccount, { compact = false } = {}) {
     // บอกสกุลที่บัญชีนี้รับ ร้านจะได้รู้ว่าโอนเข้าถูกใบ (บัญชีบาทกับบัญชีดอลลาร์เป็นคนละเลข)
     el('div', { class: 'sub-line' },
       `รับเป็น${bankAccount.currency === 'USD' ? 'ดอลลาร์ (USD)' : 'เงินบาท (THB)'}`),
+    /*
+     * อยู่ระหว่างเลขบัญชีกับ QR — ตาไล่จากเลขบัญชีลงมาต้องเจอคำเตือนก่อนถึงรูปที่จะเอาไปสแกน
+     * (สแกน QR ที่ถูกเปลี่ยนก็จ่ายเข้าบัญชีคนอื่นได้เหมือนพิมพ์เลขผิด)
+     */
+    shopWarning ? shopTransferWarning() : '',
     /*
      * มี QR ก็โชว์ให้สแกนเลย — ร้านโอนจากมือถือเป็นหลัก
      * สแกนไม่มีทางพิมพ์เลขผิด ซึ่งผิดทีเงินไปเข้าบัญชีคนอื่นแล้วตามคืนยาก
@@ -755,6 +894,198 @@ export function bankAccountBox(bankAccount, { compact = false } = {}) {
       ? el('div', { class: 'sub-line', style: 'margin-top:6px;font-weight:700' },
         '⚠ บัญชีนี้คนละสกุลกับบิล — สอบถามทางเราก่อนโอน')
       : '');
+}
+
+/*
+ * บัญชี USD ของระบบเป็นกระเป๋าคริปโต (เครือข่าย + ที่อยู่กระเป๋า + QR) ไม่ใช่บัญชีธนาคาร — เจ้าของระบบสั่ง 29 ก.ย. 69
+ * เซิร์ฟเวอร์เก็บเครือข่ายไว้ที่ bankName ด้วย และเลขบัญชี = ที่อยู่กระเป๋า จึงถอยไปอ่านสองช่องนั้นได้
+ * ถ้าเซิร์ฟเวอร์ยังไม่ส่ง isWallet/chain มา
+ */
+const isWalletAccount = (bank) => Boolean(bank) && (bank.isWallet ?? bank.currency === 'USD');
+const chainOfAccount = (bank) => bank?.chain ?? bank?.bankName ?? '';
+
+/**
+ * กล่องกระเป๋า USD — ต่างจากบัญชีธนาคารตรงที่ "เครือข่าย" สำคัญเท่ากับที่อยู่:
+ * โอนผิดเครือข่ายเงินหายถาวร ตามคืนไม่ได้เหมือนโอนผิดธนาคาร จึงให้เครือข่ายตัวใหญ่อยู่บนสุด
+ * ที่อยู่กระเป๋ายาว 34–64+ ตัว — โชว์เต็มทุกตัว (ตัดบรรทัดได้บนมือถือ) เพราะร้านต้องเทียบกับ Telegram ทุกตัวอักษร
+ * และให้กดคัดลอกแทนการพิมพ์เอง
+ */
+function walletBox(bank, { compact = false, shopWarning = false } = {}) {
+  const chain = chainOfAccount(bank);
+  const address = String(bank.accountNumber ?? '');
+  return el('div', { class: 'notice-box bank-box m-0' },
+    el('div', { style: 'font-weight:700' }, '💵 รับเงิน USD'),
+    el('div', { class: 'mt-4' }, 'เครือข่าย (Chain): ',
+      el('strong', { style: compact ? '' : 'font-size:19px' }, chain)),
+    el('div', { class: 'bank-number', style: compact ? '' : 'font-size:17px' },
+      // min-width:0 + ตัดบรรทัดกลางคำได้ — ที่อยู่ยาวไม่มีช่องว่าง ไม่งั้นดันกล่องล้นจอมือถือ
+      el('strong', { class: 'wallet-address', style: 'min-width:0;overflow-wrap:anywhere' }, address),
+      copyButton(address, 'คัดลอกที่อยู่กระเป๋า', { iconOnly: true })),
+    el('div', { class: 'sub-line' }, 'ที่อยู่กระเป๋า (Wallet address) — กดคัดลอกไปวาง ห้ามพิมพ์เอง'),
+    // บรรทัดนี้โชว์ทุกคนที่เห็นกล่อง (รวมส่วนกลาง) — เป็นข้อเท็จจริงของการโอนคริปโต ไม่ใช่แค่คำเตือนของร้าน
+    el('div', { class: 'sub-line', style: 'margin-top:6px;font-weight:700;color:var(--danger)' },
+      '⚠️ โอนผิดเครือข่าย (chain) เงินจะสูญหายและกู้คืนไม่ได้'),
+    shopWarning ? shopTransferWarning({ wallet: true }) : '',
+    compact
+      ? ''
+      : (bank.qrUrl
+        ? el('div', {},
+          el('a', { href: bank.qrUrl, target: '_blank', rel: 'noopener', class: 'qr-link' },
+            el('img', { src: bank.qrUrl, alt: 'QR ของกระเป๋าสำหรับโอน USD', class: 'qr-pay' })),
+          el('div', { class: 'btn-row', style: 'justify-content:center;margin-top:6px' },
+            el('a', { class: 'btn ghost sm', href: bank.qrUrl, download: `QR-USD-${chain}` }, '💾 บันทึกรูป QR')),
+          el('div', { class: 'sub-line' }, 'สแกนแล้วตรวจที่อยู่และเครือข่ายที่แอปกระเป๋าแสดงให้ตรงกับด้านบนทุกครั้ง'))
+        : el('div', { class: 'sub-line mt-8' },
+          'กระเป๋านี้ยังไม่ได้แนบ QR — กดคัดลอกที่อยู่ด้านบนไปวางในแอปกระเป๋า')),
+    bank.currencyMatches === false
+      ? el('div', { class: 'sub-line', style: 'margin-top:6px;font-weight:700' },
+        '⚠ บัญชีนี้คนละสกุลกับบิล — สอบถามทางเราก่อนโอน')
+      : '');
+}
+
+/**
+ * คำเตือนก่อนโอน (กติกาของเจ้าของระบบ) — ข้อความเดียวกับท้ายข้อความ Telegram ทุกฉบับที่มีเลขบัญชี
+ * ร้านเทียบสองทางได้: สิ่งที่เห็นบนเว็บ กับสิ่งที่ทางเราส่งเข้า Telegram (คนแก้เว็บได้ ไม่ได้แปลว่าแก้ Telegram ได้)
+ * wallet = กระเป๋า USD: สิ่งที่ต้องเทียบเปลี่ยนเป็นเครือข่าย + ที่อยู่กระเป๋า (ไม่มีธนาคาร/ชื่อบัญชีให้ตรวจ)
+ * ส่วน "ไม่ตรง ห้ามโอนเด็ดขาด" กับข้อสงวนสิทธิ์ใช้คำเดิมทุกตัวอักษร — เป็นถ้อยคำที่เจ้าของระบบกำหนด
+ */
+function shopTransferWarning({ wallet = false } = {}) {
+  return el('div', { class: 'alert-box bank-warning mt-8', role: 'note', style: 'text-align:left' },
+    el('strong', {}, wallet
+      ? '⚠️ ก่อนโอนทุกครั้ง โปรดตรวจเครือข่าย (chain) และที่อยู่กระเป๋าให้ตรงกับที่ทางเราแจ้งทาง Telegram ทุกตัวอักษร'
+      : '⚠️ ก่อนโอนทุกครั้ง โปรดตรวจธนาคาร เลขที่บัญชี และชื่อบัญชีให้ตรงกับที่ทางเราแจ้งทาง Telegram'),
+    // เรียงเหมือนท้ายข้อความ Telegram — ร้านอ่านสองที่แล้วเจอคำเดียวกันลำดับเดียวกัน
+    el('ul', {},
+      el('li', {}, wallet
+        ? 'สแกน QR หรือวางที่อยู่เองก็ตาม — ก่อนกดยืนยันในแอปกระเป๋า ให้ตรวจเครือข่ายและที่อยู่ปลายทางที่แอปแสดงให้ตรงกับที่ทางเราแจ้งทาง Telegram'
+        : 'สแกน QR หรือพิมพ์เลขเองก็ตาม — ก่อนกดยืนยันในแอปธนาคาร ให้ตรวจชื่อบัญชีและเลขบัญชีที่แอปแสดงให้ตรงกับที่ทางเราแจ้งทาง Telegram'),
+      el('li', {}, 'หากไม่ตรงกัน ', el('b', {}, 'ห้ามโอนเด็ดขาด'), ' และติดต่อทางเราทันที'),
+      el('li', {}, 'หากโอนผิดบัญชี หรือโอนเข้าบัญชีที่ไม่ตรงกับที่แจ้งทาง Telegram ทางเราขอสงวนสิทธิ์ไม่รับผิดชอบทุกกรณี')),
+    el('div', { class: 'sub-line mt-6' },
+      'ยังไม่ได้เชื่อม Telegram? เชื่อมได้ที่หน้า ',
+      el('a', { href: '#/account' }, '"บัญชีของฉัน"'),
+      ` หรือสอบถาม${wallet ? 'ที่อยู่กระเป๋า' : 'เลขบัญชี'}กับทางเราก่อนโอน`));
+}
+
+/**
+ * สถานะ "บัญชีของบิลตรงกับที่แจ้งทาง Telegram ไหม" (accountCheck จากเซิร์ฟเวอร์ — ร้านได้แค่ผล ไม่ได้ข้อมูลบัญชีเก่า)
+ * CHANGED  = บัญชีเปลี่ยนหลังส่ง Telegram ไปแล้ว — เตือนแดง ห้ามโอนจนกว่าจะได้เลขใหม่ทาง Telegram
+ * NOT_SENT = ยังไม่เคยส่งเลขบัญชีทาง Telegram (บิลออกก่อนมีระบบนี้ หรือร้านยังไม่ได้เชื่อม) — ให้ยืนยันกับทางเราตรง ๆ
+ * บิลที่ไม่มีบัญชี กล่องบัญชีบอกให้สอบถามอยู่แล้ว ไม่ต้องซ้ำ
+ */
+export function accountCheckNotice(inv) {
+  if (!inv?.bankAccount) return '';
+  const check = inv.accountCheck ?? 'NOT_SENT';
+  if (check === 'CHANGED') {
+    return el('div', { class: 'alert-box' },
+      el('strong', {}, '⛔ บัญชีของบิลนี้ไม่ตรงกับที่ทางเราแจ้งทาง Telegram ล่าสุด'),
+      el('div', {}, 'ห้ามโอน จนกว่าจะได้รับเลขบัญชีใหม่ทาง Telegram หรือยืนยันกับทางเราโดยตรง'));
+  }
+  if (check === 'NOT_SENT') {
+    return el('div', { class: 'notice-box' },
+      'บิลนี้ยังไม่ได้รับเลขบัญชีทาง Telegram — โปรดสอบถามและยืนยันเลขบัญชีกับทางเราโดยตรงก่อนโอน');
+  }
+  return '';
+}
+
+/** ป้าย 📎 N ท้ายเลขบิลในตาราง — นับจาก attachmentCount ไม่ต้องโหลดลิงก์รูปทุกใบมาทั้งตาราง */
+export function attachmentBadge(inv) {
+  const n = Number(inv?.attachmentCount ?? 0);
+  if (!(n > 0)) return '';
+  return el('span', { class: 'badge-attach', title: `มีรูปประกอบบิล ${n} รูป — กด "ดูบิล" เพื่อเปิดดู` }, `📎 ${int(n)}`);
+}
+
+/**
+ * รูปประกอบบิล — ใช้ทั้งหน้าบิลของส่วนกลาง/ร้าน (invoices.js) และหน้าต่างดูบิลของร้าน (billModal)
+ * รูปโชว์เป็นภาพย่อ กดแล้วเปิดขนาดเต็มในแท็บใหม่ · PDF ฝังเป็น <img> ไม่ได้ จึงเป็นลิงก์ 📄
+ * ลิงก์เป็นแบบเซ็นแล้วมีวันหมดอายุ (แบบเดียวกับสลิป) — เปิดหน้าต่างค้างไว้นานจนรูปโหลดไม่ขึ้น บอกให้เปิดบิลใหม่
+ * onRemove ส่งมาเฉพาะคนที่ลบได้ (ส่วนกลาง) — ไม่ส่ง = ไม่มีปุ่มลบ
+ * ไม่มีรูปคืน '' เพื่อให้ el() ข้ามไปเลยโดยไม่ต้องเช็กที่ปลายทาง
+ */
+export function attachmentGrid(attachments, { onRemove } = {}) {
+  const list = Array.isArray(attachments) ? attachments.filter(Boolean) : [];
+  if (!list.length) return '';
+
+  const item = (att) => {
+    const isPdf = att.type === 'pdf';
+    const name = att.caption || (isPdf ? 'ไฟล์ PDF ประกอบบิล' : 'รูปประกอบบิล');
+    const box = el('div', { class: 'attach-item' });
+
+    let preview;
+    if (isPdf) {
+      preview = el('a', { class: 'attach-pdf', href: att.url, target: '_blank', rel: 'noopener', title: `เปิด ${name} ในแท็บใหม่` },
+        '📄 PDF');
+    } else {
+      const img = el('img', { class: 'attach-thumb', src: att.url, alt: name, loading: 'lazy' });
+      preview = el('a', { href: att.url, target: '_blank', rel: 'noopener', title: 'กดเพื่อดูขนาดเต็ม' }, img);
+      img.addEventListener('error', () => {
+        preview.replaceWith(el('a', { class: 'attach-pdf', href: att.url, target: '_blank', rel: 'noopener' },
+          '⚠ เปิดรูปไม่ได้ — ปิดแล้วเปิดบิลใหม่'));
+      }, { once: true });
+    }
+
+    box.append(
+      preview,
+      att.caption ? el('div', { class: 'attach-caption' }, att.caption) : '',
+      onRemove
+        ? el('button', {
+          type: 'button',
+          class: 'attach-remove',
+          title: 'ลบรูปนี้ออกจากบิล',
+          'aria-label': `ลบ ${name}`,
+          onclick: () => onRemove(att),
+        }, 'ลบ')
+        : '');
+    return box;
+  };
+
+  return el('div', { class: 'attach-grid' }, ...list.map(item));
+}
+
+/**
+ * บรรทัดหลักฐานการยืนยันเลขบัญชีในหน้าตรวจสลิป
+ * บอกคนตรวจว่าร้านติ๊กยืนยันไหม และตอนแจ้งบิลชี้บัญชีไหน — ถ้าตอนนี้บิลชี้บัญชีอื่นแล้ว
+ * เงินอาจเข้าบัญชีเดิม ต้องไปดูรายการเดินบัญชีให้ถูกใบ
+ */
+function accountConfirmLine(row, inv) {
+  const confirmed = Boolean(row.accountConfirmedAt);
+  const shown = row.bankAccountLabel && row.bankAccountLabel !== '—' ? row.bankAccountLabel : null;
+  const current = inv?.bankAccount?.label ?? null;
+  return el('div', { class: 'mt-8' },
+    el('span', { class: `badge ${confirmed ? 'green' : 'gray'}` },
+      confirmed ? '✓ ร้านยืนยันว่าตรวจเลขบัญชีกับ Telegram แล้ว' : 'ตรวจเลขบัญชี: — ไม่ได้ยืนยัน'),
+    // ป้ายกระเป๋า USD มีที่อยู่ยาวไม่มีช่องว่าง — ต้องตัดบรรทัดได้ ไม่งั้นดันหน้าต่างตรวจสลิปล้นจอ
+    shown || confirmed
+      ? el('div', { class: 'sub-line mt-4', style: 'overflow-wrap:anywhere' },
+        `บัญชีของบิลตอนร้านแจ้ง: ${shown ?? 'ไม่ได้ระบุ'}${confirmed ? ` · ยืนยันเมื่อ ${dateTimeTh(row.accountConfirmedAt)}` : ''}`)
+      : '',
+    shown && current && shown !== current
+      ? el('div', { class: 'sub-line', style: 'font-weight:700;color:var(--danger);overflow-wrap:anywhere' },
+        `⚠ ตอนนี้บิลชี้บัญชี ${current} — ไม่ใช่บัญชีที่ร้านเห็นตอนแจ้ง ตรวจเงินเข้าให้ถูกบัญชี`)
+      : '');
+}
+
+/**
+ * สินค้าในบิล (พับไว้) — ตารางสรุปข้างบนบอกแค่ "ส่วนต่างจากยอดเต็ม" ก้อนเดียว กางดูได้ว่ามาจากสินค้าอะไรบ้าง
+ * สินค้ากลุ่มโชว์ "ประกอบด้วย: …" ให้ร้านรู้ว่าบรรทัดเดียวนั้นคือยอดของทั้งชุด (รายการย่อยไม่ได้คิดเงินแยก)
+ * พับไว้เพราะสิ่งที่ร้านมาหาในหน้าต่างนี้คือยอดที่ต้องโอนกับบัญชีปลายทาง ไม่ใช่ดันกล่องบัญชีตกจอ
+ */
+function billLinesDetails(inv) {
+  const lines = inv.lines ?? [];
+  if (!lines.length) return '';
+  const groups = lines.filter((l) => l.isGroup || l.components?.length).length;
+  return el('details', { class: 'bill-lines mt-12' },
+    el('summary', {}, `ดูสินค้าในบิล (${int(lines.length)} รายการ)`,
+      groups ? el('span', { class: 'sub-line' }, ` · สินค้ากลุ่ม ${int(groups)} รายการ`) : ''),
+    table([
+      { label: 'สินค้า', render: (l) => lineProductCell(l) },
+      { label: 'ยอดเต็ม', num: true, render: (l) => money(l.grossAmount) },
+      // กำหนดยอด = ทางเรากำหนดตัวเลขเอง ไม่ได้คิดจาก % — โชว์ % เดิมไว้ร้านจะคูณตามแล้วงงว่าทำไมไม่ตรง (คำเดียวกับหน้าบิล)
+      { label: '%', num: true, render: (l) => (l.billMode === 'MANUAL' ? 'กำหนดยอด' : pct(l.commissionPct)) },
+      { label: 'ส่วนต่าง', num: true, render: (l) => money(l.commissionAmount) },
+    ], lines, {
+      footer: ['รวม', money(inv.grossTotal), '', money(inv.commissionTotal)],
+    }));
 }
 
 /** ตารางแจกแจงยอดในบิล: ส่วนต่าง + ค่าใช้จ่าย − ส่วนลด = ยอดที่ต้องจ่าย */

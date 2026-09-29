@@ -14,14 +14,21 @@ use App\Services\BankAccountService;
  */
 class BankAccounts extends BaseApiController
 {
+    /*
+     * ช่องที่บังคับขึ้นกับสกุลของบัญชี — service ตรวจกับ "แถวที่จะได้" (ดู BankAccountService::assertValid)
+     *   THB = บัญชีธนาคารไทย: ธนาคาร ชื่อบัญชี เลขที่บัญชี (สาขาไม่บังคับ)
+     *   USD = กระเป๋าคริปโต: เครือข่าย (chain) + ที่อยู่กระเป๋า (ส่งมาในช่อง accountNumber) — ธนาคาร/ชื่อบัญชี/สาขาไม่ใช้
+     * จึงบังคับตรงนี้ได้แค่ช่องที่ทั้งสองแบบต้องมี
+     */
     private static function shape(): array
     {
         return [
-            'bankName'      => V::string()->min(1, 'ต้องระบุชื่อธนาคาร'),
-            'accountName'   => V::string()->min(1, 'ต้องระบุชื่อบัญชี'),
-            'accountNumber' => V::string()->min(1, 'ต้องระบุเลขที่บัญชี'),
-            'branch'        => V::string()->optional(),
-            'note'          => V::string()->optional(),
+            'bankName'      => V::string()->max(150, 'ชื่อธนาคารยาวได้ไม่เกิน 150 ตัวอักษร')->optional(),
+            'accountName'   => V::string()->optional(),
+            'accountNumber' => V::string()->min(1, 'ต้องระบุเลขที่บัญชี (บัญชี USD = ที่อยู่กระเป๋า)'),
+            'chain'         => V::string()->max(32, 'เครือข่าย (chain) ยาวได้ไม่เกิน 32 ตัวอักษร')->nullable()->optional(),
+            'branch'        => V::string()->nullable()->optional(),
+            'note'          => V::string()->nullable()->optional(),
             'isDefault'     => V::boolean()->optional(),
             'currency'      => V::enum(['THB', 'USD'])->optional(),
             // รับเฉพาะไฟล์ที่อัปโหลดผ่านระบบ — null คือถอด QR ออก
@@ -72,5 +79,14 @@ class BankAccounts extends BaseApiController
     public function delete(string $id)
     {
         return $this->json(BankAccountService::delete(V::parseId($id), (int) $this->user()['id']));
+    }
+
+    /**
+     * ส่งเลขบัญชีนี้ให้ร้านที่มีบิลค้างจ่ายทาง Telegram — เส้นทางบังคับรหัส 6 หลัก (elevated)
+     * เพราะเป็นการบอกร้านว่า "โอนเข้าบัญชีนี้" ได้ทีละหลายร้าน
+     */
+    public function notifyShops(string $id)
+    {
+        return $this->json(BankAccountService::notifyShops(V::parseId($id), $this->user()));
     }
 }

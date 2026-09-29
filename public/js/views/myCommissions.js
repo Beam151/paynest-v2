@@ -1,111 +1,61 @@
-import { api, qs } from '../api.js';
-import { badge, card, commBadge, dateTh, el, infoModal, int, money, pct, stat, table } from '../ui.js';
-import { periodLabel } from '../period.js';
+import { api } from '../api.js';
+import { badge, card, commBadge, dateTh, el, infoModal, int, monthTh, money, stat, table } from '../ui.js';
+import { todayIso } from '../period.js';
 import { render } from '../app.js';
 import { viewState } from '../viewState.js';
+import { barTrend } from '../charts.js';
+import { commissionDetail, commissionSubtitle, commissionTitle } from './commissionLines.js';
+import { dealTerms } from './billLines.js';
 
 const STATUS_KEY = 'franchise.myCommStatus';
 
 /**
- * หน้าแรกของเซล — ตอบคำถามเดียว: "รอบนี้ได้เท่าไร ได้รับแล้วหรือยัง"
+ * หน้าแรกของเซล — ตอบคำถามเดียว: "ได้เท่าไร ได้รับแล้วหรือยัง"
  *
- * รายละเอียดของรอบอยู่ในป๊อปอัพ ไม่กางในตาราง เพราะมันคือ "ใบสรุปของรอบนั้น"
- * แบบเดียวกับที่ส่วนกลางเปิดดูบิลของร้าน
+ * ค่าคอมมาเป็น "บิลค่าคอม" ที่ส่วนกลางทำให้เป็นครั้ง ๆ (ติ๊กรายการจากบิลร้าน + ค่าคอมอื่น ๆ)
+ * ไม่ได้ผูกกับรอบบิลแล้ว — สรุปรายเดือนแทนรายรอบ
+ * รายการในบิลแต่ละใบอยู่ในป๊อปอัพ ("ใบสรุป") แบบเดียวกับที่ส่วนกลางเปิดดู
  * ส่วนรายการสินค้าที่ถือดีลแยกไปเมนู "สินค้าที่ถือดีล" — คนละคำถามกัน
  */
 export async function myCommissionsView() {
   const statusFilter = viewState.getItem(STATUS_KEY) ?? '';
   const [me, comms] = await Promise.all([
     api.get('/api/sales-agents/me'),
-    // ใบสรุปของรอบต้องเห็นทุกรายการเสมอ — ตัวกรองสถานะใช้กับตารางรายรอบด้านล่าง
     api.get('/api/sales-agents/me/commissions'),
   ]);
 
   const statusPicker = el('select', {
     onchange: (e) => { viewState.setItem(STATUS_KEY, e.target.value); render(); },
   }, ...[
-    { value: '', label: 'ทุกสถานะ' },
-    { value: 'PENDING', label: 'รอบที่ยังรอรับ' },
-    { value: 'PAID', label: 'รอบที่ได้รับแล้ว' },
+    { value: '', label: 'ทุกบิล (ไม่รวมที่ยกเลิก)' },
+    { value: 'PENDING', label: 'รอรับ' },
+    { value: 'PAID', label: 'ได้รับแล้ว' },
+    { value: 'VOID', label: 'ยกเลิก' },
   ].map((o) => el('option', { value: o.value, selected: o.value === statusFilter }, o.label)));
 
-  // ตัวกรองสถานะเดิมไปกรองแค่รายการในป๊อปอัพ ตารางหลักไม่เปลี่ยนเลย — กรองที่ตารางรายรอบแทน
-  const received = (r) => r.totalAmount - r.pendingAmount > 0;
-  const rows = me.byPeriod.filter((r) => (statusFilter === 'PENDING' ? r.pendingAmount > 0
-    : statusFilter === 'PAID' ? received(r) && r.pendingAmount === 0 : true));
+  // บิลที่ยกเลิกไม่ใช่เงินที่จะได้ — ซ่อนไว้ก่อน เลือกดูเองได้ถ้าอยากรู้ว่าถูกยกเลิกเพราะอะไร
+  const bills = comms.items.filter((r) => (statusFilter ? r.status === statusFilter : r.status !== 'VOID'));
+  const liveCount = comms.items.filter((r) => r.status !== 'VOID').length;
 
-  /** ใบสรุปของรอบหนึ่ง — โครงเดียวกับใบเรียกเก็บที่ส่วนกลางออกให้ร้าน */
-  const periodModal = (row) => {
-    const items = comms.items.filter((c) => c.periodCode === row.periodCode);
-    const fromDeals = items.filter((c) => !c.isManual);
-    const manual = items.filter((c) => c.isManual);
-    const sum = (list) => Number(list.reduce((t, c) => t + c.totalAmount, 0).toFixed(2));
-    const received = Number((row.totalAmount - row.pendingAmount).toFixed(2));
+  // เซิร์ฟเวอร์ส่ง 12 เดือนล่าสุด — กราฟอ่านจากซ้าย (เก่า) ไปขวา (ใหม่)
+  const byMonth = [...(me.byMonth ?? [])].sort((a, b) => String(a.month).localeCompare(String(b.month)));
+  const thisMonth = todayIso().slice(0, 7);
+  // เซิร์ฟเวอร์ส่งยอดที่จ่ายแล้วมาให้ (ไม่นับที่ยกเลิก) — รุ่นที่ไม่มีช่องนี้ใช้ รวม − ค้าง แทน
+  const receivedOf = (m) => Number((m.paidAmount ?? (m.totalAmount - m.pendingAmount)).toFixed(2));
 
-    const modal = infoModal({
-      title: `รอบ ${periodLabel(row.periodCode)}`,
-      width: 760,
-      content: null,
-    });
-
-    modal.body.append(
-      el('div', { class: 'stat-grid' },
-        stat('รวมคอมรอบนี้', money(row.totalAmount) + ' ฿', `${int(items.length)} รายการ`, { tone: 'sales', icon: '🎯' }),
-        stat('ได้รับแล้ว', money(received) + ' ฿', null, { tone: 'income', icon: '✓' }),
-        stat('ยังรอรับ', money(row.pendingAmount) + ' ฿', 'ส่วนกลางยังไม่ได้จ่าย',
-          { tone: row.pendingAmount > 0 ? 'due' : 'income', icon: row.pendingAmount > 0 ? '⏳' : '✓' })),
-
-      el('h3', { style: 'margin:6px 0 8px' }, 'คอมจากสินค้าที่ถือดีล'),
-      table([
-        {
-          label: 'ร้านที่ขาย',
-          render: (r) => el('div', {}, el('strong', {}, r.franchiseUsername ?? '—'),
-            el('div', { class: 'sub-line' }, r.invoiceNo ?? '—')),
-        },
-        {
-          label: 'ฐานที่คิด',
-          num: true,
-          render: (r) => el('div', {}, money(r.baseAmount), el('div', { class: 'sub-line' }, r.basisLabel)),
-        },
-        { label: 'จาก %', num: true, render: (r) => (r.commissionPct === null ? el('span', { class: 'muted' }, '—') : `${money(r.pctAmount)} (${pct(r.commissionPct)})`) },
-        { label: 'เหมาต่อรอบ', num: true, render: (r) => (r.fixedAmount ? money(r.fixedAmount) : el('span', { class: 'muted' }, '—')) },
-        { label: 'รวม', num: true, render: (r) => el('strong', {}, money(r.totalAmount)) },
-        { label: 'สถานะ', render: (r) => commBadge(r.status, { forAgent: true }) },
-      ], fromDeals, {
-        sortable: false,
-        empty: 'รอบนี้ไม่มีคอมจากดีล',
-        footer: fromDeals.length ? ['', '', '', 'รวมจากดีล', money(sum(fromDeals)), ''] : undefined,
-      }),
-
-      // โผล่เฉพาะตอนมีจริง — รอบไหนไม่มีก็ไม่ต้องมีหัวข้อว่างให้รก
-      manual.length ? el('h3', { style: 'margin:18px 0 8px' }, 'ค่าคอมอื่น ๆ') : '',
-      manual.length
-        ? table([
-          {
-            label: 'รายการ',
-            render: (r) => el('div', {}, el('strong', {}, r.label),
-              r.note ? el('div', { class: 'sub-line' }, r.note) : ''),
-          },
-          { label: 'จำนวนเงิน', num: true, render: (r) => el('strong', {}, money(r.totalAmount)) },
-          { label: 'สถานะ', render: (r) => commBadge(r.status, { forAgent: true }) },
-          { label: 'วันที่ได้รับ', render: (r) => (r.paidAt ? dateTh(r.paidAt) : el('span', { class: 'muted' }, '—')) },
-        ], manual, {
-          sortable: false,
-          footer: ['รวมค่าคอมอื่น ๆ', money(sum(manual)), '', ''],
-        })
-        : '',
-
-      el('div', { class: 'notice-box', style: 'margin:18px 0 0' },
-        row.pendingAmount > 0
-          ? `รอบนี้ยังรอรับ ${money(row.pendingAmount)} ฿ จากทั้งหมด ${money(row.totalAmount)} ฿`
-          : `รอบนี้ได้รับครบ ${money(row.totalAmount)} ฿ แล้ว`));
-  };
+  const billModal = (row) => infoModal({
+    title: commissionTitle(row),
+    width: 860,
+    content: commissionDetail(row, { forAgent: true }),
+  });
 
   return el('div', {},
     el('div', { class: 'page-head' },
       el('div', {},
         el('h1', {}, 'รายได้ของฉัน'),
-        el('p', {}, `${me.agent.name} · ${me.agent.username} — ค่าคอมเกิดทุกครั้งที่ส่วนกลางออกบิลที่มีสินค้าที่คุณถือดีล`)),
+        el('p', { style: 'max-width:66ch' },
+          `${me.agent.name} · ${me.agent.username} — ส่วนกลางรวมรายการจากบิลร้านของสินค้าที่คุณถือดีล (และค่าคอมอื่น ๆ) `
+          + 'ทำเป็น "บิลค่าคอม" แล้วโอนให้เป็นครั้ง ๆ')),
       el('div', { class: 'field' }, statusPicker)),
 
     el('div', { class: 'stat-grid' },
@@ -113,65 +63,84 @@ export async function myCommissionsView() {
         { tone: me.summary.pending > 0 ? 'due' : 'muted', icon: '⏳' }),
       stat('ได้รับแล้วสะสม', money(me.summary.paid) + ' ฿', 'ตั้งแต่เริ่มทำ', { tone: 'income', icon: '✓' }),
       stat('รวมทั้งหมด', money(Number((me.summary.pending + me.summary.paid).toFixed(2))) + ' ฿',
-        `จาก ${int(me.byPeriod.length)} รอบบิล`, { tone: 'sales', icon: '🎯' }),
+        `จาก ${int(liveCount)} บิลค่าคอม`, { tone: 'sales', icon: '🎯' }),
       stat('สินค้าที่ถือดีลอยู่', int(me.summary.activeProducts),
         el('a', { href: '#/my-deals' }, 'ดูเงื่อนไขคอม →'), { tone: 'muted', icon: '📦' })),
 
-    card('รายได้แต่ละรอบบิล',
+    byMonth.length
+      ? card('ค่าคอมรายเดือน',
+        el('div', {},
+          barTrend(byMonth.map((m) => ({ label: monthTh(m.month), value: m.totalAmount })), { highlight: monthTh(thisMonth) }),
+          table([
+            { label: 'เดือน', sortValue: (r) => r.month, render: (r) => el('strong', {}, monthTh(r.month)) },
+            { label: 'บิลค่าคอม', num: true, render: (r) => int(r.count) },
+            {
+              label: 'ได้รับแล้ว',
+              num: true,
+              render: (r) => (receivedOf(r) > 0
+                ? el('strong', { class: 'text-success' }, money(receivedOf(r)))
+                : el('span', { class: 'muted' }, '—')),
+            },
+            {
+              label: 'ยังรอรับ',
+              num: true,
+              sortValue: (r) => r.pendingAmount,
+              render: (r) => (r.pendingAmount
+                ? el('strong', { class: 'text-warn' }, money(r.pendingAmount))
+                : el('span', { class: 'muted' }, '—')),
+            },
+            { label: 'รวมทั้งเดือน', num: true, sortValue: (r) => r.totalAmount, render: (r) => el('strong', {}, money(r.totalAmount)) },
+          ], [...byMonth].reverse(), { sortable: false })),
+        { tight: true })
+      : '',
+
+    card('บิลค่าคอมของฉัน',
       table([
+        { label: 'เลขที่', sortValue: (r) => commissionTitle(r), render: (r) => el('strong', {}, commissionTitle(r)) },
+        { label: 'วันที่', sortValue: (r) => r.createdAt ?? '', render: (r) => dateTh(r.createdAt) },
+        { label: 'รายการ', render: (r) => commissionSubtitle(r) },
+        { label: 'ยอดรวม', num: true, sortValue: (r) => r.totalAmount, render: (r) => el('strong', {}, money(r.totalAmount)) },
         {
-          label: 'รอบบิล',
-          sortValue: (r) => r.periodCode,
-          render: (r) => el('strong', {}, periodLabel(r.periodCode)),
+          label: 'สถานะ',
+          render: (r) => el('div', {}, commBadge(r.status, { forAgent: true }),
+            r.status === 'PAID' && r.paidAt ? el('div', { class: 'sub-line' }, `ได้รับ ${dateTh(r.paidAt)}`) : ''),
         },
-        { label: 'จำนวนรายการ', num: true, render: (r) => int(r.entries) },
-        {
-          label: 'ได้รับแล้ว',
-          num: true,
-          sortValue: (r) => r.totalAmount - r.pendingAmount,
-          render: (r) => (r.totalAmount - r.pendingAmount > 0
-            ? el('strong', { class: 'text-success' }, money(Number((r.totalAmount - r.pendingAmount).toFixed(2))))
-            : el('span', { class: 'muted' }, '—')),
-        },
-        {
-          label: 'ยังรอรับ',
-          num: true,
-          sortValue: (r) => r.pendingAmount,
-          render: (r) => (r.pendingAmount
-            ? el('strong', { class: 'text-warn' }, money(r.pendingAmount))
-            : el('span', { class: 'muted' }, '—')),
-        },
-        { label: 'รวมทั้งรอบ', num: true, sortValue: (r) => r.totalAmount, render: (r) => el('strong', {}, money(r.totalAmount)) },
         {
           label: '',
           sortable: false,
-          render: (r) => el('button', { class: 'btn sm', onclick: () => periodModal(r) }, 'ดูใบสรุป'),
+          render: (r) => el('button', { class: 'btn sm', onclick: () => billModal(r) }, 'ดูรายการ'),
         },
-      ], rows, {
+      ], bills, {
         empty: statusFilter
-          ? 'ไม่มีรอบที่ตรงกับสถานะที่เลือก'
-          : 'ยังไม่มีค่าคอมเกิดขึ้น — จะเริ่มมีเมื่อส่วนกลางออกบิลที่มีสินค้าที่คุณถือดีล',
+          ? 'ไม่มีบิลค่าคอมที่ตรงกับสถานะที่เลือก'
+          : 'ยังไม่มีบิลค่าคอม — ส่วนกลางจะทำบิลค่าคอมให้เมื่อถึงรอบจ่าย',
       }),
       { tight: true }));
 }
 
-/** เมนูแยกอีกหน้า — "ของเรามีอะไรบ้าง" คนละคำถามกับ "รอบนี้ได้เท่าไร" */
+/** เมนูแยกอีกหน้า — "ของเรามีอะไรบ้าง" คนละคำถามกับ "ได้เท่าไร" */
 export async function myDealsView() {
   const me = await api.get('/api/sales-agents/me');
-  const active = me.products.filter((l) => l.isActive);
+  // ดีลเปิดอยู่ = ยังไม่มีวันปิด (ดีลเก่าที่ตั้งวันสิ้นสุดไว้ล่วงหน้า นับว่าเปิดจนถึงวันนั้น)
+  const isOpen = (l) => !l.endDate || l.endDate > todayIso();
+  const active = me.products.filter(isOpen);
 
   return el('div', {},
     el('div', { class: 'page-head' },
       el('div', {},
         el('h1', {}, 'สินค้าที่ถือดีล'),
-        el('p', {}, 'สินค้าที่คุณผลักดัน และเงื่อนไขคอมของแต่ละชิ้น — ทุกครั้งที่ส่วนกลางออกบิลที่มีสินค้านี้ คุณได้ส่วนต่างตามนี้'))),
+        el('p', { style: 'max-width:66ch' },
+          'สินค้าที่คุณผลักดัน และเงื่อนไขคอมของแต่ละชิ้น — % คิดจากยอดขายเต็มของร้าน '
+          + 'ส่วนกลางติ๊กรายการของสินค้าเหล่านี้จากบิลร้านมาทำเป็นบิลค่าคอมให้คุณ · '
+          // ส่วนกลางแก้ดีลได้แล้ว — เซลเห็นเลขเปลี่ยนแล้วต้องรู้ว่าบิลที่ได้ไปแล้วไม่ถูกคิดใหม่
+          + 'ส่วนกลางแก้เงื่อนไขได้ ตัวเลขใหม่ใช้กับบิลค่าคอมที่ทำหลังจากนั้น (บิลที่ทำไปแล้วไม่เปลี่ยน)'))),
 
     el('div', { class: 'stat-grid' },
       stat('ถือดีลอยู่ตอนนี้', int(active.length), 'ที่ยังได้รับคอมต่อเนื่อง', { tone: 'sales', icon: '📦' }),
       stat('ร้านที่เกี่ยวข้อง', int(new Set(active.map((l) => l.franchiseUsername).filter(Boolean)).size),
         'ร้านที่ขายสินค้าของคุณอยู่', { tone: 'muted', icon: '🏪' }),
       stat('รอรับ', money(me.summary.pending) + ' ฿',
-        el('a', { href: '#/my-sales' }, 'ดูรายได้แต่ละรอบ →'),
+        el('a', { href: '#/my-sales' }, 'ดูบิลค่าคอม →'),
         { tone: me.summary.pending > 0 ? 'due' : 'muted', icon: '⏳' })),
 
     card(null, table([
@@ -185,18 +154,16 @@ export async function myDealsView() {
         sortValue: (l) => l.franchiseUsername ?? '',
         render: (l) => l.franchiseUsername ?? el('span', { class: 'muted' }, '—'),
       },
+      { label: 'เงื่อนไขคอม', render: (l) => dealTerms({ pct: l.commissionPct, fixedAmount: l.fixedAmount }) },
       {
-        label: 'เงื่อนไขคอม',
-        render: (l) => el('div', {}, ...[
-          l.commissionPct === null ? null : `${pct(l.commissionPct)} ของ${l.basisLabel}`,
-          l.fixedAmount === null ? null : `เหมา ${money(l.fixedAmount)} ฿/รอบ`,
-        ].filter(Boolean).map((t, i) => el('div', { class: i ? 'sub-line' : '' }, t))),
+        label: 'สถานะ',
+        sortValue: (l) => (isOpen(l) ? `0${l.startDate}` : `1${l.endDate}`),
+        render: (l) => (isOpen(l)
+          ? el('div', {}, badge('ACTIVE'), el('div', { class: 'sub-line' }, `เริ่ม ${dateTh(l.startDate)}`))
+          : el('div', {}, badge('CLOSED'), el('div', { class: 'sub-line' }, `ปิดแล้ว ${dateTh(l.endDate)}`))),
       },
-      { label: 'ตั้งแต่', sortValue: (l) => l.startDate, render: (l) => dateTh(l.startDate) },
-      { label: 'ถึง', render: (l) => (l.endDate ? dateTh(l.endDate) : el('span', { class: 'muted' }, 'ไม่กำหนด')) },
-      { label: 'สถานะ', sortValue: (l) => String(l.isActive), render: (l) => badge(l.isActive ? 'ACTIVE' : 'CLOSED') },
     ], me.products, {
       search: 'ค้นหาสินค้าหรือร้าน…',
-      empty: 'ยังไม่มีสินค้าในความดูแล — ส่วนกลางเป็นคนผูกดีลให้',
+      empty: 'ยังไม่มีสินค้าในความดูแล — ส่วนกลางเป็นคนผูกดีลให้ (ไม่มีดีลก็ยังได้ค่าคอมอื่น ๆ ได้)',
     }), { tight: true }));
 }

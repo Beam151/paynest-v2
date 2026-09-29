@@ -150,6 +150,15 @@ class DemoSeeder extends Seeder
         $products = array_map(static fn ($p) => ProductService::create(['sku' => $p[0], 'commissionPct' => $p[1], 'name' => $p[2]], $adminId), $productsInput);
 
         /*
+         * สินค้ากลุ่มตัวอย่าง — COFFEE-KIT เป็น "ชุด" อยู่แล้วตามชื่อ ติ๊กสินค้าย่อยให้เห็นป้ายกลุ่ม/"ประกอบด้วย" ทุกหน้า
+         * ทำก่อนมียอดขายและบิล บิลตัวอย่างจึงจดรายการย่อยไว้ครบ · ไม่ดึงเลขสุ่มเพิ่ม ตัวเลขเงินทุกตัวยังเท่าชุดเดิม
+         */
+        ProductService::update($products[0]['id'], [
+            'isGroup'        => true,
+            'itemProductIds' => array_map(static fn ($i) => $products[$i]['id'], [13, 1, 8, 9]), // GRINDER-P · BEAN-ARBC · CUP-PAPER · LID-DOME
+        ], $adminId);
+
+        /*
          * ── 3) มอบหมายสินค้า — 1 สินค้า = 1 ร้านเท่านั้น ──
          * แจกวนให้ทั่วทุกร้าน แล้วเว้น 2 ชิ้นท้ายไว้ยังไม่มอบหมาย ให้มีตัวอย่าง "สินค้าที่ยังว่าง"
          */
@@ -180,16 +189,23 @@ class DemoSeeder extends Seeder
             }
         }
 
-        /* ── 5) เซล 4 คน + ดีลที่ผูกกับสินค้า (เรตอยู่ที่ดีล ไม่ได้ติดตัวเซล) ── */
+        /*
+         * ── 5) เซล 5 คน + ดีลที่ผูกกับสินค้า (เรตอยู่ที่ดีล ไม่ได้ติดตัวเซล · % คิดจากยอดขายเต็มเสมอ) ──
+         * sale05 ไม่ถือดีลสินค้าเลย — ตัวอย่างเซลที่ได้แต่ "ค่าคอมอื่น ๆ" (เช่นค่าแนะนำร้าน)
+         */
         $agentsInput = [
             ['sale01', 'สมชาย ทองอยู่ (ภาคกลาง)', '0891112222', 5, 300],
             ['sale02', 'สุดา คำแสน (ภาคเหนือ)', '0893334444', 8, null],
             ['sale03', 'ณัฐพงษ์ ดวงแก้ว (ภาคใต้)', '0895556666', 6, 500],
             ['sale04', 'พิมพ์ใจ อินทร์ทอง (อีสาน)', '0897778888', 7, null],
+            ['sale05', 'ธีรวัฒน์ ศรีวงศ์ (ตัวแทนแนะนำร้าน)', '0899990000', null, null],
         ];
         $agents = array_map(static fn ($a) => SalesAgentService::create(['username' => $a[0], 'name' => $a[1], 'phone' => $a[2], 'password' => 'sale1234567'], $adminId), $agentsInput);
 
-        // ตั้งใจให้บางร้านมีสินค้าของเซลคนละคนปนกัน (บิลใบเดียวแตกค่าคอมให้หลายคน) และเว้นบางชิ้นไว้ไม่มีเซลถือ
+        /*
+         * ตั้งใจให้บางร้านมีสินค้าของเซลคนละคนปนกัน (บิลร้านใบเดียวมีรายการให้เซลหลายคน) และเว้นบางชิ้นไว้ไม่มีเซลถือ
+         * ใส่วันเริ่มย้อนหลังผ่าน API (หน้าเว็บไม่มีช่องวันที่ — ดีลใหม่เริ่มวันที่กด) ให้ตารางดีลดูเหมือนถือมาตั้งแต่ต้น
+         */
         $deals = [[0, 0], [0, 1], [0, 2], [0, 10], [1, 3], [1, 4], [1, 11], [2, 5], [2, 12], [3, 6], [3, 7], [3, 13]];
         foreach ($deals as [$ai, $pi]) {
             SalesAgentService::linkProduct([
@@ -201,19 +217,16 @@ class DemoSeeder extends Seeder
             ], $adminId);
         }
 
-        // ค่าคอมที่พิมพ์เพิ่มเองนอกเหนือจากดีล — โบนัส/ค่าเดินทางที่ตกลงกันเป็นครั้ง ๆ
-        foreach ([[0, '2026-08-H1', 'โบนัสปิดร้านใหม่ bkk03', 5000], [1, '2026-08-H1', 'ค่าเดินทางไปเปิดร้านเชียงใหม่', 2400],
-            [0, '2026-08-H2', 'โบนัสยอดทะลุเป้าไตรมาส', 8000], [2, '2026-08-H2', 'หักคืนค่าคอมที่คิดเกินรอบก่อน', -1200]] as [$ai, $periodCode, $label, $amount]) {
-            SalesAgentService::createManual(['salesAgentId' => $agents[$ai]['agent']['id'], 'periodCode' => $periodCode, 'label' => $label, 'amount' => $amount], $adminId);
-        }
-
         /* ── บัญชีรับเงิน — บัญชีแรกเป็นบัญชีหลักอัตโนมัติ · QR ตัวอย่างสแกนไม่ติด ใช้ดูหน้าตาเท่านั้น ── */
         $banks = [
             ['bankName' => 'กสิกรไทย', 'accountName' => 'บจก. เซ็นทรัลซัพพลาย', 'accountNumber' => '1234567890', 'branch' => 'สีลม', 'note' => 'บัญชีหลักของบริษัท'],
             ['bankName' => 'ไทยพาณิชย์', 'accountName' => 'บจก. เซ็นทรัลซัพพลาย', 'accountNumber' => '9876543210', 'branch' => 'อโศก'],
             ['bankName' => 'กรุงเทพ', 'accountName' => 'บจก. เซ็นทรัลซัพพลาย', 'accountNumber' => '5551234567', 'note' => 'ใช้กับร้านต่างจังหวัด'],
-            // บิลสกุลดอลลาร์ต้องมีบัญชีที่รับดอลลาร์รออยู่
-            ['bankName' => 'กรุงไทย', 'accountName' => 'บจก. เซ็นทรัลซัพพลาย (FCD)', 'accountNumber' => '4440001112', 'branch' => 'สำนักงานใหญ่', 'currency' => 'USD', 'note' => 'บัญชีเงินตราต่างประเทศ ใช้กับร้านที่จ่ายเป็นดอลลาร์'],
+            /*
+             * บิลสกุลดอลลาร์ต้องมีบัญชีที่รับดอลลาร์รออยู่ — บัญชี USD คือกระเป๋าคริปโต (เครือข่าย + ที่อยู่กระเป๋า)
+             * ที่อยู่นี้ปลอมชัด ๆ (มีคำว่า Demo) ห้ามใครเอาไปโอนจริง
+             */
+            ['currency' => 'USD', 'chain' => 'TRC20', 'accountNumber' => 'TDemoWalletAddress000000000000000', 'note' => 'กระเป๋า USDT ตัวอย่าง (ที่อยู่ปลอม) ใช้กับร้านที่จ่ายเป็นดอลลาร์'],
         ];
         foreach ($banks as $i => $bank) {
             BankAccountService::create([...$bank, 'qrUrl' => SampleImages::qr($i + 1)], $adminId);
@@ -312,14 +325,62 @@ class DemoSeeder extends Seeder
             }
         }
 
-        /* ── 8) จ่ายค่าคอมเซลไปแล้วบางส่วน ── */
-        $commissionPaid = 0;
-        foreach (SalesAgentService::listCommissions(['status' => 'PENDING'], $admin)['items'] as $c) {
-            if ($this->rnd() < 0.45) {
-                SalesAgentService::markPaid($c['id'], ['paidAt' => '2026-09-10'], $admin);
-                $commissionPaid++;
+        /*
+         * ── 8) บิลค่าคอมเซล — ออกบิลร้านแล้วไม่มีค่าคอมเกิดเอง ส่วนกลางทำบิลค่าคอมจากรายการบิลร้านที่ออกไปแล้ว ──
+         * มิ.ย.–ก.ค. ครึ่งแรก = บิลที่จ่ายแล้ว · ก.ค. ครึ่งหลัง–ส.ค. ครึ่งแรก = บิลรอจ่าย
+         * ส.ค. ครึ่งหลัง เว้นไว้ให้ลองกด "ทำบิลค่าคอม" เอง
+         * ส่วนใหญ่คิด % ตามดีล ทุกรายการที่ 5 "กรอกเอง" (ปัดลงเป็นหลักพัน เหมือนตกลงยอดกลม ๆ กัน) ให้เห็นตัวอย่างทั้งสองแบบ
+         * ย้อนวันที่ทำบิลให้กระจายหลายเดือน (หน้าเซลสรุปรายเดือน) — ทำได้เพราะเป็นข้อมูลตัวอย่างเท่านั้น
+         */
+        $commissionStages = [
+            ['periods' => array_slice($periods, 0, 3), 'date' => '2026-08-03', 'paidAt' => '2026-08-05', 'note' => 'ค่าคอมรอบ มิ.ย. – ก.ค. (ครึ่งแรก)'],
+            ['periods' => array_slice($periods, 3, 2), 'date' => '2026-09-02', 'paidAt' => null, 'note' => 'ค่าคอมรอบ ก.ค. (ครึ่งหลัง) – ส.ค. (ครึ่งแรก)'],
+        ];
+        // ค่าคอมอื่น ๆ — โบนัส/ค่าเดินทางที่ตกลงกันเป็นครั้ง ๆ (ติดลบ = หักคืน) · ไม่ต้องเลือกรอบ
+        $otherLines = [
+            0 => [0 => [['โบนัสปิดร้านใหม่ bkk03', 5000]], 1 => [['โบนัสยอดทะลุเป้าไตรมาส', 8000]]],
+            1 => [0 => [['ค่าเดินทางไปเปิดร้านเชียงใหม่', 2400]]],
+            2 => [1 => [['หักคืนค่าคอมที่คิดเกินรอบก่อน', -1200]]],
+            4 => [1 => [['ค่าแนะนำร้านใหม่ ryg01', 3000], ['ค่าเดินทางพบลูกค้าระยอง', 850]]],
+        ];
+        $commissionBills = ['PAID' => 0, 'PENDING' => 0];
+        foreach ($agents as $ai => $a) {
+            $agentId    = $a['agent']['id'];
+            $candidates = SalesAgentService::commissionCandidates($agentId);
+            foreach ($commissionStages as $stage => $cfg) {
+                $items = [];
+                foreach (array_values(array_filter($candidates['items'], static fn ($it) => in_array($it['periodCode'], $cfg['periods'], true))) as $n => $it) {
+                    $pct    = (float) ($it['deal']['pct'] ?? 0);
+                    $manual = floor($it['grossAmount'] * $pct / 100 / 1000) * 1000;
+                    $items[] = $n % 5 === 4 && $manual > 0
+                        ? ['entryId' => $it['entryId'], 'mode' => 'MANUAL', 'amount' => $manual]
+                        : ['entryId' => $it['entryId'], 'mode' => 'PCT', 'pct' => $pct];
+                }
+                $fixed = array_map(
+                    static fn ($f) => ['key' => $f['key']],
+                    array_values(array_filter($candidates['fixed'], static fn ($f) => in_array($f['periodCode'], $cfg['periods'], true))),
+                );
+                $others = array_map(static fn ($o) => ['label' => $o[0], 'amount' => $o[1]], $otherLines[$ai][$stage] ?? []);
+                if ($items === [] && $fixed === [] && $others === []) {
+                    continue;
+                }
+                // เซลที่ไม่ถือดีลได้แต่ค่าคอมอื่น ๆ — บิลไม่ได้อ้างรอบไหน หมายเหตุจึงไม่ใช่ชื่อรอบ
+                $note   = $items === [] && $fixed === [] ? 'ค่าคอมอื่น ๆ (ไม่ได้ถือดีลสินค้า)' : $cfg['note'];
+                $bill   = SalesAgentService::createCommissionBill($agentId, ['items' => $items, 'fixed' => $fixed, 'others' => $others, 'note' => $note], $admin);
+                $billNo = 'COM-' . str_replace('-', '', $cfg['date']) . '-' . $a['agent']['username'];
+                Db::exec(
+                    'UPDATE sales_commissions SET bill_no = ?, created_at = ?, updated_at = ? WHERE id = ?',
+                    [$billNo, "{$cfg['date']} 03:00:00", "{$cfg['date']} 03:00:00", $bill['id']],
+                );
+                if ($cfg['paidAt'] !== null) {
+                    SalesAgentService::markPaid($bill['id'], ['paidAt' => $cfg['paidAt']], $admin);
+                    $commissionBills['PAID']++;
+                } else {
+                    $commissionBills['PENDING']++;
+                }
             }
         }
+        $uncommissioned = array_sum(array_map(static fn ($a) => count(SalesAgentService::commissionCandidates($a['agent']['id'])['items']), $agents));
 
         /* ── สรุปให้ดูว่าได้อะไรมาบ้าง ── */
         $count = static fn (string $table) => Db::int("SELECT COUNT(*) FROM {$table}");
@@ -336,12 +397,18 @@ class DemoSeeder extends Seeder
         CLI::write('  ส่วนต่างรวม       ' . $sum('SELECT SUM(commission_amount_satang) FROM sales_entries') . ' บาท');
         CLI::write('  ใบเรียกเก็บ       ' . count($invoices) . " ใบ — ชำระครบ {$paidFull} · ชำระบางส่วน {$paidPartial}");
         CLI::write("  แจ้งชำระ         รอตรวจสอบ {$pending} · ยืนยันแล้ว {$approved}");
-        CLI::write('  ค่าคอมเซล        ' . $count('sales_commissions') . " รายการ (จ่ายแล้ว {$commissionPaid})");
+        CLI::write('  บิลค่าคอมเซล      ' . array_sum($commissionBills) . " ใบ (จ่ายแล้ว {$commissionBills['PAID']} · รอจ่าย {$commissionBills['PENDING']}) — รายการบิลร้านที่ยังไม่ได้ทำบิลค่าคอม {$uncommissioned} รายการ");
         CLI::newLine();
         CLI::write('── บัญชีสำหรับเข้าระบบ ────────────────────────────────', 'green');
         CLI::write('  ผู้ดูแลส่วนกลาง : superadmin / admin1234');
+        CLI::write('  เซล            : ' . implode(', ', array_map(static fn ($a) => $a['user']['username'], $agents)) . ' / sale1234567');
         CLI::write('  ร้านค้า        : ' . implode(', ', array_map(static fn ($s) => $s['user']['username'], $shops)) . ' / franchise1234');
         CLI::write('  ผู้ช่วยของร้าน   : bkk01-staff, bkk02-staff, cnx01-staff / staff123456');
-        CLI::write('  เซล            : ' . implode(', ', array_map(static fn ($a) => $a['user']['username'], $agents)) . ' / sale1234567');
+        // ร้านเข้าระบบได้ทางลิงก์ของร้านเท่านั้น (รหัสผ่านอย่างเดียวไม่พอ) — ต่อท้ายที่อยู่เว็บ เช่น http://localhost:8080/#/s/…
+        CLI::newLine();
+        CLI::write('── ลิงก์เข้าระบบของแต่ละร้าน (ต่อท้ายที่อยู่เว็บ · ผู้ช่วยใช้ลิงก์เดียวกับร้าน) ──', 'green');
+        foreach ($shops as $shop) {
+            CLI::write(sprintf('  %-6s : %s', $shop['franchise']['username'], FranchiseService::getLoginLink((int) $shop['franchise']['id'])['path']));
+        }
     }
 }

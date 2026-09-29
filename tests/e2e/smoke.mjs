@@ -91,8 +91,17 @@ async function adminElevation() {
   return adminElev.token;
 }
 
-// เส้นทางที่ต้องยืนยันรหัส 6 หลัก (แก้บัญชีรับเงิน / ตั้งค่า Telegram / captcha)
-const ELEVATED_URL = /^\/api\/(bank-accounts(\/\d+)?|settings\/(telegram(\/discover)?|notifications|turnstile))$/;
+/*
+ * เส้นทางที่ต้องยืนยันรหัส 6 หลัก — แอดมินในเทสต์ใส่ให้เองเหมือนหน้าเว็บ
+ * แก้บัญชีรับเงิน / แก้หัวบิล (เปลี่ยนบัญชีของบิล) / ส่งเลขบัญชีให้ร้าน / สร้างลิงก์เข้าระบบใหม่ของร้าน / ตั้งค่า Telegram / captcha
+ * (ปลด 2FA ของผู้ใช้ไม่อยู่ในนี้ — เทสต์ส่ง header เองเพื่อพิสูจน์ว่าไม่ใส่แล้วโดนกัน)
+ */
+const ELEVATED_URL = new RegExp('^/api/('
+  + 'bank-accounts(/\\d+(/notify-shops)?)?'
+  + '|invoices/\\d+(/notify-account)?'
+  + '|franchises/\\d+/login-link/rotate'
+  + '|settings/(telegram(/discover)?|notifications|turnstile)'
+  + ')$');
 
 async function api(method, url, { token, body, headers = {}, elevate = true } = {}) {
   // เทสต์ที่ต้องการทดสอบว่า "ไม่ยืนยันแล้วโดนกัน" ส่ง elevate: false
@@ -113,6 +122,37 @@ async function api(method, url, { token, body, headers = {}, elevate = true } = 
 }
 
 const section = (t) => console.log(`\n${t}`);
+
+/*
+ * ผู้ใช้ของร้าน (เจ้าของ + ผู้ช่วย) ล็อกอินได้เฉพาะเมื่อส่ง key จากลิงก์เข้าระบบของร้านตัวเองมาด้วย
+ * เทสต์หยิบ key แบบที่ส่วนกลางเปิดดูในหน้าร้านค้า (GET /api/franchises/:id/login-link) แล้วจำไว้
+ * สร้างลิงก์ใหม่ (rotate) แล้วต้องลบของเดิมออกจาก shopKeys — key เก่าใช้ไม่ได้ทันที
+ */
+const shopKeys = new Map();
+async function shopLoginKey(franchiseId) {
+  if (!shopKeys.has(franchiseId)) {
+    const res = await api('GET', `/api/franchises/${franchiseId}/login-link`, { token: admin });
+    shopKeys.set(franchiseId, res.body?.key);
+  }
+  return shopKeys.get(franchiseId);
+}
+const shopLogin = async (username, password, franchiseId) => api('POST', '/api/auth/login', {
+  body: { username, password, loginKey: await shopLoginKey(franchiseId) },
+});
+
+/** วันนี้ตามเวลาไทย (YYYY-MM-DD) — ดีลที่ไม่ส่งวันที่เริ่มวันนี้ · เลขบิลค่าคอมใช้วันที่ไทย */
+const todayTh = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
+
+/** ผูกแชต Telegram ส่วนตัวให้ผู้ใช้ — กดลิงก์ t.me แล้วกด Start ในแอป (Telegram จำลองส่ง /start <รหัส> ให้บอท) */
+let tgUpdateId = 9000;
+async function linkTelegram(token, chatId) {
+  const link = await api('POST', '/api/auth/telegram/link', { token });
+  const code = link.body?.url ? new URL(link.body.url).searchParams.get('start') : null;
+  telegram.updates = [{ update_id: ++tgUpdateId, message: { chat: { id: Number(chatId), type: 'private' }, text: `/start ${code}` } }];
+  await pollTelegram();
+  telegram.updates = [];
+  return (await api('GET', '/api/auth/telegram', { token })).body?.linked === true;
+}
 
 // ── 1) super admin เข้าระบบ และสร้างเจ้าของร้าน ─────────────────────────
 section('1) super admin + สร้างเจ้าของร้าน');
@@ -209,13 +249,21 @@ check('username ซ้ำต้องถูกปฏิเสธ', (await api('P
   token: admin,
   body: { username: 'shopa', password: 'dup123456' },
 })).status === 409);
+const fidA = shopA.body.franchise.id;
+const fidB = shopB.body.franchise.id;
 
 // ── 2) เจ้าของร้านเข้าระบบดูข้อมูลของตัวเอง ────────────────────────────
 section('2) ยูสเซอร์ของร้านเข้าระบบ + ขอบเขตข้อมูล');
-const loginA = await api('POST', '/api/auth/login', { body: { username: 'shopa', password: 'shopa12345' } });
+// รหัสถูกแต่ไม่ได้มาจากลิงก์ของร้าน = ตอบเหมือนรหัสผิดทุกตัวอักษร (รหัสที่หลุดไปยืนยันไม่ได้แม้แต่ว่าถูก)
+const noKeyA = await api('POST', '/api/auth/login', { body: { username: 'shopa', password: 'shopa12345' } });
+const wrongPwB = await api('POST', '/api/auth/login', { body: { username: 'shopb', password: 'not-the-password', loginKey: await shopLoginKey(fidB) } });
+check('ร้านล็อกอินโดยไม่มี key จากลิงก์ของร้านไม่ได้ — ข้อความเดียวกับรหัสผิด',
+  noKeyA.status === 401 && !noKeyA.body?.token && wrongPwB.status === 401
+    && noKeyA.body?.error?.message === wrongPwB.body?.error?.message, { noKey: noKeyA.body, wrongPassword: wrongPwB.body });
+const loginA = await shopLogin('shopa', 'shopa12345', fidA);
 check('ร้าน A ล็อกอินได้', loginA.status === 200, loginA.body);
 let tokenA = loginA.body.token;
-const tokenB = (await api('POST', '/api/auth/login', { body: { username: 'shopb', password: 'shopb12345' } })).body.token;
+const tokenB = (await shopLogin('shopb', 'shopb12345', fidB)).body.token;
 
 check('เจ้าของร้านเห็นเฉพาะข้อมูลตัวเอง',
   (await api('GET', '/api/franchises', { token: tokenA })).body.items.length === 1);
@@ -225,7 +273,6 @@ check('ไม่มีโทเคนเข้าไม่ได้', (await api
 
 // ── ยูสเซอร์: super สร้างให้แค่คนเดียว ที่เหลือเจ้าของบัญชีเพิ่มเอง ──
 section('ยูสเซอร์ของร้าน (เจ้าของบัญชี / ผู้ช่วย)');
-const fidA = shopA.body.franchise.id;
 check('ยูสเซอร์แรกที่มาพร้อมเจ้าของร้านคือเจ้าของบัญชี', shopA.body.user.isOwner === true, shopA.body.user);
 
 check('super admin เพิ่มยูสเซอร์ให้ร้านไม่ได้', (await api('POST', `/api/franchises/${fidA}/users`, {
@@ -237,7 +284,7 @@ const helper = await api('POST', `/api/franchises/${fidA}/users`, {
 });
 check('เจ้าของบัญชีเพิ่มผู้ช่วยเองได้', helper.status === 201 && helper.body.isOwner === false, helper.body);
 
-let helperToken = (await api('POST', '/api/auth/login', { body: { username: 'helpera', password: 'helper12345' } })).body.token;
+let helperToken = (await shopLogin('helpera', 'helper12345', fidA)).body.token;
 check('ผู้ช่วยล็อกอินและใช้งานข้อมูลเจ้าของร้านได้',
   (await api('GET', '/api/products', { token: helperToken })).status === 200);
 
@@ -265,8 +312,8 @@ check('super admin ยังตั้งรหัสใหม่ให้เจ�
 // ตั้งรหัสใหม่แล้ว token เดิมต้องใช้ไม่ได้ทันที — ถ้ายังใช้ได้ คนที่ขโมย token ไปจะอยู่ต่อได้ทั้งวัน
 check('ถูกตั้งรหัสใหม่แล้ว token เก่าใช้ไม่ได้',
   (await api('GET', '/api/auth/me', { token: tokenA })).status === 401);
-tokenA = (await api('POST', '/api/auth/login', { body: { username: 'shopa', password: 'shopa12345' } })).body.token;
-helperToken = (await api('POST', '/api/auth/login', { body: { username: 'helpera', password: 'newhelper123' } })).body.token;
+tokenA = (await shopLogin('shopa', 'shopa12345', fidA)).body.token;
+helperToken = (await shopLogin('helpera', 'newhelper123', fidA)).body.token;
 check('ล็อกอินใหม่ด้วยรหัสใหม่ได้', (await api('GET', '/api/auth/me', { token: tokenA })).status === 200);
 
 const teamList = await api('GET', `/api/franchises/${fidA}/users`, { token: tokenA });
@@ -288,6 +335,128 @@ check('ดูใบเรียกเก็บของรอบที่ยั�
   (await api('GET', '/api/invoices?periodCode=2030-12-H2', { token: tokenA })).status === 200);
 check('รหัสรอบบิลผิดรูปแบบยังต้องถูกปฏิเสธ',
   (await api('GET', '/api/sales-entries?periodCode=ไม่ใช่รอบ', { token: admin })).status === 400);
+
+/* ── ลิงก์เข้าระบบของร้าน ────────────────────────────────────
+ * ร้านเข้าระบบได้เฉพาะจากลิงก์ลับของร้านตัวเอง — key ในลิงก์คือ "ของที่ต้องมี" คู่กับรหัสผ่านที่ "ต้องรู้"
+ * ทุกกรณีที่ key ไม่ผ่านต้องตอบเหมือนรหัสผิดทุกตัวอักษร ไม่งั้นรหัสที่หลุดไปจะถูกยืนยันได้ว่าถูก
+ * ใช้ร้านของเทสต์นี้เอง: สร้างลิงก์ใหม่ทำให้ทุกคนในร้านหลุด จะไปกวน token ของร้าน A/B ในเทสต์อื่น
+ */
+section('ลิงก์เข้าระบบของร้าน (key ต่อร้าน · สร้างลิงก์ใหม่)');
+{
+  const BAD = 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง';
+  const ks = await api('POST', '/api/franchises', { token: admin, body: { username: 'keyshop', password: 'keyshop-pass-1' } });
+  const kfid = ks.body.franchise?.id;
+  check('สร้างร้านแล้วได้ลิงก์เข้าระบบทันที (key สุ่ม 32 ตัว · path /#/s/<key>)',
+    ks.status === 201 && /^[A-Za-z0-9_-]{32}$/.test(ks.body.loginLink?.key ?? '') && ks.body.loginLink.path === `/#/s/${ks.body.loginLink.key}`, ks.body.loginLink);
+  const key = await shopLoginKey(kfid);
+  check('ส่วนกลางเปิดดูลิงก์ของร้านได้ (key เดียวกับตอนสร้าง) · แต่ละร้าน key ไม่ซ้ำกัน',
+    key === ks.body.loginLink?.key && key !== await shopLoginKey(fidA) && key !== await shopLoginKey(fidB));
+
+  const tryLogin = (loginKey, username = 'keyshop', password = 'keyshop-pass-1') => api('POST', '/api/auth/login', {
+    body: { username, password, ...(loginKey === undefined ? {} : { loginKey }) },
+  });
+  const noKey = await tryLogin(undefined);
+  const wrongKey = await tryLogin('x'.repeat(32));
+  const otherKey = await tryLogin(await shopLoginKey(fidA));
+  check('ไม่มี key → 401 ข้อความเดียวกับรหัสผิด', noKey.status === 401 && noKey.body.error?.message === BAD, noKey.body);
+  check('key มั่ว → 401 ข้อความเดียวกับรหัสผิด', wrongKey.status === 401 && wrongKey.body.error?.message === BAD, wrongKey.body);
+  check('key ของร้านอื่น → 401 ข้อความเดียวกับรหัสผิด', otherKey.status === 401 && otherKey.body.error?.message === BAD, otherKey.body);
+  const ok = await tryLogin(key);
+  check('key ของร้านตัวเอง + รหัสถูก → เข้าระบบได้', ok.status === 200 && Boolean(ok.body.token), ok.body);
+  const ownerTok = ok.body.token;
+  const staff = await api('POST', `/api/franchises/${kfid}/users`, { token: ownerTok, body: { username: 'keyshop-staff', password: 'keystaff-pass-1' } });
+  const staffTok = (await tryLogin(key, 'keyshop-staff', 'keystaff-pass-1')).body.token;
+  check('ผู้ช่วยของร้านเข้าด้วยลิงก์เดียวกับร้าน', staff.status === 201 && Boolean(staffTok), staff.body);
+
+  // ส่วนกลางและเซลใช้หน้าเข้าสู่ระบบปกติ — ส่ง key ของร้านมาก็ไม่มีผลอะไร
+  const superWithKey = await api('POST', '/api/auth/login', { body: { username: 'superadmin', password: ADMIN_NEW_PASS, loginKey: key } });
+  check('ส่วนกลางไม่ต้องใช้ key (ส่งมาก็ไม่สนใจ)', superWithKey.status === 200 && superWithKey.body.mfaRequired === true, superWithKey.body);
+  await api('POST', '/api/sales-agents', { token: admin, body: { username: 'keysale', password: 'keysale-pass-1', name: 'เซลทดสอบลิงก์' } });
+  const saleNoKey = await api('POST', '/api/auth/login', { body: { username: 'keysale', password: 'keysale-pass-1' } });
+  const saleJunk = await api('POST', '/api/auth/login', { body: { username: 'keysale', password: 'keysale-pass-1', loginKey: 'junk' } });
+  check('เซลไม่ต้องใช้ key (ส่ง key มั่วมาก็ไม่มีผล)', saleNoKey.status === 200 && saleJunk.status === 200, [saleNoKey.body, saleJunk.body]);
+
+  // ดูลิงก์: เจ้าของบัญชีร้าน (ไว้ส่งให้ผู้ช่วย) · ผู้ช่วยและร้านอื่นดูไม่ได้
+  const ownerView = await api('GET', `/api/franchises/${kfid}/login-link`, { token: ownerTok });
+  check('เจ้าของบัญชีร้านเปิดดูลิงก์ของร้านตัวเองได้', ownerView.status === 200 && ownerView.body.key === key && ownerView.body.path === `/#/s/${key}`, ownerView.body);
+  check('ผู้ช่วยเปิดดูลิงก์ของร้านไม่ได้', (await api('GET', `/api/franchises/${kfid}/login-link`, { token: staffTok })).status === 403);
+  check('ร้านอื่นเปิดดูลิงก์ของร้านนี้ไม่ได้', (await api('GET', `/api/franchises/${kfid}/login-link`, { token: tokenA })).status === 403);
+  check('เซลเปิดดูลิงก์ของร้านไม่ได้', (await api('GET', `/api/franchises/${kfid}/login-link`, { token: saleNoKey.body.token })).status === 403);
+
+  // สร้างลิงก์ใหม่: ลิงก์เดิมอาจหลุด → key เก่าใช้ไม่ได้ + ทุกคนในร้านหลุด · ส่วนกลางเท่านั้น + รหัส 6 หลัก
+  const noCodeRotate = await api('POST', `/api/franchises/${kfid}/login-link/rotate`, { token: admin, elevate: false });
+  check('สร้างลิงก์ใหม่โดยไม่ใส่รหัส 6 หลักไม่ได้', noCodeRotate.status === 403 && noCodeRotate.body.error?.code === 'ELEVATION_REQUIRED', noCodeRotate.body);
+  check('เจ้าของร้านสร้างลิงก์ใหม่เองไม่ได้', (await api('POST', `/api/franchises/${kfid}/login-link/rotate`, { token: ownerTok })).status === 403);
+  await flushTelegram();
+  const mark = telegram.messages.length;
+  const rotated = await api('POST', `/api/franchises/${kfid}/login-link/rotate`, { token: admin });
+  const newKey = rotated.body?.key;
+  check('ส่วนกลางสร้างลิงก์ใหม่ได้ (key ใหม่ · path ใหม่)',
+    rotated.status === 200 && Boolean(newKey) && newKey !== key && rotated.body.path === `/#/s/${newKey}`, rotated.body);
+  shopKeys.delete(kfid);
+  const oldKey = await tryLogin(key);
+  check('ลิงก์เดิมใช้ไม่ได้ทันที (ข้อความเดียวกับรหัสผิด)', oldKey.status === 401 && oldKey.body.error?.message === BAD, oldKey.body);
+  check('ทุกคนในร้านหลุดจากระบบ (เจ้าของและผู้ช่วย)',
+    (await api('GET', '/api/auth/me', { token: ownerTok })).status === 401 && (await api('GET', '/api/auth/me', { token: staffTok })).status === 401);
+  check('ร้านอื่นไม่หลุดไปด้วย', (await api('GET', '/api/auth/me', { token: tokenA })).status === 200);
+  check('เข้าด้วยลิงก์ใหม่ได้', (await shopLogin('keyshop', 'keyshop-pass-1', kfid)).status === 200 && await shopLoginKey(kfid) === newKey);
+  await flushTelegram();
+  const rotMsg = telegram.messages.slice(mark).find((m) => /สร้างลิงก์เข้าระบบใหม่ให้ร้าน keyshop/.test(m.text));
+  check('สร้างลิงก์ใหม่ → กลุ่มส่วนกลางได้แจ้ง (ลิงก์เดิมใช้ไม่ได้ · ทุกคนถูกออกจากระบบ)',
+    rotMsg?.chat_id === TG_CHAT && /ผู้ใช้ทุกคนของร้านถูกออกจากระบบ/.test(rotMsg.text), telegram.messages.slice(mark).map((m) => m.text));
+}
+
+/* ── ตั้งรหัสใหม่ให้ลูกค้า แล้วให้ตั้งรหัสเองตอนเข้าครั้งแรก ──────────
+ * ส่วนกลางคัดลอกชุด "ลิงก์ + ชื่อผู้ใช้ + รหัส" ส่งทางแชต — รหัสนั้นเห็นกันหลายคน ต้องบังคับเปลี่ยนตอนเข้าครั้งแรก
+ */
+section('ตั้งรหัสใหม่ + บังคับเปลี่ยนรหัสตอนเข้าครั้งแรก (ร้าน / เซล)');
+{
+  const rs = await api('POST', '/api/franchises', { token: admin, body: { username: 'resetshop', password: 'resetshop-pass-1' } });
+  const rfid = rs.body.franchise?.id;
+  const owner = rs.body.user;
+  let ownerTok = (await shopLogin('resetshop', 'resetshop-pass-1', rfid)).body.token;
+  const staff = await api('POST', `/api/franchises/${rfid}/users`, { token: ownerTok, body: { username: 'resetshop-staff', password: 'rstaff-pass-1' } });
+
+  const reset = await api('POST', `/api/franchises/${rfid}/users/${owner?.id}/reset-password`, {
+    token: admin, body: { newPassword: 'from-chat-pass-1', mustChange: true },
+  });
+  check('ส่วนกลางตั้งรหัสใหม่ให้เจ้าของร้าน พร้อมบังคับเปลี่ยนตอนเข้าครั้งแรก',
+    reset.status === 200 && reset.body.ok === true && reset.body.user?.mustChangePassword === true, reset.body);
+  const first = await shopLogin('resetshop', 'from-chat-pass-1', rfid);
+  check('เข้าด้วยรหัสที่ได้ทางแชต → ระบบบอกให้ตั้งรหัสใหม่ก่อน', first.status === 200 && first.body.mustChangePassword === true, first.body);
+  const gated = await api('GET', '/api/invoices', { token: first.body.token });
+  check('ยังไม่ตั้งรหัสใหม่ ใช้งานอย่างอื่นไม่ได้', gated.status === 403 && gated.body.error?.code === 'PASSWORD_CHANGE_REQUIRED', gated.body);
+  const changed = await api('POST', '/api/auth/change-password', {
+    token: first.body.token, body: { currentPassword: 'from-chat-pass-1', newPassword: 'owner-own-pass-1' },
+  });
+  const again = await shopLogin('resetshop', 'owner-own-pass-1', rfid);
+  check('ตั้งรหัสของตัวเองแล้วใช้งานได้ปกติ ไม่ถูกบังคับอีก',
+    changed.status === 200 && again.status === 200 && again.body.mustChangePassword === false, again.body);
+  ownerTok = again.body.token;
+  const staffReset = await api('POST', `/api/franchises/${rfid}/users/${staff.body?.id}/reset-password`, {
+    token: ownerTok, body: { newPassword: 'staff-chat-pass-1', mustChange: true },
+  });
+  check('เจ้าของร้านตั้งรหัสใหม่ให้ผู้ช่วยแบบบังคับเปลี่ยนได้', staffReset.status === 200 && staffReset.body.user?.mustChangePassword === true, staffReset.body);
+  check('ตั้งรหัสใหม่ไม่ส่ง mustChange = ไม่บังคับ (แบบเดิม)', (await api('POST', `/api/franchises/${rfid}/users/${owner?.id}/reset-password`, {
+    token: admin, body: { newPassword: 'owner-own-pass-2' },
+  })).body.user?.mustChangePassword === false);
+
+  // เซลใช้ endpoint ของเซล — ผู้ใช้ต้องเป็นของเซลคนนั้นจริง
+  const s1 = (await api('POST', '/api/sales-agents', { token: admin, body: { username: 'resetsale', password: 'resetsale-pass-1', name: 'เซลตั้งรหัสใหม่' } })).body;
+  const s2 = (await api('POST', '/api/sales-agents', { token: admin, body: { username: 'resetsale2', password: 'resetsale2-pass-1', name: 'เซลอีกคน' } })).body;
+  const saleTok = (await api('POST', '/api/auth/login', { body: { username: 'resetsale', password: 'resetsale-pass-1' } })).body.token;
+  const saleUrl = (agentId, userId) => `/api/sales-agents/${agentId}/users/${userId}/reset-password`;
+  const saleReset = await api('POST', saleUrl(s1.agent?.id, s1.user?.id), { token: admin, body: { newPassword: 'sale-chat-pass-1', mustChange: true } });
+  check('ส่วนกลางตั้งรหัสใหม่ให้เซล พร้อมบังคับเปลี่ยน', saleReset.status === 200 && saleReset.body.user?.mustChangePassword === true, saleReset.body);
+  check('ตั้งรหัสใหม่แล้ว session เก่าของเซลหลุด', (await api('GET', '/api/auth/me', { token: saleTok })).status === 401);
+  const saleFirst = await api('POST', '/api/auth/login', { body: { username: 'resetsale', password: 'sale-chat-pass-1' } });
+  check('เซลเข้าด้วยรหัสใหม่ → ต้องตั้งรหัสเองก่อน', saleFirst.status === 200 && saleFirst.body.mustChangePassword === true, saleFirst.body);
+  check('ผู้ใช้ไม่ใช่ของเซลคนนั้น → ไม่พบ (404)', (await api('POST', saleUrl(s2.agent?.id, s1.user?.id), { token: admin, body: { newPassword: 'x-pass-12345' } })).status === 404);
+  check('ส่ง id ผู้ใช้ของร้านมาทาง endpoint ของเซล → ไม่พบ (404)', (await api('POST', saleUrl(s1.agent?.id, owner?.id), { token: admin, body: { newPassword: 'x-pass-12345' } })).status === 404);
+  check('เซลตั้งรหัสให้ตัวเอง/คนอื่นทางนี้ไม่ได้', (await api('POST', saleUrl(s1.agent?.id, s1.user?.id), { token: saleFirst.body.token, body: { newPassword: 'x-pass-12345' } })).status === 403);
+  check('ร้านค้าตั้งรหัสให้เซลไม่ได้', (await api('POST', saleUrl(s1.agent?.id, s1.user?.id), { token: tokenA, body: { newPassword: 'x-pass-12345' } })).status === 403);
+  check('รหัสสั้นกว่า 8 ตัวไม่รับ', (await api('POST', saleUrl(s1.agent?.id, s1.user?.id), { token: admin, body: { newPassword: 'short' } })).status === 400);
+}
 
 // ── 5 & 6) สร้างสินค้าไม่จำกัด + สินค้า 1 ชิ้น = ร้านเดียว ──────────────
 section('5+6) สินค้า และการมอบหมาย');
@@ -650,12 +819,11 @@ check('ต้องตั้ง % หรือค่าคงที่อย่�
 })).status === 400);
 
 // ดีลผูกกับสินค้า ไม่ใช่ทั้งร้าน — เซลได้คอมเฉพาะสินค้าที่ตัวเองผลักดัน
-// ตัวเลขต้องกรอกที่ดีลเสมอ เซลไม่มีค่าตั้งต้นให้หยิบมาใช้แล้ว
+// ตัวเลขต้องกรอกที่ดีลเสมอ เซลไม่มีค่าตั้งต้นให้หยิบมาใช้แล้ว · ไม่ต้องเลือกวันที่ (เริ่มวันนี้ เปิดไว้จนกด "ปิดดีล")
 const link1res = await api('POST', '/api/sales-agents/links', {
   token: admin,
   body: {
     salesAgentId: agent1.body.agent.id,
-    startDate: '2026-01-01',
     items: [{ productId: p1.body.product.id, commissionPct: 5, fixedAmount: 300 }],
   },
 });
@@ -663,28 +831,28 @@ const link1 = { status: link1res.status, body: link1res.body.items?.[0] ?? link1
 check('ผูกเซลกับสินค้าที่ผลักดัน',
   link1.status === 201 && link1.body.sku === 'SKU-001'
   && link1.body.commissionPct === 5 && link1.body.fixedAmount === 300, link1.body);
+check('ผูกดีลโดยไม่ต้องเลือกวันที่ — เริ่มวันนี้ (เวลาไทย) และเปิดไว้จนกดปิดดีล',
+  link1.body.startDate === todayTh && link1.body.endDate === null && link1.body.isOpen === true, link1.body);
 
-check('สินค้าชิ้นเดียวมีเซลซ้อนกันในช่วงเวลาเดียวกันไม่ได้', (await api('POST', '/api/sales-agents/links', {
+const heldTwice = await api('POST', '/api/sales-agents/links', {
   token: admin,
-  body: {
-    salesAgentId: agent2.body.agent.id,
-    startDate: '2026-06-01',
-    items: [{ productId: p1.body.product.id, commissionPct: 5 }],
-  },
-})).status === 409);
+  body: { salesAgentId: agent2.body.agent.id, items: [{ productId: p1.body.product.id, commissionPct: 5 }] },
+});
+check('สินค้าชิ้นเดียวมีเซลถือดีลซ้อนกันไม่ได้ — ต้องปิดดีลเดิมก่อน',
+  heldTwice.status === 409 && /ปิดดีลเดิมก่อน/.test(heldTwice.body.error?.message ?? ''), heldTwice.body);
 
+// % ของเซลคิดจากยอดขายเต็มของร้านเสมอ (เจ้าของระบบตัดตัวเลือก "คิดจากส่วนต่าง" ทิ้ง) — ส่ง basis อื่นมาก็ไม่มีผล
 const link2res = await api('POST', '/api/sales-agents/links', {
   token: admin,
   body: {
     salesAgentId: agent2.body.agent.id,
-    startDate: '2026-01-01',
-    basis: 'GROSS',
+    basis: 'COMMISSION',
     items: [{ productId: p2.body.product.id, commissionPct: 12 }],
   },
 });
-const link2 = { status: link2res.status, body: link2res.body.items[0] };
-check('ผูกเซลอีกคนกับสินค้าอีกชิ้นได้ (คิดจากยอดขายเต็ม)',
-  link2.status === 201 && link2.body.basis === 'GROSS', link2.body);
+const link2 = { status: link2res.status, body: link2res.body.items?.[0] ?? link2res.body };
+check('ผูกเซลอีกคนกับสินค้าอีกชิ้นได้ (คิดจากยอดขายเต็มเสมอ ส่ง basis อื่นมาก็ไม่มีผล)',
+  link2.status === 201 && link2.body.basis === 'GROSS' && link1.body.basis === 'GROSS', link2.body);
 
 // ผูกหลายสินค้าในครั้งเดียว แต่ละชิ้นตั้งเรตเองได้
 // สินค้าคนละชิ้นในร้านเดียวกัน ให้เซลคนละคนถือได้ — จุดสำคัญของโมเดลใหม่
@@ -696,7 +864,6 @@ const batch = await api('POST', '/api/sales-agents/links', {
   token: admin,
   body: {
     salesAgentId: agent2.body.agent.id,
-    startDate: '2026-01-01',
     items: [
       { productId: p3.body.product.id, commissionPct: 10 },
       { productId: p4.body.product.id, commissionPct: 3, fixedAmount: 50 },
@@ -719,7 +886,6 @@ const partialBatch = await api('POST', '/api/sales-agents/links', {
   token: admin,
   body: {
     salesAgentId: agent1.body.agent.id,
-    startDate: '2026-01-01',
     items: [
       { productId: p5.body.product.id, commissionPct: 3 },
       { productId: p3.body.product.id, commissionPct: 3 },
@@ -731,7 +897,10 @@ check('ผูกดีลเป็นชุด ถ้ามีชิ้นที
   && (await api('GET', `/api/sales-agents/links?productId=${p5.body.product.id}`, { token: admin })).body.items.length === 0,
   partialBatch.body);
 
-// ออกบิลรอบใหม่ให้ A แล้วต้องเกิดค่าคอมเซลอัตโนมัติ
+/*
+ * ออกบิลร้านไม่ทำให้เกิดค่าคอมเซลเองอีกแล้ว — ส่วนกลางทำ "บิลค่าคอม" ทีหลัง
+ * ติ๊กเองว่ารอบนี้จ่ายรายการไหน (เจ้าของระบบ: แต่ละรอบจ่ายค่าคอมไม่เหมือนกัน) · ไม่ต้องรอร้านจ่ายก่อน
+ */
 const e2 = await api('GET', `/api/sales-entries?periodCode=2026-08-H1`, { token: admin });
 for (const e of e2.body.items) await api('POST', `/api/sales-entries/${e.id}/approve`, { token: admin });
 const inv2 = await api('POST', '/api/invoices/generate', {
@@ -740,19 +909,41 @@ const inv2 = await api('POST', '/api/invoices/generate', {
 check('ออกบิลรอบ 2026-08-H1 ได้ (ส่วนต่าง 11,250)', inv2.status === 201 && inv2.body.commissionTotal === 11250, inv2.body);
 
 const comms = await api('GET', `/api/sales-agents/commissions?salesAgentId=${agent1.body.agent.id}`, { token: admin });
-const c1 = comms.body.items.find((c) => c.invoiceNo === inv2.body.invoiceNo);
-check('ออกบิลแล้วเกิดค่าคอมเซลอัตโนมัติ (5% ของ 11,250 + เหมา 300 = 862.50)',
-  c1 && c1.pctAmount === 562.5 && c1.fixedAmount === 300 && c1.totalAmount === 862.5, c1);
-check('คอมเซลคิดจากส่วนต่าง ไม่ใช่ยอดหลังบวกค่าใช้จ่าย', c1.baseAmount === 11250 && c1.basis === 'COMMISSION');
+check('ออกบิลร้านแล้วไม่เกิดค่าคอมเซลเอง (ต้องทำบิลค่าคอม)', comms.status === 200 && comms.body.items.length === 0, comms.body.items);
+
+const cand1 = (await api('GET', `/api/sales-agents/${agent1.body.agent.id}/commission-candidates`, { token: admin })).body;
+const cand1Item = cand1.items?.find((i) => i.invoiceId === inv2.body.id);
+const cand1Fixed = cand1.fixed?.find((f) => f.invoiceId === inv2.body.id);
+check('บรรทัดของบิลร้านขึ้นให้ติ๊กทำบิลค่าคอม พร้อมค่าตั้งต้นจากดีล (5% + เหมา 300 ต่อรอบ)',
+  cand1Item?.sku === 'SKU-001' && cand1Item.grossAmount === 90000 && cand1Item.deal?.pct === 5 && cand1Item.deal.isOpen === true
+  && cand1Fixed?.amount === 300 && cand1Fixed.periodCode === '2026-08-H1', { items: cand1.items, fixed: cand1.fixed });
+check('ติ๊กได้เฉพาะสินค้าที่เซลคนนี้ถือดีล', (cand1.items ?? []).every((i) => i.sku === 'SKU-001'), cand1.items?.map((i) => i.sku));
+
+const c1res = await api('POST', `/api/sales-agents/${agent1.body.agent.id}/commission-bills`, {
+  token: admin,
+  body: { items: [{ entryId: cand1Item?.entryId, mode: 'PCT', pct: cand1Item?.deal?.pct }], fixed: [{ key: cand1Fixed?.key }] },
+});
+const c1 = c1res.body;
+check('ทำบิลค่าคอม: 5% ของยอดขายเต็ม 90,000 = 4,500 + เหมา 300 = 4,800',
+  c1res.status === 201 && c1.kind === 'BILL' && c1.status === 'PENDING'
+  && c1.pctAmount === 4500 && c1.fixedAmount === 300 && c1.totalAmount === 4800
+  && c1.billNo === `COM-${todayTh.replace(/-/g, '')}-salea`, c1);
+const c1Item = c1.lines?.find((l) => l.kind === 'ITEM');
+check('คอมเซลคิดจากยอดขายเต็ม ไม่ใช่ส่วนต่างที่ร้านจ่ายหรือยอดหลังบวกค่าใช้จ่าย',
+  c1.baseAmount === 90000 && c1Item?.baseAmount === 90000 && c1Item.pct === 5 && c1Item.amount === 4500
+  && c1Item.invoiceNo === inv2.body.invoiceNo, { base: c1.baseAmount, line: c1Item });
 
 const saleToken = (await api('POST', '/api/auth/login', { body: { username: 'salea', password: 'salea12345' } })).body.token;
 const me = await api('GET', '/api/sales-agents/me', { token: saleToken });
 check('เซลล็อกอินเห็นสินค้าที่ตัวเองถือดีลและยอดคอม',
   me.body.agent.username === 'salea' && me.body.products.length === 1 && me.body.summary.pending > 0, me.body.summary);
+check('หน้าแรกของเซลมีบิลค่าคอมล่าสุด และยอดรายเดือน',
+  me.body.recentBills?.some((b) => b.id === c1.id) && me.body.byMonth?.some((m) => m.pendingAmount === 4800), { recent: me.body.recentBills, byMonth: me.body.byMonth });
 
 const myComms = await api('GET', '/api/sales-agents/me/commissions', { token: saleToken });
 check('เซลเห็นเฉพาะคอมของตัวเอง',
-  myComms.body.items.every((c) => c.agentUsername === 'salea'), myComms.body.items.map((c) => c.agentUsername));
+  myComms.body.items.some((c) => c.id === c1.id) && myComms.body.items.every((c) => c.agentUsername === 'salea'),
+  myComms.body.items.map((c) => c.agentUsername));
 
 // ปุ่ม "ดูมุมมองนี้" ของ super admin เรียก /me พร้อม salesAgentId
 const asAgent = await api('GET', `/api/sales-agents/me?salesAgentId=${agent1.body.agent.id}`, { token: admin });
@@ -760,9 +951,9 @@ check('super admin ดูมุมมองของเซลได้',
   asAgent.status === 200 && asAgent.body.agent.username === 'salea', asAgent.body?.agent);
 check('super admin ต้องระบุว่าดูของเซลคนไหน',
   (await api('GET', '/api/sales-agents/me', { token: admin })).status === 403);
-/* ── ค่าคอมรายการอื่น ๆ ที่พิมพ์เป็นจำนวนเงิน ──────────────
- * แนวคิดเดียวกับค่าใช้จ่ายอื่น/ส่วนลดของฝั่งบิล แต่เป็นเงินที่เราจ่ายให้เซล
- * ต้องลงรอบเดียวกับคอมจากดีล เพื่อให้จ่ายทีเดียวจบ
+/* ── ค่าคอมรายการอื่น ๆ ที่พิมพ์เป็นจำนวนเงิน (API แบบเก่าที่มีรอบ) ──────────────
+ * หน้าเว็บย้ายไปใส่เป็น "ค่าคอมอื่น ๆ" ในบิลค่าคอมแล้ว (ไม่ต้องเลือกรอบ)
+ * แต่ endpoint เดิมยังต้องใช้ได้และกติกาเดิมยังอยู่ — ไคลเอนต์เก่า/ข้อมูลเก่ายังอ้างถึง
  */
 const manual1 = await api('POST', '/api/sales-agents/commissions/manual', {
   token: admin,
@@ -787,22 +978,25 @@ check('ค่าคอมอื่น ๆ จำนวนเงินเป็�
   token: admin, body: { salesAgentId: agent1.body.agent.id, periodCode: '2026-08-H1', label: 'ว่าง', amount: 0 },
 })).status === 400);
 
-// ต้องไปรวมกองกับคอมจากดีลของรอบเดียวกัน ไม่ใช่แยกไปอยู่คนละที่
-const h1 = await api('GET', `/api/sales-agents/commissions?salesAgentId=${agent1.body.agent.id}&periodCode=2026-08-H1`, { token: admin });
-check('ค่าคอมที่พิมพ์เองไปรวมกับคอมจากดีลในรอบเดียวกัน',
-  h1.body.items.filter((c) => c.isManual).length === 2
-  && h1.body.items.some((c) => !c.isManual), h1.body.items.map((c) => c.title));
-check('ยอดรวมของรอบนับรวมรายการที่พิมพ์เองและหักลบตัวติดลบให้',
-  h1.body.summary.total === Number((862.5 + 5000 - 1200).toFixed(2)), h1.body.summary);
+// บิลค่าคอมไม่มีรอบ — รายการของเซลรวมบิลค่าคอมกับรายการพิมพ์เองแบบเก่าไว้ที่เดียว จ่ายรวบได้
+const allOfA = await api('GET', `/api/sales-agents/commissions?salesAgentId=${agent1.body.agent.id}`, { token: admin });
+check('ค่าคอมที่พิมพ์เองอยู่ในรายการเดียวกับบิลค่าคอมของเซล',
+  allOfA.body.items.filter((c) => c.isManual).length === 2
+  && allOfA.body.items.some((c) => c.id === c1.id && c.isBill), allOfA.body.items.map((c) => c.title));
+check('ยอดรวมนับรวมรายการที่พิมพ์เองและหักลบตัวติดลบให้ (4,800 + 5,000 − 1,200)',
+  allOfA.body.summary.total === Number((4800 + 5000 - 1200).toFixed(2)), allOfA.body.summary);
+const manualOfPeriod = await api('GET', `/api/sales-agents/commissions?salesAgentId=${agent1.body.agent.id}&periodCode=2026-08-H1`, { token: admin });
+check('กรองตามรอบได้เฉพาะรายการแบบเก่า (บิลค่าคอมไม่มีรอบ)',
+  manualOfPeriod.body.items.length === 2 && manualOfPeriod.body.items.every((c) => c.isManual), manualOfPeriod.body.items.map((c) => c.title));
 
 check('แก้ไขค่าคอมที่พิมพ์เองได้', (await api('PATCH', `/api/sales-agents/commissions/manual/${manual1.body.id}`, {
   token: admin, body: { amount: 4500 },
 })).body.totalAmount === 4500);
 
-check('รายการที่ระบบคิดจากดีล แก้ผ่านช่องทางนี้ไม่ได้', (await api('PATCH', `/api/sales-agents/commissions/manual/${c1.id}`, {
+check('บิลค่าคอม แก้ผ่านช่องทางของรายการพิมพ์เองไม่ได้', (await api('PATCH', `/api/sales-agents/commissions/manual/${c1.id}`, {
   token: admin, body: { amount: 999 },
 })).status === 409);
-check('รายการที่ระบบคิดจากดีล ลบผ่านช่องทางนี้ไม่ได้',
+check('บิลค่าคอม ลบไม่ได้ (ต้องยกเลิกพร้อมเหตุผล ประวัติต้องอยู่ครบ)',
   (await api('DELETE', `/api/sales-agents/commissions/manual/${c1.id}`, { token: admin })).status === 409);
 
 await api('POST', `/api/sales-agents/commissions/${manual2.body.id}/pay`, { token: admin, body: {} });
@@ -819,16 +1013,22 @@ check('เซลดูรายงานยอดขายไม่ได้', (
 check('เซลดูใบเรียกเก็บของร้านไม่ได้', (await api('GET', '/api/invoices', { token: saleToken })).status === 403);
 check('เซลสร้างเซลคนใหม่ไม่ได้',
   (await api('POST', '/api/sales-agents', { token: saleToken, body: { username: 'salex', password: 'salex12345', name: 'x' } })).status === 403);
+check('เซลทำบิลค่าคอมให้ตัวเองไม่ได้', (await api('POST', `/api/sales-agents/${agent1.body.agent.id}/commission-bills`, {
+  token: saleToken, body: { others: [{ label: 'ขอเอง', amount: 100 }] },
+})).status === 403);
 
 const paidComm = await api('POST', `/api/sales-agents/commissions/${c1.id}/pay`, { token: admin, body: { paidAt: '2026-09-25' } });
 check('super admin บันทึกว่าจ่ายคอมเซลแล้ว', paidComm.body.status === 'PAID', paidComm.body);
 check('จ่ายซ้ำไม่ได้', (await api('POST', `/api/sales-agents/commissions/${c1.id}/pay`, { token: admin })).status === 409);
+check('บิลค่าคอมที่จ่ายแล้วยกเลิกไม่ได้ (จ่ายเกินให้หักด้วยค่าคอมอื่น ๆ ติดลบในบิลถัดไป)',
+  (await api('POST', `/api/sales-agents/commissions/${c1.id}/void`, { token: admin, body: { reason: 'ขอยกเลิก' } })).status === 409);
 
 const voided = await api('POST', `/api/invoices/${inv2.body.id}/void`, { token: admin, body: { reason: 'ทดสอบยกเลิก' } });
 check('ยกเลิกบิลได้เมื่อยังไม่มีการชำระ', voided.body.status === 'VOID', voided.body.status);
-const afterVoid = await api('GET', `/api/sales-agents/commissions?salesAgentId=${agent1.body.agent.id}`, { token: admin });
-check('ยกเลิกบิลแล้วคอมเซลที่จ่ายไปแล้วไม่ถูกล้าง',
-  afterVoid.body.items.find((c) => c.id === c1.id).status === 'PAID', afterVoid.body.items.map((c) => c.status));
+const afterVoid = await api('GET', `/api/sales-agents/commissions/${c1.id}`, { token: admin });
+check('ยกเลิกบิลแล้วคอมเซลที่จ่ายไปแล้วไม่ถูกล้าง (ติดป้ายว่าบิลร้านถูกยกเลิก)',
+  afterVoid.body.status === 'PAID' && afterVoid.body.totalAmount === 4800 && afterVoid.body.lines?.length === 2
+  && afterVoid.body.lines.find((l) => l.kind === 'ITEM')?.invoiceVoided === true, afterVoid.body);
 
 
 // ── เลือกเฉพาะบางสินค้าเข้าบิล ────────────────────────────────────────────
@@ -887,24 +1087,39 @@ check('เติมซ้ำอีกไม่ได้เพราะไม่�
   (await api('POST', `/api/invoices/${partial.body.id}/lines`, { token: admin, body: {} })).status === 400);
 
 /*
- * บิลใบนี้มี 2 สินค้าที่เซลคนละคนถือดีล — ต้องแตกคอมเป็นคนละแถว
- *   salea ถือ SKU-001 (7,500 × 5% = 375 + เหมา 300) = 675
- *   saleb ถือ SKU-003 (3,750 × 10% = 375 ไม่มีเหมา)  = 375
+ * บิลใบนี้มี 2 สินค้าที่เซลคนละคนถือดีล — แต่ละคนติ๊กได้เฉพาะสินค้าของตัวเอง แยกบิลค่าคอมกัน
+ * % ของเซลคิดจากยอดขายเต็มของสินค้า (ไม่ใช่ส่วนต่างที่ร้านจ่าย)
+ *   salea ถือ SKU-001 (60,000 × 5% = 3,000 + เหมา 300) = 3,300
+ *   saleb ถือ SKU-003 (30,000 × 10% = 3,000 ไม่มีเหมา)  = 3,000
  */
-const commsA = (await api('GET', `/api/sales-agents/commissions?salesAgentId=${agent1.body.agent.id}&periodCode=2026-08-H2`, { token: admin })).body;
-check('ค่าคอมเซลคิดใหม่ตามยอดที่เพิ่มขึ้น เหลือรายการเดียวต่อรอบ',
-  commsA.items.filter((c) => c.status !== 'VOID').length === 1, commsA.items.map((c) => `${c.status}:${c.totalAmount}`));
-check('salea ได้คอมเฉพาะสินค้าที่ตัวเองถือ (375 + เหมา 300 = 675)',
-  commsA.summary.total === 675, { total: commsA.summary.total, breakdown: commsA.items.map((c) => [c.pctAmount, c.fixedAmount]) });
+const onPartial = (c) => ({
+  items: (c.items ?? []).filter((i) => i.invoiceId === partial.body.id),
+  fixed: (c.fixed ?? []).filter((f) => f.invoiceId === partial.body.id),
+});
+const pickA = onPartial((await api('GET', `/api/sales-agents/${agent1.body.agent.id}/commission-candidates`, { token: admin })).body);
+const pickB = onPartial((await api('GET', `/api/sales-agents/${agent2.body.agent.id}/commission-candidates`, { token: admin })).body);
+check('ค่าคอมเซลตามยอดที่เพิ่มขึ้น: บรรทัดที่เติมเข้าบิลทีหลังก็ติ๊กได้ (เหมาต่อรอบรายการเดียวต่อรอบ)',
+  pickA.items.length === 1 && pickA.fixed.length === 1 && pickB.items.length === 1 && pickB.fixed.length === 0, { a: pickA, b: pickB });
+const billPicked = (agentId, pick) => api('POST', `/api/sales-agents/${agentId}/commission-bills`, {
+  token: admin,
+  body: { items: pick.items.map((i) => ({ entryId: i.entryId, mode: 'PCT', pct: i.deal?.pct })), fixed: pick.fixed.map((f) => ({ key: f.key })) },
+});
+const commsA = await billPicked(agent1.body.agent.id, pickA);
+check('salea ได้คอมเฉพาะสินค้าที่ตัวเองถือ (60,000 × 5% = 3,000 + เหมา 300 = 3,300)',
+  commsA.status === 201 && commsA.body.totalAmount === 3300
+  && commsA.body.lines.filter((l) => l.kind === 'ITEM').map((l) => l.sku).join() === 'SKU-001',
+  { total: commsA.body.totalAmount, lines: commsA.body.lines?.map((l) => [l.kind, l.sku, l.amount]) });
 
-const commsB = (await api('GET', `/api/sales-agents/commissions?salesAgentId=${agent2.body.agent.id}&periodCode=2026-08-H2`, { token: admin })).body;
-check('บิลใบเดียวแตกคอมให้เซลคนที่สองด้วย (3,750 × 10% = 375)',
-  commsB.summary.total === 375, { total: commsB.summary.total, breakdown: commsB.items.map((c) => [c.pctAmount, c.fixedAmount]) });
+const commsB = await billPicked(agent2.body.agent.id, pickB);
+check('บิลใบเดียวทำค่าคอมให้เซลคนที่สองได้ด้วย (30,000 × 10% = 3,000)',
+  commsB.status === 201 && commsB.body.totalAmount === 3000
+  && commsB.body.lines.map((l) => l.sku).join() === 'SKU-003', { total: commsB.body.totalAmount, lines: commsB.body.lines });
 
-const bothOnInvoice = (await api('GET', `/api/sales-agents/commissions?periodCode=2026-08-H2`, { token: admin })).body;
-check('คอมทั้งสองแถวผูกกับใบเรียกเก็บใบเดียวกัน',
-  bothOnInvoice.items.filter((c) => c.invoiceNo === partial.body.invoiceNo && c.status !== 'VOID').length === 2,
-  bothOnInvoice.items.map((c) => `${c.agentUsername}:${c.invoiceNo}:${c.totalAmount}`));
+const bothOnInvoice = (await api('GET', `/api/sales-agents/commissions?franchiseId=${fidA}`, { token: admin })).body;
+check('คอมทั้งสองบิลอ้างถึงใบเรียกเก็บใบเดียวกัน',
+  bothOnInvoice.items.filter((c) => c.status !== 'VOID' && c.lines.some((l) => l.invoiceNo === partial.body.invoiceNo)).length === 2,
+  bothOnInvoice.items.map((c) => `${c.agentUsername}:${c.billNo}:${c.totalAmount}`));
+check('บรรทัดเดียวกันทำบิลค่าคอมซ้ำไม่ได้ (กันจ่ายซ้ำ)', (await billPicked(agent1.body.agent.id, pickA)).status === 400);
 
 section('บันทึกยอดแล้วออกบิลได้เลย ไม่ต้องผ่านขั้นอนุมัติ');
 // ใช้รอบใหม่ที่ยังไม่เคยแตะ เพื่อไม่ให้ชนกับเคสอื่นด้านบน
@@ -1559,11 +1774,13 @@ section('สกุลเงินของบัญชีปลายทาง')
 
 check('บัญชีที่ไม่ระบุสกุล = บัญชีเงินบาท', bank2.body.currency === 'THB', bank2.body.currency);
 
+// บัญชีรับดอลลาร์ = กระเป๋าคริปโต: กรอกแค่เครือข่าย (chain) + ที่อยู่กระเป๋า (+ QR) — รายละเอียดอยู่หมวด "บัญชีรับเงิน USD"
 const usdAcc = await api('POST', '/api/bank-accounts', {
   token: admin,
-  body: { bankName: 'กรุงไทย', accountName: 'บจก. ทดสอบ (FCD)', accountNumber: '4440001112', currency: 'USD' },
+  body: { currency: 'USD', chain: 'TRC20', accountNumber: 'TSmokeUsdWalletAddr000000001' },
 });
-check('เพิ่มบัญชีที่รับดอลลาร์ได้', usdAcc.status === 201 && usdAcc.body.currency === 'USD', usdAcc.body);
+check('เพิ่มบัญชีที่รับดอลลาร์ได้ (กระเป๋า: เครือข่าย + ที่อยู่)',
+  usdAcc.status === 201 && usdAcc.body.currency === 'USD' && usdAcc.body.isWallet === true && usdAcc.body.chain === 'TRC20', usdAcc.body);
 check('สกุลที่ระบบไม่รองรับใส่ไม่ได้', (await api('POST', '/api/bank-accounts', {
   token: admin, body: { bankName: 'x', accountName: 'y', accountNumber: '6660001112', currency: 'EUR' },
 })).status === 400);
@@ -1699,9 +1916,15 @@ check('ร้านค้าแก้ QR ของบัญชีไม่ได
   token: tokenA, body: { qrUrl: qrImage2 },
 })).status === 403);
 
-check('บัญชีที่ยังไม่ผูกบิล เปลี่ยนสกุลได้', (await api('PATCH', `/api/bank-accounts/${freeAcc.body.id}`, {
+// เปลี่ยนเป็นบัญชี USD = กลายเป็นกระเป๋า ต้องกรอกช่องของกระเป๋าให้ครบในครั้งเดียว
+check('บัญชีบาทเปลี่ยนเป็น USD โดยไม่ใส่เครือข่าย/ที่อยู่กระเป๋าไม่ได้', (await api('PATCH', `/api/bank-accounts/${freeAcc.body.id}`, {
   token: admin, body: { currency: 'USD' },
-})).body.currency === 'USD');
+})).status === 400);
+const freeToUsd = await api('PATCH', `/api/bank-accounts/${freeAcc.body.id}`, {
+  token: admin, body: { currency: 'USD', chain: 'ERC20', accountNumber: '0xSmokeFreeWallet000000002' },
+});
+check('บัญชีที่ยังไม่ผูกบิล เปลี่ยนสกุลได้ (พร้อมเครือข่าย + ที่อยู่กระเป๋า)',
+  freeToUsd.body.currency === 'USD' && freeToUsd.body.isWallet === true && freeToUsd.body.chain === 'ERC20' && freeToUsd.body.accountName === '', freeToUsd.body);
 
 /* ── แนบไฟล์สลิป ─────────────────────────────────────────────
  * ตรวจชนิดไฟล์จาก magic bytes ไม่ใช่จาก content-type หรือชื่อไฟล์ที่ไคลเอนต์ส่งมา
@@ -1795,9 +2018,7 @@ const viewOnly = await api('POST', `/api/franchises/${fid}/users`, {
 check('เจ้าของร้านสร้างผู้ช่วยพร้อมกำหนดสิทธิ์ได้',
   viewOnly.status === 201 && JSON.stringify(viewOnly.body.permissions) === '["bills"]', viewOnly.body);
 
-const viewToken = (await api('POST', '/api/auth/login', {
-  body: { username: 'a-view', password: 'viewonly1234' },
-})).body.token;
+const viewToken = (await shopLogin('a-view', 'viewonly1234', fid)).body.token;
 
 check('มีสิทธิ์ bills → ดูใบเรียกเก็บได้',
   (await api('GET', '/api/invoices', { token: viewToken })).status === 200);
@@ -1820,9 +2041,7 @@ const granted = await api('PATCH', `/api/franchises/${fid}/users/${staffId}/perm
 check('เจ้าของร้านเปิดสิทธิ์เพิ่มได้',
   JSON.stringify(granted.body.permissions) === '["bills","pay"]', granted.body);
 
-const token2 = (await api('POST', '/api/auth/login', {
-  body: { username: 'a-view', password: 'viewonly1234' },
-})).body.token;
+const token2 = (await shopLogin('a-view', 'viewonly1234', fid)).body.token;
 check('เปิดสิทธิ์ pay แล้วแจ้งชำระได้', (await api('POST', '/api/payments', {
   token: token2,
   body: { invoiceId: thbInvoice.body.id, amount: 50, paidAt: '2026-09-21', slipUrl: slip },
@@ -1987,8 +2206,9 @@ section('ตั้งค่าแจ้งเตือน: เลือกรา
 }
 
 section('ยืนยันตัวตนสองชั้นของร้านค้า (เลือกเปิดเอง)');
-await api('POST', '/api/franchises', { token: admin, body: { username: 'mfashop', password: 'mfashop-pass-1' } });
-let mtok = (await api('POST', '/api/auth/login', { body: { username: 'mfashop', password: 'mfashop-pass-1' } })).body.token;
+const mfaShop = await api('POST', '/api/franchises', { token: admin, body: { username: 'mfashop', password: 'mfashop-pass-1' } });
+const mfaLogin = () => shopLogin('mfashop', 'mfashop-pass-1', mfaShop.body.franchise.id);
+let mtok = (await mfaLogin()).body.token;
 const mstatus = await api('GET', '/api/auth/2fa', { token: mtok });
 check('ร้านไม่ถูกบังคับ 2FA — ใช้งานได้เลย',
   mstatus.body.enabled === false && mstatus.body.required === false
@@ -2005,7 +2225,7 @@ mtok = menabled.body.token;
 const mstatus2 = (await api('GET', '/api/auth/2fa', { token: mtok })).body;
 check('สถานะบอกว่าเปิดแล้ว เหลือรหัสสำรอง 10 ชุด', mstatus2.enabled === true && mstatus2.backupCodesLeft === 10, mstatus2);
 
-const mlogin = await api('POST', '/api/auth/login', { body: { username: 'mfashop', password: 'mfashop-pass-1' } });
+const mlogin = await mfaLogin();
 check('ล็อกอินต้องใส่รหัส 6 หลักต่อ', mlogin.body.mfaRequired === true && !mlogin.body.token, mlogin.body);
 check('รหัสผิดเข้าไม่ได้', (await api('POST', '/api/auth/login/mfa', {
   body: { mfaToken: mlogin.body.mfaToken, code: '12345' },
@@ -2013,7 +2233,7 @@ check('รหัสผิดเข้าไม่ได้', (await api('POST', 
 const goodCode = await codeFor(msetup.body.secret);
 const mok = await api('POST', '/api/auth/login/mfa', { body: { mfaToken: mlogin.body.mfaToken, code: goodCode } });
 check('รหัสถูกเข้าได้', mok.status === 200 && Boolean(mok.body.token), mok.body);
-const mlogin2 = await api('POST', '/api/auth/login', { body: { username: 'mfashop', password: 'mfashop-pass-1' } });
+const mlogin2 = await mfaLogin();
 const replay = await api('POST', '/api/auth/login/mfa', { body: { mfaToken: mlogin2.body.mfaToken, code: goodCode } });
 check('รหัสเดิมใช้ซ้ำไม่ได้ (กันคนแอบเห็นแล้วรีบใช้ตาม)',
   replay.status === 403 && /เพิ่งถูกใช้/.test(replay.body.error.message), replay.body);
@@ -2036,7 +2256,7 @@ const reset = await api('POST', `/api/auth/users/${mfaUser.id}/reset-2fa`, {
   token: admin, headers: { 'x-elevation': await adminElevation() },
 });
 check('ร้านทำมือถือหาย ส่วนกลางปลดให้ได้', reset.status === 200, reset.body);
-const afterReset = await api('POST', '/api/auth/login', { body: { username: 'mfashop', password: 'mfashop-pass-1' } });
+const afterReset = await mfaLogin();
 check('ปลดแล้วร้านล็อกอินด้วยรหัสผ่านได้', Boolean(afterReset.body.token) && !afterReset.body.mfaRequired, afterReset.body);
 check('ปลดแล้ว session เก่าของร้านหลุด', (await api('GET', '/api/auth/me', { token: mok.body.token })).status === 401);
 await flushTelegram();
@@ -2046,7 +2266,7 @@ section('หน้าแรกของร้าน: เช็กลิสต์
 {
   const shop = await api('POST', '/api/franchises', { token: admin, body: { username: 'engshop', password: 'engshop-pass-1' } });
   const fid = shop.body.franchise.id;
-  const stok = (await api('POST', '/api/auth/login', { body: { username: 'engshop', password: 'engshop-pass-1' } })).body.token;
+  const stok = (await shopLogin('engshop', 'engshop-pass-1', fid)).body.token;
 
   // ── เช็กลิสต์เริ่มต้นใช้งาน ──
   const ob = await api('GET', '/api/auth/onboarding', { token: stok });
@@ -2136,6 +2356,10 @@ section('หน้าแรกของร้าน: เช็กลิสต์
   const remind = telegram.messages.slice(mark).find((m) => String(m.chat_id) === SHOP_CHAT);
   check('ใกล้ครบกำหนด → เตือนร้านแบบสุภาพ บอกยอดและวัน',
     Boolean(remind) && /แจ้งเตือนล่วงหน้า/.test(remind.text) && /อีก 1 วัน/.test(remind.text) && /ขอบคุณ/.test(remind.text), remind);
+  // ข้อความเตือนก็มีบัญชีสำหรับโอน (ตามที่แจ้งร้านตอนออกบิล) + คำเตือนให้ตรวจก่อนโอน
+  check('ข้อความเตือนบอกบัญชีสำหรับโอนของบิล พร้อมคำเตือนห้ามโอนถ้าไม่ตรง',
+    Boolean(remind) && (bill.body.bankAccount ? remind.text.includes(bill.body.bankAccount.accountNumber) : /ยังไม่ได้ระบุบัญชีปลายทาง/.test(remind.text))
+      && /ห้ามโอนเด็ดขาด/.test(remind.text) && /ไม่รับผิดชอบทุกกรณี/.test(remind.text), remind?.text);
   mark = telegram.messages.length;
   await runDueReminders(new Date(`${thaiToday}T11:00:00Z`));
   await flushTelegram();
@@ -2174,24 +2398,34 @@ section('หน้าแรกของร้าน: เช็กลิสต์
   // ── ร้านเลือกเองว่าอยากได้เรื่องไหน ──
   const opts = await api('GET', '/api/auth/telegram', { token: stok });
   check('ร้านเห็นรายการเรื่องที่เลือกรับได้ ค่าตั้งต้นเปิดทุกเรื่อง',
-    opts.body.events.length === 6 && opts.body.events.every((e) => e.enabled), opts.body.events);
+    opts.body.events.length === 7 && opts.body.events.every((e) => e.enabled), opts.body.events);
+  // บิลใหม่ + แจ้ง/เปลี่ยนบัญชีของบิล มีเลขบัญชีที่ร้านใช้ตรวจก่อนโอนทุกครั้ง — ร้านปิดเองไม่ได้
+  check('เรื่องบิลใหม่ และแจ้ง/เปลี่ยนบัญชีของบิล ล็อกไว้ (ปิดไม่ได้)',
+    ['bill.issued', 'bill.account'].every((k) => opts.body.events.find((e) => e.key === k)?.locked === true)
+      && opts.body.events.filter((e) => e.locked).length === 2, opts.body.events);
   check('ส่วนกลางไม่มีตัวเลือกของร้าน (ตั้งที่หน้าตั้งค่าแจ้งเตือน)',
     (await api('GET', '/api/auth/telegram', { token: admin })).body.events.length === 0
       && (await api('PUT', '/api/auth/telegram/prefs', { token: admin, body: { events: { 'bill.issued': false } } })).status === 403);
   check('เรื่องที่ไม่มีจริงไม่รับ',
     (await api('PUT', '/api/auth/telegram/prefs', { token: stok, body: { events: { hack: false } } })).status === 400);
-  const offed = await api('PUT', '/api/auth/telegram/prefs', { token: stok, body: { events: { 'bill.issued': false, announcement: false } } });
+  const offed = await api('PUT', '/api/auth/telegram/prefs', {
+    token: stok, body: { events: { 'bill.issued': false, 'bill.account': false, announcement: false } },
+  });
   check('ปิดบางเรื่องได้ เรื่องอื่นยังเปิด',
-    offed.status === 200 && offed.body.events.find((e) => e.key === 'bill.issued').enabled === false
+    offed.status === 200 && offed.body.events.find((e) => e.key === 'announcement').enabled === false
       && offed.body.events.find((e) => e.key === 'payment.received').enabled === true, offed.body);
+  check('ส่งค่าปิดเรื่องที่ล็อกมา ไม่ error แต่ยังเปิดอยู่ (บิลใหม่ · เลขบัญชีของบิล)',
+    ['bill.issued', 'bill.account'].every((k) => offed.body.events?.find((e) => e.key === k)?.enabled === true), offed.body);
 
   await api('POST', '/api/sales-entries', { token: admin, body: { periodCode: '2026-08-H2', productId: prod.body.product.id, grossAmount: 20000 } });
   mark = telegram.messages.length;
   const bill2 = await api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: fid, periodCode: '2026-08-H2' } });
   const ann = await api('POST', '/api/announcements', { token: admin, body: { title: 'ทดสอบประกาศปิดไว้', body: 'ไม่ควรเข้าแชต' } });
   await flushTelegram();
-  check('ปิด "บิลใหม่" และ "ประกาศ" ไว้ → ไม่ได้ข้อความสองเรื่องนี้',
-    bill2.status === 201 && ann.status === 201 && !telegram.messages.slice(mark).some((m) => String(m.chat_id) === SHOP_CHAT), telegram.messages.slice(mark));
+  const gotAfterOff = telegram.messages.slice(mark).filter((m) => String(m.chat_id) === SHOP_CHAT);
+  check('ปิด "ประกาศ" ไว้ → ไม่ได้ประกาศ · แต่บิลใหม่ (ล็อก) ยังส่งมาพร้อมเลขบัญชีและคำเตือน',
+    bill2.status === 201 && ann.status === 201 && !gotAfterOff.some((m) => /ทดสอบประกาศปิดไว้/.test(m.text))
+      && gotAfterOff.length === 1 && /บิลรอบใหม่/.test(gotAfterOff[0].text) && /ห้ามโอนเด็ดขาด/.test(gotAfterOff[0].text), gotAfterOff);
 
   await api('PUT', '/api/auth/telegram/prefs', { token: stok, body: { events: { announcement: true } } });
   mark = telegram.messages.length;
@@ -2432,15 +2666,961 @@ section('ดูแลระบบ: ตรวจสถานะ · แจ้ง�
   await api('DELETE', `/api/announcements/${a.body.id}`, { token: admin });
 }
 
+/* ── วิธีคิดยอดรายสินค้าในบิล ─────────────────────────────────
+ * ตอนออกบิล แต่ละสินค้าเลือกได้ว่า "คิดตาม %" (แก้ % ได้) หรือ "กรอกยอดเอง"
+ * ยอดรวม · ค่าใช้จ่ายแบบ % · ยอดสุทธิ ต้องคิดจากยอดที่ใช้จริงของแต่ละบรรทัด
+ * ใช้ร้านของเทสต์นี้เอง (ร้าน A/B มียอดของเทสต์อื่นผูกอยู่)
+ */
+section('วิธีคิดยอดรายสินค้าในบิล (คิดตาม % / กรอกยอดเอง)');
+{
+  const ls = await api('POST', '/api/franchises', { token: admin, body: { username: 'lineshop', password: 'lineshop-pass-1' } });
+  const lfid = ls.body.franchise?.id;
+  const ltok = (await shopLogin('lineshop', 'lineshop-pass-1', lfid)).body.token;
+  const mk = async (sku, pct) => (await api('POST', '/api/products', {
+    token: admin, body: { sku, name: `สินค้าบรรทัด ${sku}`, commissionPct: pct, franchiseId: lfid, startDate: '2026-01-01' },
+  })).body.product;
+  const [l1, l2, l3] = [await mk('LINE-1', 10), await mk('LINE-2', 20), await mk('LINE-3', 5)];
+  const entryOf = async (productId, grossAmount) => (await api('POST', '/api/sales-entries', {
+    token: admin, body: { periodCode: '2029-04-H1', productId, grossAmount },
+  })).body;
+  const le1 = await entryOf(l1?.id, 10000);
+  const le2 = await entryOf(l2?.id, 20000);
+  const le3 = await entryOf(l3?.id, 4000);
+  const gen = (extra) => api('POST', '/api/invoices/generate', {
+    token: admin, body: { franchiseId: lfid, periodCode: '2029-04-H1', entryIds: [le1.id, le2.id], ...extra },
+  });
+  const lineOf = (body, id) => body?.lines?.find((l) => l.id === id);
+
+  // ตรวจทุกบรรทัดก่อนเขียน — ผิดบรรทัดเดียวไม่มีบิลออกไป
+  const invalid = [
+    ['บรรทัดที่ไม่ได้เลือกออกบิล ส่งวิธีคิดมาไม่ได้', [{ entryId: le3.id, mode: 'PCT' }]],
+    ['ส่งวิธีคิดของบรรทัดเดียวกันซ้ำไม่ได้', [{ entryId: le1.id, mode: 'PCT' }, { entryId: le1.id, mode: 'MANUAL', amount: 100 }]],
+    ['"คิดตาม %" แต่ส่งจำนวนเงินมาด้วย ไม่รับ', [{ entryId: le1.id, mode: 'PCT', amount: 100 }]],
+    ['"กรอกยอดเอง" แต่ไม่ใส่จำนวนเงิน ไม่รับ', [{ entryId: le1.id, mode: 'MANUAL' }]],
+    ['"กรอกยอดเอง" แต่ส่ง % มาด้วย ไม่รับ', [{ entryId: le1.id, mode: 'MANUAL', amount: 100, pct: 5 }]],
+    ['กรอกยอดเกินยอดเงินเต็มไม่ได้', [{ entryId: le1.id, mode: 'MANUAL', amount: 10000.01 }]],
+    ['กรอกยอดติดลบบนยอดขายปกติไม่ได้', [{ entryId: le1.id, mode: 'MANUAL', amount: -1 }]],
+    ['ตัวเลขยาวผิดปกติ → บอกว่าเกินกำหนด (ไม่ใช่ระบบพัง)', [{ entryId: le1.id, mode: 'MANUAL', amount: 1e15 }]],
+  ];
+  for (const [label, lines] of invalid) {
+    const r = await gen({ lines });
+    check(label, r.status === 400, r.body);
+  }
+  check('ตรวจไม่ผ่านแล้วไม่มีบิลค้างอยู่ (ออกใหม่ได้)',
+    (await api('GET', `/api/invoices?franchiseId=${lfid}`, { token: admin })).body.items?.length === 0);
+
+  const inv = await gen({
+    lines: [{ entryId: le1.id, mode: 'MANUAL', amount: 800 }, { entryId: le2.id, mode: 'PCT', pct: 12.5 }],
+    adjustments: [{ kind: 'CHARGE', label: 'ค่าขนส่ง 10%', pct: 10 }],
+  });
+  // LINE-1 กรอกเอง 800 · LINE-2 20,000 × 12.5% = 2,500 → 3,300 · ค่าขนส่ง 10% = 330 → 3,630
+  check('ออกบิลโดยเลือกวิธีคิดรายบรรทัด: กรอกเอง 800 + (20,000 × 12.5% = 2,500) = 3,300',
+    inv.status === 201 && inv.body.commissionTotal === 3300
+      && lineOf(inv.body, le1.id)?.billMode === 'MANUAL' && lineOf(inv.body, le1.id).commissionAmount === 800
+      && lineOf(inv.body, le2.id)?.billMode === 'PCT' && lineOf(inv.body, le2.id).commissionPct === 12.5
+      && lineOf(inv.body, le2.id).commissionAmount === 2500, inv.body);
+  check('ค่าใช้จ่ายแบบ % คิดจากยอดที่ใช้จริง (10% ของ 3,300 = 330 · สุทธิ 3,630)',
+    inv.body.chargeTotal === 330 && inv.body.netTotal === 3630, { charge: inv.body.chargeTotal, net: inv.body.netTotal });
+
+  const toManual = await api('PATCH', `/api/invoices/${inv.body.id}/lines/${le2.id}`, { token: admin, body: { mode: 'MANUAL', amount: 1000 } });
+  check('แก้วิธีคิดของบรรทัดในบิลที่ยังไม่มีเงินเข้าได้ — ยอดรวมและค่าใช้จ่าย % คิดใหม่ (1,800 · 180 · 1,980)',
+    toManual.status === 200 && toManual.body.commissionTotal === 1800 && toManual.body.chargeTotal === 180
+      && toManual.body.netTotal === 1980 && lineOf(toManual.body, le2.id)?.billMode === 'MANUAL', toManual.body);
+  const toPct = await api('PATCH', `/api/invoices/${inv.body.id}/lines/${le2.id}`, { token: admin, body: { mode: 'PCT' } });
+  check('กลับไปคิดตาม % ได้ (ไม่ส่ง % = ใช้ % เดิมของรายการ 12.5% → 2,500)',
+    toPct.status === 200 && lineOf(toPct.body, le2.id)?.commissionAmount === 2500 && toPct.body.commissionTotal === 3300, toPct.body);
+  check('แก้บรรทัดที่ไม่ได้อยู่ในบิลนี้ไม่ได้ (404)',
+    (await api('PATCH', `/api/invoices/${inv.body.id}/lines/${le3.id}`, { token: admin, body: { mode: 'PCT' } })).status === 404);
+  check('ร้านแก้วิธีคิดยอดเองไม่ได้',
+    (await api('PATCH', `/api/invoices/${inv.body.id}/lines/${le2.id}`, { token: ltok, body: { mode: 'MANUAL', amount: 1 } })).status === 403);
+
+  const added = await api('POST', `/api/invoices/${inv.body.id}/lines`, {
+    token: admin, body: { entryIds: [le3.id], lines: [{ entryId: le3.id, mode: 'PCT', pct: 10 }] },
+  });
+  check('เติมรายการเข้าบิลพร้อมเลือกวิธีคิด (4,000 × 10% = 400 → 3,700 · ค่าขนส่ง 370)',
+    added.status === 200 && lineOf(added.body, le3.id)?.commissionAmount === 400
+      && added.body.commissionTotal === 3700 && added.body.chargeTotal === 370, added.body);
+  const shopView = await api('GET', `/api/invoices/${inv.body.id}`, { token: ltok });
+  check('ร้านเห็นว่าบรรทัดไหนทางเรากำหนดยอดเอง', lineOf(shopView.body, le1.id)?.billMode === 'MANUAL', shopView.body.lines);
+  check('ประวัติบอกว่าแก้วิธีคิดยอดของบรรทัดไหน',
+    db.prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'invoice.line.update' AND entity_id = ?").get(inv.body.id).n === 2);
+
+  const lslip = await uploadSlip(ltok);
+  const lsub = await api('POST', '/api/payments', { token: ltok, body: { invoiceId: inv.body.id, amount: 100, slipUrl: lslip } });
+  check('มีสลิปรอตรวจอยู่ แก้วิธีคิดยอดไม่ได้',
+    (await api('PATCH', `/api/invoices/${inv.body.id}/lines/${le1.id}`, { token: admin, body: { mode: 'PCT' } })).status === 409);
+  await api('POST', `/api/payments/${lsub.body.id}/approve`, { token: admin, body: {} });
+  check('เงินเข้าแล้ว แก้วิธีคิดยอดไม่ได้ (ต้องยกเลิกบิลแล้วออกใหม่)',
+    (await api('PATCH', `/api/invoices/${inv.body.id}/lines/${le1.id}`, { token: admin, body: { mode: 'PCT' } })).status === 409);
+}
+
+/* ── รูปประกอบบิล ─────────────────────────────────────────────
+ * ลิงก์รูปที่ระบบเซ็นให้เป็นกุญแจในตัว — ร้านได้ลิงก์เฉพาะรูปของบิลตัวเอง (ผ่าน GET บิลที่ตรวจสิทธิ์แล้ว)
+ * ไฟล์ที่อัปโหลดไม่มีเจ้าของ จึงห้ามหยิบไฟล์ที่ผูกกับเรื่องอื่นอยู่แล้ว (สลิปของร้าน) มาแนบ
+ */
+section('รูปประกอบบิล (ร้านเห็นเฉพาะบิลของตัวเอง · สูงสุด 10 รูป)');
+{
+  const as = await api('POST', '/api/franchises', { token: admin, body: { username: 'attshop', password: 'attshop-pass-1' } });
+  const afid = as.body.franchise?.id;
+  const atok = (await shopLogin('attshop', 'attshop-pass-1', afid)).body.token;
+  const prod = (await api('POST', '/api/products', {
+    token: admin, body: { sku: 'ATT-1', name: 'สินค้ามีรูปประกอบ', commissionPct: 10, franchiseId: afid, startDate: '2026-01-01' },
+  })).body.product;
+  for (const periodCode of ['2029-05-H1', '2029-05-H2']) {
+    await api('POST', '/api/sales-entries', { token: admin, body: { periodCode, productId: prod?.id, grossAmount: 10000 } });
+  }
+  const first = await uploadSlip();
+  const bill = await api('POST', '/api/invoices/generate', {
+    token: admin, body: { franchiseId: afid, periodCode: '2029-05-H1', attachments: [{ url: first, caption: 'ใบส่งของ' }] },
+  });
+  check('แนบรูปตอนออกบิลได้ พร้อมคำอธิบาย',
+    bill.status === 201 && bill.body.attachments?.length === 1 && bill.body.attachments[0].caption === 'ใบส่งของ'
+      && bill.body.attachments[0].type === 'image' && bill.body.attachmentCount === 1, bill.body.attachments);
+  const more = await api('POST', `/api/invoices/${bill.body.id}/attachments`, { token: admin, body: { files: [{ url: await uploadSlip() }] } });
+  check('แนบรูปเพิ่มทีหลังได้', more.status === 201 && more.body.attachments?.length === 2 && more.body.attachmentCount === 2, more.body);
+
+  const asShop = await api('GET', `/api/invoices/${bill.body.id}`, { token: atok });
+  const signed = asShop.body.attachments?.[0]?.url ?? '';
+  check('ร้านเห็นรูปประกอบของบิลตัวเอง และเปิดด้วยลิงก์ที่ระบบเซ็นให้ได้',
+    asShop.status === 200 && asShop.body.attachments?.length === 2 && (await fetch(`${base}${signed}`)).status === 200, asShop.body.attachments);
+  check('ลิงก์รูปที่ไม่มีลายเซ็นเปิดไม่ได้', (await fetch(`${base}${fileOf(signed)}`)).status === 404);
+  const otherShop = await api('GET', `/api/invoices/${bill.body.id}`, { token: tokenB });
+  check('ร้านอื่นเปิดบิล (และรูปประกอบ) ของร้านนี้ไม่ได้',
+    otherShop.status === 403 && !JSON.stringify(otherShop.body).includes(fileOf(first).split('/').pop()), otherShop.body);
+  check('รายการบิลบอกจำนวนรูป (📎 N) โดยไม่ต้องโหลดรูป',
+    (await api('GET', '/api/invoices', { token: atok })).body.items?.find((i) => i.id === bill.body.id)?.attachmentCount === 2);
+
+  const shopFile = await uploadSlip(atok);
+  check('ร้านแนบรูปเข้าบิลเองไม่ได้',
+    (await api('POST', `/api/invoices/${bill.body.id}/attachments`, { token: atok, body: { files: [{ url: shopFile }] } })).status === 403);
+  check('ร้านลบรูปประกอบเองไม่ได้',
+    (await api('DELETE', `/api/invoices/${bill.body.id}/attachments/${bill.body.attachments?.[0]?.id}`, { token: atok })).status === 403);
+
+  const attach = (files) => api('POST', `/api/invoices/${bill.body.id}/attachments`, { token: admin, body: { files } });
+  check('ลิงก์ภายนอกแนบไม่ได้', (await attach([{ url: 'https://example.com/x.png' }])).status === 400);
+  check('ชื่อไฟล์ที่ไม่มีอยู่จริงแนบไม่ได้', (await attach([{ url: `/api/uploads/${'0'.repeat(32)}.png` }])).status === 400);
+  check('ไฟล์ที่เป็นสลิปแจ้งชำระอยู่แล้ว เอามาแนบบิลไม่ได้', (await attach([{ url: slip }])).status === 400);
+  check('ไฟล์ที่แนบบิลไปแล้ว เอามาแนบซ้ำไม่ได้', (await attach([{ url: first }])).status === 400);
+  const eight = [];
+  for (let i = 0; i < 8; i++) eight.push({ url: await uploadSlip() });
+  const ten = await attach(eight);
+  const eleventh = await attach([{ url: await uploadSlip() }]);
+  check('แนบได้สูงสุด 10 รูปต่อบิล (รูปที่ 11 ไม่รับ)',
+    ten.status === 201 && ten.body.attachments?.length === 10 && eleventh.status === 400, { ten: ten.status, eleventh: eleventh.body });
+
+  const removeFirst = () => api('DELETE', `/api/invoices/${bill.body.id}/attachments/${bill.body.attachments?.[0]?.id}`, { token: admin });
+  const removed = await removeFirst();
+  check('ลบรูปแล้วไม่แสดงในบิลอีก',
+    removed.status === 200 && removed.body.attachments?.length === 9
+      && !removed.body.attachments.some((a) => a.id === bill.body.attachments[0].id), removed.body.attachments?.length);
+  check('ลบซ้ำ → ไม่พบ (404)', (await removeFirst()).status === 404);
+  check('การลบรูปถูกจดประวัติ',
+    db.prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'invoice.attachment.remove' AND entity_id = ?").get(bill.body.id).n === 1);
+
+  const voidBill = await api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: afid, periodCode: '2029-05-H2' } });
+  await api('POST', `/api/invoices/${voidBill.body.id}/void`, { token: admin, body: { reason: 'ทดสอบแนบรูปบิลยกเลิก' } });
+  check('บิลที่ยกเลิกแล้วแนบรูปไม่ได้ (409)', (await api('POST', `/api/invoices/${voidBill.body.id}/attachments`, {
+    token: admin, body: { files: [{ url: await uploadSlip() }] },
+  })).status === 409);
+}
+
+/* ── เลขบัญชีในข้อความ Telegram ของร้าน + เปลี่ยนบัญชีของบิล ─────────
+ * ข้อความ Telegram ที่ร้านได้คือหลักฐานนอกระบบที่ร้านใช้เทียบก่อนโอน — ทุกข้อความที่มีเลขบัญชีต้องมีคำเตือน
+ * เปลี่ยนบัญชีของบิล: ต้องใส่รหัส 6 หลัก + แจ้งกลุ่มส่วนกลาง แต่ "ไม่" ส่งบัญชีใหม่ให้ร้านเอง
+ * (ถ้าระบบส่งเอง คนที่ยึดบัญชีแอดมินได้จะใช้ระบบบอกร้านให้โอนเข้าบัญชีตัวเองได้ทันที) — คนตรวจแล้วกดส่งเอง
+ */
+section('เลขบัญชีในข้อความ Telegram ของร้าน · เปลี่ยนบัญชีของบิล · ยืนยันเลขบัญชีตอนแจ้งชำระ');
+const acctShop = {}; // ร้านที่เชื่อม Telegram แล้ว — ใช้ต่อในหมวดกระเป๋า USD
+{
+  const ACCT_CHAT = '777000333';
+  const as = await api('POST', '/api/franchises', { token: admin, body: { username: 'acctshop', password: 'acctshop-pass-1' } });
+  const afid = as.body.franchise?.id;
+  const stok = (await shopLogin('acctshop', 'acctshop-pass-1', afid)).body.token;
+  const prod = (await api('POST', '/api/products', {
+    token: admin, body: { sku: 'ACCT-1', name: 'สินค้าทดสอบบัญชี', commissionPct: 10, franchiseId: afid, startDate: '2026-01-01' },
+  })).body.product;
+  const accA = (await api('POST', '/api/bank-accounts', {
+    token: admin, body: { bankName: 'ธนาคารบัญชีหนึ่ง', accountName: 'บจก. ตรวจบัญชี', accountNumber: '6060606060' },
+  })).body;
+  const accB = (await api('POST', '/api/bank-accounts', {
+    token: admin, body: { bankName: 'ธนาคารบัญชีสอง', accountName: 'บจก. ตรวจบัญชี', accountNumber: '7070707070' },
+  })).body;
+  const issue = async (periodCode, gross, extra = {}) => {
+    await api('POST', '/api/sales-entries', { token: admin, body: { periodCode, productId: prod?.id, grossAmount: gross } });
+    return api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: afid, periodCode, bankAccountId: accA.id, ...extra } });
+  };
+  const shopMsgs = (from) => telegram.messages.slice(from).filter((m) => String(m.chat_id) === ACCT_CHAT);
+  Object.assign(acctShop, { fid: afid, token: stok, productId: prod?.id, shopMsgs });
+
+  // ร้านยังไม่เชื่อม Telegram = ยังไม่เคยได้เลขบัญชีทาง Telegram
+  const b0 = await issue('2029-02-H2', 10000);
+  check('ร้านยังไม่เคยได้เลขบัญชีทาง Telegram → ร้านเห็น NOT_SENT (ต้องยืนยันกับทางเราโดยตรง)',
+    b0.status === 201 && b0.body.accountCheck === 'NOT_SENT' && b0.body.telegramAccount === null,
+    { check: b0.body.accountCheck, tg: b0.body.telegramAccount });
+  check('ร้านเชื่อม Telegram ของตัวเองได้ (ตั้งฉากเทสต์)', await linkTelegram(stok, ACCT_CHAT));
+
+  await flushTelegram();
+  let mark = telegram.messages.length;
+  const b1 = await issue('2029-03-H1', 50000, { attachments: [{ url: await uploadSlip() }] });
+  await flushTelegram();
+  const issuedMsg = shopMsgs(mark).find((m) => /บิลรอบใหม่ออกแล้ว/.test(m.text));
+  const issuedText = issuedMsg?.text ?? '';
+  check('ออกบิล → ข้อความถึงร้านมีธนาคาร เลขที่บัญชี และชื่อบัญชีของบิล',
+    issuedText.includes('ธนาคารบัญชีหนึ่ง') && issuedText.includes('<code>6060606060</code>') && issuedText.includes('บจก. ตรวจบัญชี'), issuedText);
+  check('…พร้อมคำเตือน: ตรวจก่อนโอน · ไม่ตรงห้ามโอน · โอนผิดบัญชีทางเราไม่รับผิดชอบทุกกรณี',
+    /ก่อนโอนทุกครั้ง/.test(issuedText) && /ห้ามโอนเด็ดขาด/.test(issuedText) && /ไม่รับผิดชอบทุกกรณี/.test(issuedText) && /สแกน QR/.test(issuedText), issuedText);
+  check('…และบอกว่ามีรูปประกอบบิล', /📎 มีรูปประกอบ 1 รูป/.test(issuedText), issuedText);
+  check('ส่งเลขบัญชีแล้ว: ร้านเห็น MATCH · ส่วนกลางเห็นว่าแจ้งบัญชีไหนไป',
+    b1.body.accountCheck === 'MATCH' && b1.body.telegramAccount?.matches === true && b1.body.telegramAccount.account?.accountNumber === '6060606060',
+    { check: b1.body.accountCheck, tg: b1.body.telegramAccount });
+  const b1Shop = await api('GET', `/api/invoices/${b1.body.id}`, { token: stok });
+  check('ร้านได้แค่ผลตรวจ (MATCH) ไม่ได้รายละเอียดที่ส่วนกลางเห็น',
+    b1Shop.body.accountCheck === 'MATCH' && !('telegramAccount' in b1Shop.body), Object.keys(b1Shop.body));
+
+  // ── เปลี่ยนบัญชีของบิล ──
+  const noCode = await api('PATCH', `/api/invoices/${b1.body.id}`, { token: admin, elevate: false, body: { bankAccountId: accB.id } });
+  check('เปลี่ยนบัญชีของบิลโดยไม่ใส่รหัส 6 หลักไม่ได้', noCode.status === 403 && noCode.body.error?.code === 'ELEVATION_REQUIRED', noCode.body);
+  check('แก้แค่วันครบกำหนดไม่ต้องใส่รหัส 6 หลัก',
+    (await api('PATCH', `/api/invoices/${b1.body.id}`, { token: admin, elevate: false, body: { dueDate: '2029-03-31' } })).status === 200);
+  const unreadBefore = (await api('GET', '/api/bank-accounts/changes/unread', { token: admin })).body.count;
+  mark = telegram.messages.length;
+  const moved = await api('PATCH', `/api/invoices/${b1.body.id}`, { token: admin, body: { bankAccountId: accB.id } });
+  check('ใส่รหัสแล้วเปลี่ยนบัญชีของบิลได้ → บัญชีไม่ตรงกับที่แจ้งร้านไว้ (CHANGED)',
+    moved.status === 200 && moved.body.bankAccount?.id === accB.id && moved.body.accountCheck === 'CHANGED'
+      && moved.body.telegramAccount?.matches === false, moved.body);
+  await flushTelegram();
+  const alert = telegram.messages.slice(mark).find((m) => /เปลี่ยนบัญชีรับเงินของบิล/.test(m.text));
+  check('กลุ่มส่วนกลางได้แจ้งทันที: บิล · จากบัญชีเดิม → บัญชีใหม่ · ใครเปลี่ยน',
+    alert?.chat_id === TG_CHAT && alert.text.includes(b1.body.invoiceNo) && alert.text.includes('6060606060')
+      && alert.text.includes('7070707070') && /superadmin/.test(alert.text), alert?.text);
+  check('ระบบไม่ส่งบัญชีใหม่ให้ร้านเอง (ต้องให้คนตรวจแล้วกดส่ง)', shopMsgs(mark).length === 0, shopMsgs(mark));
+  const unread = (await api('GET', '/api/bank-accounts/changes/unread', { token: admin })).body;
+  check('ขึ้นแถบเตือนการแก้บัญชีของแอดมิน (บัญชีของบิล: เดิม → ใหม่)',
+    unread.count === unreadBefore + 1
+      && unread.items?.[0]?.changes?.some((c) => c.field === 'invoiceAccount' && /6060606060/.test(c.from) && /7070707070/.test(c.to)),
+    unread.items?.[0]);
+  const notifyCfg = (await api('GET', '/api/settings/notifications', { token: admin })).body;
+  check('แจ้งเตือน "เปลี่ยนบัญชีรับเงินของบิล" ปิดไม่ได้',
+    notifyCfg.events?.find((e) => e.key === 'invoice.bank_account')?.locked === true, notifyCfg.events?.map((e) => e.key));
+  check('ร้านเห็นว่าบัญชีของบิลไม่ตรงกับที่แจ้งทาง Telegram (CHANGED)',
+    (await api('GET', `/api/invoices/${b1.body.id}`, { token: stok })).body.accountCheck === 'CHANGED');
+
+  // ── ร้านยืนยันเลขบัญชีตอนแจ้งชำระ (หลักฐานเวลามีข้อโต้แย้งเรื่องโอนผิดบัญชี) ──
+  const shopSlip = await uploadSlip(stok);
+  const pay = (body, token = stok) => api('POST', '/api/payments', {
+    token, body: { invoiceId: b1.body.id, amount: 100, slipUrl: shopSlip, ...body },
+  });
+  const stale = await pay({ accountConfirmed: true, bankAccountId: accA.id });
+  check('ร้านยืนยันเลขบัญชีเดิมทั้งที่บิลเพิ่งเปลี่ยนบัญชี → 409 ให้ตรวจกับ Telegram อีกครั้ง', stale.status === 409, stale.body);
+  check('ยืนยันเลขบัญชีแต่ไม่บอกว่าหน้าจอแสดงบัญชีไหน → 400', (await pay({ accountConfirmed: true })).status === 400);
+
+  // ── ส่วนกลางตรวจแล้วกดส่งเลขบัญชีให้ร้าน ──
+  check('ส่งเลขบัญชีให้ร้านโดยไม่ใส่รหัส 6 หลักไม่ได้',
+    (await api('POST', `/api/invoices/${b1.body.id}/notify-account`, { token: admin, elevate: false })).status === 403);
+  check('ร้านสั่งส่งเลขบัญชีเองไม่ได้', (await api('POST', `/api/invoices/${b1.body.id}/notify-account`, { token: stok })).status === 403);
+  mark = telegram.messages.length;
+  const sent = await api('POST', `/api/invoices/${b1.body.id}/notify-account`, { token: admin });
+  await flushTelegram();
+  const newAcctText = shopMsgs(mark)[0]?.text ?? '';
+  check('กดส่งเลขบัญชี → ร้านได้ข้อความ "ทางเราเปลี่ยนบัญชีรับเงินของบิล" พร้อมบัญชีใหม่และคำเตือน',
+    sent.status === 200 && sent.body.sent === 1 && sent.body.changed === true
+      && /ทางเราเปลี่ยนบัญชีรับเงินของบิล/.test(newAcctText) && newAcctText.includes('7070707070') && /ห้ามโอนเด็ดขาด/.test(newAcctText),
+    { body: sent.body, text: newAcctText });
+  check('ส่งแล้วบิลกลับมาตรงกับที่แจ้งร้าน (MATCH)',
+    sent.body.invoice?.accountCheck === 'MATCH' && sent.body.invoice.telegramAccount?.matches === true, sent.body.invoice?.telegramAccount);
+  check('ส่งบัญชีใหม่ให้ร้าน → กลุ่มส่วนกลางรู้ด้วย (จาก → เป็น)',
+    telegram.messages.slice(mark).some((m) => m.chat_id === TG_CHAT && /ส่งเลขบัญชีใหม่ให้ร้านแล้ว/.test(m.text)
+      && m.text.includes('6060606060') && m.text.includes('7070707070')), telegram.messages.slice(mark).map((m) => m.text));
+
+  const confirmed = await pay({ accountConfirmed: true, bankAccountId: accB.id });
+  check('ร้านติ๊กยืนยันเลขบัญชีแล้วแจ้งชำระได้ → เก็บเวลาที่ยืนยัน + บัญชีที่บิลชี้ตอนแจ้ง',
+    confirmed.status === 201 && Boolean(confirmed.body.accountConfirmedAt) && /7070707070/.test(confirmed.body.bankAccountLabel ?? ''), confirmed.body);
+  const snap = db.prepare('SELECT bank_snapshot FROM payment_submissions WHERE id = ?').get(confirmed.body.id);
+  check('หลักฐานเก็บ "ค่า" ของบัญชี ณ ตอนแจ้ง ไม่ใช่แค่ id (บัญชีแก้ทีหลังได้)',
+    JSON.parse(snap?.bank_snapshot ?? '{}').accountNumber === '7070707070', snap);
+  const bySuper = await pay({ accountConfirmed: true, bankAccountId: accB.id, slipUrl: await uploadSlip() }, admin);
+  check('ส่วนกลางแจ้งแทนร้าน ติ๊กยืนยันมาก็ไม่นับเป็น "ร้านยืนยันแล้ว"',
+    bySuper.status === 201 && bySuper.body.accountConfirmedAt === null, bySuper.body);
+  const review = (await api('GET', '/api/payments?status=PENDING', { token: admin })).body.items?.find((x) => x.id === confirmed.body.id);
+  check('หน้าตรวจสลิปของส่วนกลางเห็นว่าร้านยืนยันบัญชีไหนไว้',
+    Boolean(review?.accountConfirmedAt) && /7070707070/.test(review?.bankAccountLabel ?? ''), review);
+
+  // ── เตือนร้านซ้ำใช้บัญชีที่เคยแจ้งไว้ (snapshot) ไม่ "รับรอง" เลขที่ถูกแก้ในฐานข้อมูล ──
+  const b2 = await issue('2029-03-H2', 30000, { bankAccountId: accB.id });
+  check('ตั้งฉาก: บิลที่สองแจ้งบัญชีสองให้ร้านแล้ว', b2.status === 201 && b2.body.accountCheck === 'MATCH', b2.body.accountCheck);
+  mark = telegram.messages.length;
+  const edited = await api('PATCH', `/api/bank-accounts/${accB.id}`, { token: admin, body: { accountNumber: '7171717171' } });
+  await flushTelegram();
+  const editAlert = telegram.messages.slice(mark).find((m) => m.chat_id === TG_CHAT && /7171717171/.test(m.text));
+  check('แก้เลขบัญชีที่มีบิลค้าง → กลุ่มได้รายชื่อบิลที่ได้รับผลกระทบ และคำแนะนำให้กดส่งเลขบัญชีให้ร้าน',
+    edited.status === 200 && Boolean(editAlert) && editAlert.text.includes(b1.body.invoiceNo) && editAlert.text.includes(b2.body.invoiceNo)
+      && /ส่งเลขบัญชีให้ร้าน/.test(editAlert.text), editAlert?.text);
+  check('แก้เลขบัญชีแล้วระบบไม่ส่งเลขใหม่ให้ร้านเอง', shopMsgs(mark).length === 0, shopMsgs(mark));
+  check('ร้านเห็นว่าไม่ตรงกับ Telegram ทันที (CHANGED)',
+    (await api('GET', `/api/invoices/${b2.body.id}`, { token: stok })).body.accountCheck === 'CHANGED');
+  const tomorrowTh = new Date(Date.parse(todayTh) + 86400000).toISOString().slice(0, 10);
+  db.prepare('UPDATE invoices SET due_date = ?, reminded_at = NULL WHERE id = ?').run(tomorrowTh, b2.body.id);
+  mark = telegram.messages.length;
+  await runDueReminders(new Date(`${todayTh}T10:00:00Z`));
+  await flushTelegram();
+  const remindText = shopMsgs(mark).find((m) => m.text.includes(b2.body.invoiceNo))?.text ?? '';
+  check('เตือนก่อนครบกำหนดบอกบัญชีที่เคยแจ้งร้าน (ไม่ใช่เลขที่ถูกแก้) + บอกให้ติดต่อทางเราก่อนโอน',
+    /แจ้งเตือนล่วงหน้า/.test(remindText) && remindText.includes('7070707070') && !remindText.includes('7171717171')
+      && /ไม่ตรงกับที่เคยแจ้งทาง Telegram/.test(remindText), remindText);
+
+  const listed = (await api('GET', '/api/bank-accounts', { token: admin })).body.items?.find((a) => a.id === accB.id);
+  check('บัญชีบอกจำนวนบิลค้างที่ชี้บัญชีนี้ (ใช้กับปุ่มส่งเลขบัญชีให้ร้าน)', listed?.openInvoiceCount === 2, listed);
+  check('ส่งเลขบัญชีให้ร้านที่มีบิลค้างโดยไม่ใส่รหัส 6 หลักไม่ได้',
+    (await api('POST', `/api/bank-accounts/${accB.id}/notify-shops`, { token: admin, elevate: false })).status === 403);
+  mark = telegram.messages.length;
+  const ns = await api('POST', `/api/bank-accounts/${accB.id}/notify-shops`, { token: admin });
+  await flushTelegram();
+  check('ส่งเลขบัญชีใหม่ให้ทุกบิลค้างที่ชี้บัญชีนี้ในครั้งเดียว (2 บิล)',
+    ns.status === 200 && ns.body.invoices === 2 && ns.body.sent === 2
+      && shopMsgs(mark).filter((m) => m.text.includes('7171717171')).length === 2, ns.body);
+  // หน้าเว็บนับ "ส่งถึงร้านแล้วกี่บิล" จาก notified และบอกชื่อบิลที่ไม่ได้ส่งจาก items[].sent === 0
+  check('ผลการส่งบอกว่าบิลไหนถึงร้านจริง (notified + items รายบิล)',
+    ns.body.notified === 2 && ns.body.items?.length === 2 && ns.body.items.every((i) => i.sent > 0 && typeof i.invoiceNo === 'string'), ns.body);
+  check('ส่งแล้วบิลกลับมาตรงกับ Telegram (MATCH)',
+    (await api('GET', `/api/invoices/${b2.body.id}`, { token: stok })).body.accountCheck === 'MATCH');
+
+  await api('POST', `/api/invoices/${b0.body.id}/void`, { token: admin, body: { reason: 'ทดสอบส่งเลขบัญชีบิลยกเลิก' } });
+  check('บิลที่ยกเลิกแล้ว ส่งเลขบัญชีให้ร้านไม่ได้ (409)',
+    (await api('POST', `/api/invoices/${b0.body.id}/notify-account`, { token: admin })).status === 409);
+}
+
+/* ── บัญชีรับเงิน USD = กระเป๋าคริปโต ─────────────────────────
+ * รับดอลลาร์ผ่านกระเป๋า: กรอกแค่เครือข่าย (chain) + ที่อยู่กระเป๋า + QR — ไม่มีธนาคาร/ชื่อบัญชี
+ * โอนผิดเครือข่าย = เงินหายถาวร ข้อความถึงร้านต้องบอกเครือข่ายติดกับที่อยู่เสมอ
+ */
+section('บัญชีรับเงิน USD = กระเป๋าคริปโต (เครือข่าย + ที่อยู่กระเป๋า)');
+{
+  const addr = 'TSmokeWallet0000000000000003';
+  const mk = (body) => api('POST', '/api/bank-accounts', { token: admin, body });
+  const noChain = await mk({ currency: 'USD', accountNumber: addr });
+  check('บัญชี USD ต้องระบุเครือข่าย (chain)', noChain.status === 400 && /ต้องระบุเครือข่าย \(chain\)/.test(noChain.body.error?.message ?? ''), noChain.body);
+  const spaced = await mk({ currency: 'USD', chain: 'TRC20', accountNumber: 'TSmoke Wallet 00000003' });
+  check('ที่อยู่กระเป๋ามีช่องว่างไม่รับ (ต้องคัดลอกมาทั้งชุด)', spaced.status === 400 && /ที่อยู่กระเป๋า/.test(spaced.body.error?.message ?? ''), spaced.body);
+  check('ที่อยู่กระเป๋าสั้นผิดปกติไม่รับ', (await mk({ currency: 'USD', chain: 'TRC20', accountNumber: 'short' })).status === 400);
+  check('ชื่อเครือข่ายแปลก ๆ ไม่รับ', (await mk({ currency: 'USD', chain: '!bad', accountNumber: addr })).status === 400);
+  const wallet = await mk({ currency: 'USD', chain: 'TRC20', accountNumber: `  ${addr} `, bankName: 'ไม่ใช้', accountName: 'ไม่ใช้' });
+  check('เพิ่มกระเป๋า USD ได้: เก็บเครือข่าย + ที่อยู่ (ตัดช่องว่างหัวท้าย) · ไม่ใช้ชื่อธนาคาร/ชื่อบัญชี',
+    wallet.status === 201 && wallet.body.isWallet === true && wallet.body.chain === 'TRC20' && wallet.body.accountNumber === addr
+      && wallet.body.bankName === 'TRC20' && wallet.body.accountName === '', wallet.body);
+  check('ป้ายของกระเป๋า = "USD · เครือข่าย · ที่อยู่"', wallet.body.label === `USD · TRC20 · ${addr}`, wallet.body.label);
+  const longAddr = `0x${'ab'.repeat(40)}`;
+  check('ที่อยู่กระเป๋ายาว 82 ตัวอักษรใส่ได้', (await mk({ currency: 'USD', chain: 'ERC20', accountNumber: longAddr })).body.accountNumber === longAddr);
+  const thb = await mk({ bankName: 'ธนาคารบาท', accountName: 'บจก. บาท', accountNumber: '8181818181' });
+  check('บัญชีบาทเหมือนเดิม (ไม่มีเครือข่าย · ป้าย "ธนาคาร · เลข (ชื่อ)")',
+    thb.status === 201 && thb.body.chain === null && thb.body.isWallet === false && thb.body.label === 'ธนาคารบาท · 8181818181 (บจก. บาท)', thb.body);
+
+  const chainNoCode = await api('PATCH', `/api/bank-accounts/${wallet.body.id}`, { token: admin, elevate: false, body: { chain: 'BEP20' } });
+  check('เปลี่ยนเครือข่ายของกระเป๋าต้องใส่รหัส 6 หลัก (เปลี่ยนปลายทางเงิน)',
+    chainNoCode.status === 403 && chainNoCode.body.error?.code === 'ELEVATION_REQUIRED', chainNoCode.body);
+  const chainOk = await api('PATCH', `/api/bank-accounts/${wallet.body.id}`, { token: admin, body: { chain: 'TRON (TRC20)' } });
+  check('ใส่รหัสแล้วเปลี่ยนเครือข่ายได้ ป้ายเปลี่ยนตาม', chainOk.status === 200 && chainOk.body.label === `USD · TRON (TRC20) · ${addr}`, chainOk.body);
+  const lastChange = (await api('GET', '/api/bank-accounts/changes/unread', { token: admin })).body.items?.[0];
+  check('แจ้งเตือนการแก้บอกว่าเปลี่ยน "เครือข่าย (chain)"', JSON.stringify(lastChange ?? {}).includes('เครือข่าย (chain)'), lastChange);
+  await api('PATCH', `/api/bank-accounts/${wallet.body.id}`, { token: admin, body: { chain: 'TRC20' } });
+
+  // บิลดอลลาร์ของร้านที่เชื่อม Telegram → ข้อความบอกเครือข่าย + ที่อยู่กระเป๋า (36,250 × 10% = 3,625 บาท = 100 USD)
+  await api('POST', '/api/periods/2029-04-H2/usd-rate', { token: admin, body: { usdRate: 36.25 } });
+  await api('POST', '/api/sales-entries', { token: admin, body: { periodCode: '2029-04-H2', productId: acctShop.productId, grossAmount: 36250 } });
+  await flushTelegram();
+  const mark = telegram.messages.length;
+  const usdBill = await api('POST', '/api/invoices/generate', {
+    token: admin, body: { franchiseId: acctShop.fid, periodCode: '2029-04-H2', currency: 'USD', bankAccountId: wallet.body.id },
+  });
+  await flushTelegram();
+  check('บิลดอลลาร์ผูกกระเป๋าได้ — บิลบอกเครือข่ายและป้ายของกระเป๋า',
+    usdBill.status === 201 && usdBill.body.bankAccount?.isWallet === true && usdBill.body.bankAccount.chain === 'TRC20'
+      && usdBill.body.bankAccount.label === `USD · TRC20 · ${addr}`, usdBill.body.bankAccount ?? usdBill.body);
+  const walletText = acctShop.shopMsgs?.(mark).find((m) => m.text.includes(usdBill.body.invoiceNo ?? '-'))?.text ?? '';
+  check('ข้อความถึงร้าน: เครือข่าย · ที่อยู่กระเป๋าใน <code> · เตือนโอนผิดเครือข่ายเงินหาย · ไม่รับผิดชอบ',
+    walletText.includes('💵 <b>บัญชีรับเงิน USD</b>') && walletText.includes('เครือข่าย (Chain): <b>TRC20</b>')
+      && walletText.includes(`ที่อยู่กระเป๋า: <code>${addr}</code>`) && /โอนผิดเครือข่าย \(chain\)/.test(walletText)
+      && /ไม่รับผิดชอบทุกกรณี/.test(walletText), walletText);
+  check('ยอดในข้อความเป็นดอลลาร์ที่ต้องโอนจริง (≈ ยอดบาท)', /100\.00 USD \(≈ 3,625\.00 บาท\)/.test(walletText), walletText);
+  const shopUsd = await api('GET', `/api/invoices/${usdBill.body.id}`, { token: acctShop.token });
+  check('ร้านเห็นกระเป๋าของบิล และตรงกับที่แจ้งทาง Telegram (MATCH)',
+    shopUsd.body.bankAccount?.isWallet === true && shopUsd.body.accountCheck === 'MATCH', { bank: shopUsd.body.bankAccount, check: shopUsd.body.accountCheck });
+  check('กระเป๋าที่ผูกบิลแล้วเปลี่ยนเป็นบัญชีบาทไม่ได้ (409)',
+    (await api('PATCH', `/api/bank-accounts/${wallet.body.id}`, { token: admin, body: { currency: 'THB' } })).status === 409);
+}
+
+/* ── สินค้าลบไม่ได้ ────────────────────────────────────────────
+ * ประวัติยอดขาย/บิลอ้างถึงสินค้าเสมอ — เลิกขายใช้ "ปิดใช้งาน" แทน (เปิดกลับได้)
+ * ใช้ร้านที่มีสินค้าชิ้นเดียวของเทสต์นี้เอง (ห้ามปิดสินค้าของร้าน A/B ค้างไว้ — หมวดออกบิลหลายร้านหยิบสินค้าตัวแรกของร้าน)
+ */
+section('สินค้าลบไม่ได้ — ปิดใช้งาน / เปิดใช้งานแทน');
+{
+  const rs = await api('POST', '/api/franchises', { token: admin, body: { username: 'r5shop', password: 'r5shop-pass-1' } });
+  const rfid = rs.body.franchise?.id;
+  const rtok = (await shopLogin('r5shop', 'r5shop-pass-1', rfid)).body.token;
+  const only = (await api('POST', '/api/products', {
+    token: admin, body: { sku: 'R5-ONLY', name: 'สินค้าชิ้นเดียวของร้าน', commissionPct: 10, franchiseId: rfid, startDate: '2026-01-01' },
+  })).body.product;
+  const kept = await api('POST', '/api/sales-entries', { token: admin, body: { periodCode: '2029-06-H2', productId: only?.id, grossAmount: 10000 } });
+  const del = await api('DELETE', `/api/products/${only?.id}`, { token: admin });
+  check('ลบสินค้าไม่ได้ — ไม่มีช่องทางลบ (404) และสินค้ายังอยู่',
+    del.status === 404 && (await api('GET', `/api/products/${only?.id}`, { token: admin })).status === 200, del.body);
+  const readyOf = async (periodCode) => (await api('GET', `/api/invoices/readiness?periodCode=${periodCode}`, { token: admin }))
+    .body.items?.find((r) => r.franchiseId === rfid);
+  check('ตั้งฉาก: ร้านที่มีสินค้าแต่ยังไม่กรอกยอด = "ยังไม่กรอกยอด"', (await readyOf('2029-06-H1'))?.status === 'NO_SALES');
+  check('ร้านค้าปิดใช้งานสินค้าเองไม่ได้',
+    (await api('PATCH', `/api/products/${only?.id}`, { token: rtok, body: { status: 'ARCHIVED' } })).status === 403);
+  const archived = await api('PATCH', `/api/products/${only?.id}`, { token: admin, body: { status: 'ARCHIVED' } });
+  check('ปิดใช้งานสินค้าได้', archived.status === 200 && archived.body.status === 'ARCHIVED', archived.body);
+  check('ปิดใช้งานถูกจดประวัติแยก (ปิดใช้งานสินค้า)',
+    db.prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'product.archive' AND entity_id = ?").get(only?.id).n === 1);
+  check('ร้านที่เหลือแต่สินค้าที่ปิดใช้งาน ไม่ค้างเป็น "ยังไม่กรอกยอด"', (await readyOf('2029-06-H1'))?.status !== 'NO_SALES');
+  const blocked = await api('POST', '/api/sales-entries', { token: admin, body: { periodCode: '2029-06-H1', productId: only?.id, grossAmount: 5000 } });
+  check('สินค้าที่ปิดใช้งาน บันทึกยอดใหม่ไม่ได้ (บอกให้เปิดใช้งานก่อน)',
+    blocked.status === 400 && /ปิดใช้งาน/.test(blocked.body.error?.message ?? ''), blocked.body);
+  check('สินค้าที่ปิดใช้งาน ผูกดีลเซลใหม่ไม่ได้', (await api('POST', '/api/sales-agents/links', {
+    token: admin, body: { salesAgentId: agent2.body.agent.id, items: [{ productId: only?.id, commissionPct: 1 }] },
+  })).status === 400);
+  const oldBill = await api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: rfid, periodCode: '2029-06-H2' } });
+  check('ยอดที่บันทึกไว้ก่อนปิดใช้งาน ยังออกบิลได้', kept.status === 201 && oldBill.status === 201 && oldBill.body.lines?.length === 1, oldBill.body);
+  const active = await api('PATCH', `/api/products/${only?.id}`, { token: admin, body: { status: 'ACTIVE' } });
+  const again = await api('POST', '/api/sales-entries', { token: admin, body: { periodCode: '2029-06-H1', productId: only?.id, grossAmount: 5000 } });
+  check('เปิดใช้งานอีกครั้งได้ และบันทึกยอดได้ตามเดิม', active.body.status === 'ACTIVE' && again.status === 201, again.body);
+  check('เปิดใช้งานถูกจดประวัติ',
+    db.prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'product.activate' AND entity_id = ?").get(only?.id).n === 1);
+}
+
+/* ── ลบรายการค่าใช้จ่าย/ส่วนลดตั้งต้น ─────────────────────────
+ * เจ้าของระบบ: "หน้านี้ต้องกดลบได้" — ต่างจากสินค้า (ลบไม่ได้) เพราะบิลเก็บชื่อ/% /ยอดของรายการไว้เองแล้ว
+ * ลบแล้วบิลเก่าต้องยังแสดงเหมือนเดิมทุกตัวเลข แค่หลุดความเชื่อมโยงกับรายการตั้งต้น */
+section('ลบรายการค่าใช้จ่าย/ส่วนลดตั้งต้น (บิลเก่าไม่เปลี่ยน)');
+{
+  const cs = await api('POST', '/api/franchises', { token: admin, body: { username: 'chgdel', password: 'chgdel-pass-1' } });
+  const cfid = cs.body.franchise?.id;
+  const ctok = (await shopLogin('chgdel', 'chgdel-pass-1', cfid)).body.token;
+  const cprod = (await api('POST', '/api/products', {
+    token: admin, body: { sku: 'CHG-DEL-1', name: 'สินค้าทดสอบลบรายการ', commissionPct: 10, franchiseId: cfid, startDate: '2026-01-01' },
+  })).body.product;
+  await api('POST', '/api/sales-entries', { token: admin, body: { periodCode: '2029-07-H1', productId: cprod?.id, grossAmount: 10000 } });
+  const item = await api('POST', '/api/charge-items', { token: admin, body: { name: 'ค่าทดสอบก่อนลบ', kind: 'CHARGE', defaultAmount: 150 } });
+  const bill = await api('POST', '/api/invoices/generate', {
+    token: admin, body: { franchiseId: cfid, periodCode: '2029-07-H1', adjustments: [{ chargeItemId: item.body.id }] },
+  });
+  const adjBefore = bill.body.adjustments?.find((a) => a.label === 'ค่าทดสอบก่อนลบ');
+  check('ตั้งฉาก: บิลใส่รายการตั้งต้นแล้ว (1,000 + 150)',
+    bill.status === 201 && adjBefore?.amount === 150 && adjBefore?.chargeItemId === item.body.id && bill.body.netTotal === 1150, bill.body);
+
+  check('ร้านค้าลบรายการตั้งต้นไม่ได้',
+    (await api('DELETE', `/api/charge-items/${item.body.id}`, { token: ctok })).status === 403);
+  const del = await api('DELETE', `/api/charge-items/${item.body.id}`, { token: admin });
+  check('ส่วนกลางลบได้ แม้เคยใช้ในบิลแล้ว (บอกจำนวนบิลที่เคยใช้)',
+    del.status === 200 && del.body.deleted === true && del.body.usedOnBills === 1, del.body);
+  const after = await api('GET', `/api/invoices/${bill.body.id}`, { token: admin });
+  const adjAfter = after.body.adjustments?.find((a) => a.label === 'ค่าทดสอบก่อนลบ');
+  check('บิลเก่ายังแสดงชื่อและยอดเดิมครบ ยอดรวมไม่ขยับ (แค่หลุดจากรายการตั้งต้น)',
+    adjAfter?.amount === 150 && adjAfter?.chargeItemId === null && after.body.netTotal === 1150, after.body.adjustments);
+  const listed = (await api('GET', '/api/charge-items?status=', { token: admin })).body.items ?? [];
+  check('ไม่โผล่ในรายการให้เลือกแล้ว และลบซ้ำได้ 404',
+    !listed.some((c) => c.id === item.body.id)
+      && (await api('DELETE', `/api/charge-items/${item.body.id}`, { token: admin })).status === 404);
+  const log = db.prepare("SELECT detail FROM audit_logs WHERE action = 'charge_item.delete' AND entity_id = ?").get(item.body.id);
+  check('ลบถูกจดประวัติพร้อมชื่อรายการ (แถวถูกลบไปแล้ว หาชื่อจาก id ไม่ได้)',
+    Boolean(log) && JSON.parse(log.detail).name === 'ค่าทดสอบก่อนลบ', log);
+}
+
+/* ── บิลค่าคอมเซล ──────────────────────────────────────────────
+ * ออกบิลร้านก่อน แล้วส่วนกลางค่อย "ทำบิลค่าคอม": ติ๊กบรรทัดจากบิลร้าน (% ของยอดเต็ม หรือกรอกเอง) + เหมาต่อรอบ + ค่าคอมอื่น ๆ
+ * กติกาเงินอยู่ที่เซิร์ฟเวอร์: บรรทัดเดียวจ่ายค่าคอมได้ครั้งเดียว · ยกเลิกแล้วติ๊กใหม่ได้
+ * บิลร้านถูกยกเลิก → ถอดออกจากบิลค่าคอมที่ยังไม่จ่าย (ไม่เหลืออะไร = ยกเลิกทั้งใบ) · ที่จ่ายแล้วไม่แตะ
+ */
+section('บิลค่าคอมเซล: ติ๊กรายการจากบิลร้าน + เหมาต่อรอบ + ค่าคอมอื่น ๆ');
+{
+  const cs = await api('POST', '/api/franchises', { token: admin, body: { username: 'commshop', password: 'commshop-pass-1' } });
+  const cfid = cs.body.franchise?.id;
+  const mkp = async (sku, pct) => (await api('POST', '/api/products', {
+    token: admin, body: { sku, name: `สินค้าคอม ${sku}`, commissionPct: pct, franchiseId: cfid, startDate: '2026-01-01' },
+  })).body.product;
+  const cm1 = await mkp('CM-1', 10);
+  const cm2 = await mkp('CM-2', 20);
+  const cm3 = await mkp('CM-3', 5);
+  const sc = (await api('POST', '/api/sales-agents', { token: admin, body: { username: 'salec', password: 'salec-pass-123', name: 'เซลซี' } })).body.agent;
+  const sd = (await api('POST', '/api/sales-agents', { token: admin, body: { username: 'saled', password: 'saled-pass-123', name: 'เซลดี' } })).body.agent;
+  await api('POST', '/api/sales-agents/links', {
+    token: admin, body: { salesAgentId: sc?.id, items: [{ productId: cm1?.id, commissionPct: 5, fixedAmount: 300 }, { productId: cm2?.id, commissionPct: 10 }] },
+  });
+  await api('POST', '/api/sales-agents/links', { token: admin, body: { salesAgentId: sd?.id, items: [{ productId: cm3?.id, commissionPct: 8 }] } });
+  const entry = async (productId, grossAmount, periodCode) => (await api('POST', '/api/sales-entries', {
+    token: admin, body: { periodCode, productId, grossAmount },
+  })).body;
+  const ce1 = await entry(cm1?.id, 10000, '2029-01-H1');
+  const ce2 = await entry(cm2?.id, 20000, '2029-01-H1');
+  const ce3 = await entry(cm3?.id, 5000, '2029-01-H1');
+  const cinv1 = await api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: cfid, periodCode: '2029-01-H1' } });
+  const candOf = async (agentId) => (await api('GET', `/api/sales-agents/${agentId}/commission-candidates`, { token: admin })).body;
+  const billFor = (agentId, body, token = admin) => api('POST', `/api/sales-agents/${agentId}/commission-bills`, { token, body });
+  const commOf = async (id) => (await api('GET', `/api/sales-agents/commissions/${id}`, { token: admin })).body;
+  const listOf = async (agentId) => (await api('GET', `/api/sales-agents/commissions?salesAgentId=${agentId}`, { token: admin })).body.items ?? [];
+
+  check('ออกบิลร้านได้ และไม่เกิดค่าคอมเซลเอง', cinv1.status === 201 && (await listOf(sc?.id)).length === 0, cinv1.body);
+  let cand = await candOf(sc?.id);
+  const ci = (id) => cand.items?.find((i) => i.entryId === id);
+  check('รายการที่ติ๊กได้: เฉพาะสินค้าที่เซลถือดีล พร้อม % ของดีลเป็นค่าตั้งต้น',
+    ci(ce1.id)?.grossAmount === 10000 && ci(ce1.id).deal?.pct === 5 && ci(ce2.id)?.deal?.pct === 10 && !ci(ce3.id)
+      && ci(ce1.id).invoiceNo === cinv1.body.invoiceNo, cand.items);
+  check('เหมาต่อรอบขึ้นให้ติ๊ก 1 รายการต่อร้าน × รอบ (300)',
+    cand.fixed?.length === 1 && cand.fixed[0].amount === 300 && cand.fixed[0].periodCode === '2029-01-H1', cand.fixed);
+  const fixKey = cand.fixed?.[0]?.key;
+
+  // ตรวจทุกบรรทัดก่อนเขียน — ผิดบรรทัดเดียวไม่มีอะไรถูกบันทึก
+  const invalid = [
+    ['ติ๊กรายการของสินค้าที่เซลคนอื่นถือดีลไม่ได้', { items: [{ entryId: ce3.id, mode: 'PCT', pct: 5 }] }],
+    ['เลือก "% ของยอดเต็ม" แต่ส่งจำนวนเงินมาด้วย ไม่รับ', { items: [{ entryId: ce1.id, mode: 'PCT', pct: 5, amount: 1 }] }],
+    ['เลือก "กรอกเอง" แต่ไม่ใส่จำนวนเงิน ไม่รับ', { items: [{ entryId: ce1.id, mode: 'MANUAL' }] }],
+    ['กรอกค่าคอมติดลบบนยอดขายปกติไม่ได้ (หักคืนใช้ค่าคอมอื่น ๆ)', { items: [{ entryId: ce1.id, mode: 'MANUAL', amount: -5 }] }],
+    ['ค่าคอมอื่น ๆ จำนวนเงินเป็นศูนย์ไม่ได้', { others: [{ label: 'ว่าง', amount: 0 }] }],
+    ['ค่าคอมอื่น ๆ ต้องมีชื่อรายการ', { others: [{ label: '   ', amount: 100 }] }],
+    ['ยอดรวมบิลค่าคอมต้องมากกว่า 0', { others: [{ label: 'หักคืน', amount: -100 }] }],
+    ['ไม่เลือกอะไรเลยไม่ได้', {}],
+  ];
+  for (const [label, body] of invalid) {
+    const r = await billFor(sc?.id, body);
+    check(label, r.status === 400, r.body);
+  }
+  check('ตรวจไม่ผ่านแล้วไม่มีบิลค่าคอมค้างอยู่', (await listOf(sc?.id)).length === 0);
+
+  const bill1 = await billFor(sc?.id, {
+    items: [{ entryId: ce1.id, mode: 'PCT', pct: 5 }, { entryId: ce2.id, mode: 'MANUAL', amount: 1234.56 }],
+    fixed: [{ key: fixKey }],
+    others: [{ label: 'โบนัสเปิดร้านใหม่', amount: 1000 }, { label: 'หักคืนที่จ่ายเกินรอบก่อน', amount: -200 }],
+    note: 'รอบแรก',
+  });
+  // 10,000 × 5% = 500 · กรอกเอง 1,234.56 · เหมา 300 · อื่น ๆ 1,000 − 200 → 2,834.56
+  check('ทำบิลค่าคอม: % ของยอดเต็ม + กรอกเอง + เหมาต่อรอบ + ค่าคอมอื่น ๆ (ติดลบได้) = 2,834.56',
+    bill1.status === 201 && bill1.body.totalAmount === 2834.56 && bill1.body.pctAmount === 1734.56 && bill1.body.fixedAmount === 1100
+      && bill1.body.baseAmount === 30000 && bill1.body.lines?.length === 5 && bill1.body.status === 'PENDING', bill1.body);
+  const l1 = bill1.body.lines?.find((l) => l.entryId === ce1.id);
+  const l2 = bill1.body.lines?.find((l) => l.entryId === ce2.id);
+  check('บรรทัดบอกบิลร้าน วิธีคิด ยอดเต็ม % และยอดคอม',
+    l1?.mode === 'PCT' && l1.modeLabel === '% ของยอดเต็ม' && l1.baseAmount === 10000 && l1.pct === 5 && l1.amount === 500
+      && l1.invoiceNo === cinv1.body.invoiceNo && l2?.mode === 'MANUAL' && l2.modeLabel === 'กรอกเอง' && l2.pct === null
+      && l2.amount === 1234.56, bill1.body.lines);
+  check('เลขบิลค่าคอม = COM-วันที่ไทย-เซล', bill1.body.billNo === `COM-${todayTh.replace(/-/g, '')}-salec`, bill1.body.billNo);
+  check('บรรทัดเดียวกันทำบิลค่าคอมซ้ำไม่ได้ (กันจ่ายซ้ำ)', (await billFor(sc?.id, { items: [{ entryId: ce1.id, mode: 'PCT', pct: 5 }] })).status === 400);
+  check('เหมาต่อรอบเดิมใส่ซ้ำไม่ได้', (await billFor(sc?.id, { fixed: [{ key: fixKey }] })).status === 400);
+  cand = await candOf(sc?.id);
+  check('รายการที่ทำบิลแล้วหายจากรายการที่ติ๊กได้', !ci(ce1.id) && !ci(ce2.id) && cand.fixed?.length === 0, cand);
+  const second = await billFor(sc?.id, { others: [{ label: 'ค่าเดินทาง', amount: 10 }] });
+  check('วันเดียวกันทำบิลค่าคอมใบที่สองได้ เลขต่อท้าย -2', second.status === 201 && second.body.billNo?.endsWith('-salec-2'), second.body.billNo);
+
+  // ยกเลิก → รายการกลับมาให้ติ๊กใหม่ได้
+  const saleCTok = (await api('POST', '/api/auth/login', { body: { username: 'salec', password: 'salec-pass-123' } })).body.token;
+  const voidBill = (id, reason, token = admin) => api('POST', `/api/sales-agents/commissions/${id}/void`, { token, body: { reason } });
+  check('ยกเลิกบิลค่าคอมต้องมีเหตุผล', (await voidBill(bill1.body.id, 'x')).status === 400);
+  check('เซลยกเลิกบิลค่าคอมเองไม่ได้', (await voidBill(bill1.body.id, 'ขอยกเลิก', saleCTok)).status === 403);
+  const v1 = await voidBill(bill1.body.id, 'ติ๊กผิดรายการ');
+  check('ยกเลิกบิลค่าคอมที่ยังไม่จ่ายได้ พร้อมเหตุผล',
+    v1.status === 200 && v1.body.status === 'VOID' && v1.body.voidReason === 'ติ๊กผิดรายการ' && Boolean(v1.body.voidedAt), v1.body);
+  check('ยกเลิกซ้ำไม่ได้', (await voidBill(bill1.body.id, 'ยกเลิกอีกครั้ง')).status === 409);
+  check('บิลที่ยกเลิกแล้วบันทึกจ่ายไม่ได้', (await api('POST', `/api/sales-agents/commissions/${bill1.body.id}/pay`, { token: admin, body: {} })).status === 409);
+  cand = await candOf(sc?.id);
+  check('ยกเลิกแล้ว รายการกลับมาให้ติ๊กทำบิลใหม่ได้', Boolean(ci(ce1.id)) && Boolean(ci(ce2.id)) && cand.fixed?.length === 1, cand);
+
+  // บิลร้านถูกยกเลิก → ถอดออกจากบิลค่าคอมที่ยังไม่จ่าย · ที่จ่ายแล้วไม่แตะ
+  const billPaid = await billFor(sc?.id, { items: [{ entryId: ce1.id, mode: 'PCT', pct: 5 }], fixed: [{ key: cand.fixed?.[0]?.key }] });
+  const billPend = await billFor(sc?.id, { items: [{ entryId: ce2.id, mode: 'PCT', pct: 10 }], others: [{ label: 'ค่าเดินทาง', amount: 150 }] });
+  const ce4 = await entry(cm1?.id, 8000, '2029-01-H2');
+  const cinv2 = await api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: cfid, periodCode: '2029-01-H2' } });
+  cand = await candOf(sc?.id);
+  const onlyInv2 = await billFor(sc?.id, {
+    items: [{ entryId: ce4.id, mode: 'MANUAL', amount: 400 }],
+    fixed: (cand.fixed ?? []).filter((f) => f.invoiceId === cinv2.body.id).map((f) => ({ key: f.key })),
+  });
+  check('ตั้งฉาก: บิลค่าคอม 3 ใบ (800 · 2,150 · เฉพาะบิลร้านใบที่สอง 700)',
+    billPaid.body.totalAmount === 800 && billPend.body.totalAmount === 2150 && onlyInv2.body.totalAmount === 700,
+    [billPaid.body, billPend.body, onlyInv2.body].map((b) => b.totalAmount ?? b));
+  const paid = await api('POST', `/api/sales-agents/commissions/${billPaid.body.id}/pay`, { token: admin, body: {} });
+  check('บันทึกจ่ายบิลค่าคอมได้', paid.status === 200 && paid.body.status === 'PAID', paid.body);
+  check('จ่ายซ้ำไม่ได้', (await api('POST', `/api/sales-agents/commissions/${billPaid.body.id}/pay`, { token: admin, body: {} })).status === 409);
+  check('จ่ายแล้วยกเลิกไม่ได้ (จ่ายเกินให้หักด้วยค่าคอมอื่น ๆ ติดลบในบิลถัดไป)', (await voidBill(billPaid.body.id, 'ขอยกเลิก')).status === 409);
+
+  await api('POST', `/api/invoices/${cinv1.body.id}/void`, { token: admin, body: { reason: 'ทดสอบยกเลิกบิลร้าน' } });
+  const pendAfter = await commOf(billPend.body.id);
+  check('ยกเลิกบิลร้าน → บิลค่าคอมที่ยังไม่จ่ายถูกถอดรายการของบิลร้านใบนั้น เหลือค่าคอมอื่น ๆ และคิดยอดใหม่ (150)',
+    pendAfter.status === 'PENDING' && pendAfter.lines?.length === 1 && pendAfter.lines[0].kind === 'OTHER' && pendAfter.totalAmount === 150, pendAfter);
+  const paidAfter = await commOf(billPaid.body.id);
+  check('…บิลค่าคอมที่จ่ายแล้วไม่ถูกแตะ (ติดป้ายว่าบิลร้านถูกยกเลิก)',
+    paidAfter.status === 'PAID' && paidAfter.totalAmount === 800 && paidAfter.lines?.length === 2
+      && paidAfter.lines.every((l) => l.invoiceVoided === true), paidAfter);
+  check('การถอดรายการถูกจดประวัติ',
+    db.prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'sales_commission.lines_removed' AND entity_id = ?").get(billPend.body.id).n === 1);
+  await api('POST', `/api/invoices/${cinv2.body.id}/void`, { token: admin, body: { reason: 'ทดสอบยกเลิกบิลร้านใบที่สอง' } });
+  const emptied = await commOf(onlyInv2.body.id);
+  check('บิลค่าคอมที่ไม่เหลือรายการ ถูกยกเลิกเองพร้อมบอกเหตุผล',
+    emptied.status === 'VOID' && emptied.voidReason === `บิลร้าน ${cinv2.body.invoiceNo} ถูกยกเลิก`, emptied);
+  const reissue = await api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: cfid, periodCode: '2029-01-H1' } });
+  cand = await candOf(sc?.id);
+  check('ออกบิลร้านใหม่: รายการที่อยู่ในบิลค่าคอมที่จ่ายแล้วติ๊กซ้ำไม่ได้ · รายการที่ถูกถอดออกติ๊กได้อีก',
+    reissue.status === 201 && !ci(ce1.id) && Boolean(ci(ce2.id)) && !(cand.fixed ?? []).some((f) => f.periodCode === '2029-01-H1'), cand);
+
+  // สิทธิ์: เซลเห็นแค่ของตัวเอง · ร้าน/เซลทำบิลค่าคอมไม่ได้
+  const myC = await api('GET', '/api/sales-agents/me/commissions', { token: saleCTok });
+  check('เซลเห็นบิลค่าคอมของตัวเองพร้อมรายการ',
+    myC.body.items?.some((c) => c.id === billPaid.body.id && c.lines.length === 2) && myC.body.items.every((c) => c.agentUsername === 'salec'), myC.body.items);
+  const saleDTok = (await api('POST', '/api/auth/login', { body: { username: 'saled', password: 'saled-pass-123' } })).body.token;
+  check('เซลคนอื่นไม่เห็นบิลค่าคอมนี้ (แม้ใส่ตัวกรองเป็นเซลคนอื่น)',
+    (await api('GET', '/api/sales-agents/me/commissions', { token: saleDTok })).body.items?.length === 0
+      && (await api('GET', `/api/sales-agents/commissions?salesAgentId=${sc?.id}`, { token: saleDTok })).body.items?.length === 0);
+  check('เซลเปิดบิลค่าคอมของเซลคนอื่นไม่ได้', (await api('GET', `/api/sales-agents/commissions/${billPaid.body.id}`, { token: saleDTok })).status === 403);
+  check('เซลดูรายการที่ติ๊กได้ / ทำบิลค่าคอมเองไม่ได้',
+    (await api('GET', `/api/sales-agents/${sc?.id}/commission-candidates`, { token: saleCTok })).status === 403
+      && (await billFor(sc?.id, { others: [{ label: 'ขอเอง', amount: 1 }] }, saleCTok)).status === 403);
+  check('ร้านค้าเรียกหน้าบิลค่าคอมไม่ได้',
+    (await api('GET', `/api/sales-agents/${sc?.id}/commission-candidates`, { token: tokenA })).status === 403
+      && (await billFor(sc?.id, { others: [{ label: 'x', amount: 1 }] }, tokenA)).status === 403
+      && (await api('GET', `/api/sales-agents/commissions/${billPaid.body.id}`, { token: tokenA })).status === 403);
+  const onlyBills = (await api('GET', `/api/sales-agents/commissions?kind=BILL&salesAgentId=${sc?.id}`, { token: admin })).body.items ?? [];
+  check('กรองเฉพาะบิลค่าคอมได้ (kind=BILL)', onlyBills.length === 5 && onlyBills.every((c) => c.kind === 'BILL'), onlyBills.map((c) => [c.kind, c.billNo]));
+}
+
+/* ── เซลที่ได้แค่ค่าคอมอื่น ๆ ─────────────────────────────────
+ * เจ้าของระบบ: ไม่ต้องบังคับผูกดีลสินค้า — เซลบางคนได้แค่ค่าแนะนำร้าน/โบนัส
+ */
+section('เซลที่ได้แค่ค่าคอมอื่น ๆ (ไม่ต้องผูกดีลสินค้า)');
+{
+  const s = (await api('POST', '/api/sales-agents', { token: admin, body: { username: 'saleonly', password: 'saleonly-pass-1', name: 'เซลค่าแนะนำ' } })).body.agent;
+  const cand = await api('GET', `/api/sales-agents/${s?.id}/commission-candidates`, { token: admin });
+  check('เซลที่ไม่มีดีลเลย ไม่มีรายการให้ติ๊ก (ไม่ใช่ error)',
+    cand.status === 200 && cand.body.items?.length === 0 && cand.body.fixed?.length === 0, cand.body);
+  const only = await api('POST', `/api/sales-agents/${s?.id}/commission-bills`, { token: admin, body: { others: [{ label: 'ค่าแนะนำร้านใหม่', amount: 500 }] } });
+  check('ทำบิลค่าคอมที่มีแต่ค่าคอมอื่น ๆ ได้',
+    only.status === 201 && only.body.totalAmount === 500 && only.body.lines?.length === 1
+      && only.body.lines[0].kind === 'OTHER' && only.body.lines[0].label === 'ค่าแนะนำร้านใหม่', only.body);
+  const stok = (await api('POST', '/api/auth/login', { body: { username: 'saleonly', password: 'saleonly-pass-1' } })).body.token;
+  const me = await api('GET', '/api/sales-agents/me', { token: stok });
+  check('เซลเห็นยอดค้างจ่ายและบิลล่าสุดในหน้าแรกของตัวเอง',
+    me.status === 200 && me.body.summary?.pending === 500 && me.body.recentBills?.some((b) => b.id === only.body.id)
+      && me.body.byMonth?.length >= 1 && me.body.products?.length === 0, me.body);
+  const mine = await api('GET', '/api/sales-agents/me/commissions', { token: stok });
+  check('เซลเห็นเฉพาะบิลค่าคอมของตัวเอง', mine.body.items?.length === 1 && mine.body.items[0].id === only.body.id, mine.body.items);
+  check('เซลเปิดบิลค่าคอมของเซลคนอื่นไม่ได้', (await api('GET', `/api/sales-agents/commissions/${c1.id}`, { token: stok })).status === 403);
+  check('เซลบันทึกจ่ายให้ตัวเองไม่ได้', (await api('POST', `/api/sales-agents/commissions/${only.body.id}/pay`, { token: stok, body: {} })).status === 403);
+  const paid = await api('POST', `/api/sales-agents/commissions/${only.body.id}/pay`, { token: admin, body: {} });
+  check('จ่ายบิลที่มีแต่ค่าคอมอื่น ๆ ได้', paid.status === 200 && paid.body.status === 'PAID', paid.body);
+}
+
+/* ── แก้ดีลที่ผูกไว้แล้ว ─────────────────────────────────────
+ * แก้ % / เหมาต่อรอบ / หมายเหตุได้ตรงที่แสดงดีล — มีผลกับบิลค่าคอมที่ทำหลังจากนี้เท่านั้น
+ * บิลค่าคอมที่ทำไปแล้วเก็บตัวเลขไว้ในตัวเอง (ไม่เปลี่ยนตาม)
+ */
+section('แก้ดีลที่ผูกไว้แล้ว (% · เหมาต่อรอบ · หมายเหตุ)');
+{
+  const ds = await api('POST', '/api/franchises', { token: admin, body: { username: 'dealshop', password: 'dealshop-pass-1' } });
+  const dfid = ds.body.franchise?.id;
+  const dtok = (await shopLogin('dealshop', 'dealshop-pass-1', dfid)).body.token;
+  const prod = (await api('POST', '/api/products', {
+    token: admin, body: { sku: 'DEAL-P', name: 'สินค้าดีลแก้ได้', commissionPct: 10, franchiseId: dfid, startDate: '2026-01-01' },
+  })).body.product;
+  const holder = (await api('POST', '/api/sales-agents', { token: admin, body: { username: 'saledeal', password: 'saledeal-pass-1', name: 'เซลถือดีล' } })).body.agent;
+  await api('POST', '/api/sales-agents', { token: admin, body: { username: 'saledeal2', password: 'saledeal2-pass-1', name: 'เซลอีกคน' } });
+  const holderTok = (await api('POST', '/api/auth/login', { body: { username: 'saledeal', password: 'saledeal-pass-1' } })).body.token;
+  const otherTok = (await api('POST', '/api/auth/login', { body: { username: 'saledeal2', password: 'saledeal2-pass-1' } })).body.token;
+  const created = await api('POST', '/api/sales-agents/links', {
+    token: admin, body: { salesAgentId: holder?.id, items: [{ productId: prod?.id, commissionPct: 5, fixedAmount: 300 }] },
+  });
+  const link = created.body.items?.[0];
+  check('ตั้งฉาก: ดีล 5% + เหมา 300', created.status === 201 && link?.commissionPct === 5 && link.fixedAmount === 300, created.body);
+  const e1 = (await api('POST', '/api/sales-entries', { token: admin, body: { periodCode: '2029-08-H1', productId: prod?.id, grossAmount: 10000 } })).body;
+  await api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: dfid, periodCode: '2029-08-H1' } });
+  let cand = (await api('GET', `/api/sales-agents/${holder?.id}/commission-candidates`, { token: admin })).body;
+  const itemOf = (id) => cand.items?.find((i) => i.entryId === id);
+  const oldBill = await api('POST', `/api/sales-agents/${holder?.id}/commission-bills`, {
+    token: admin, body: { items: [{ entryId: e1.id, mode: 'PCT', pct: itemOf(e1.id)?.deal?.pct }], fixed: [{ key: cand.fixed?.[0]?.key }] },
+  });
+  check('ตั้งฉาก: บิลค่าคอมก่อนแก้ดีล = 10,000 × 5% + 300 = 800', oldBill.status === 201 && oldBill.body.totalAmount === 800, oldBill.body);
+  const linesOf = async () => JSON.stringify((await api('GET', `/api/sales-agents/commissions/${oldBill.body.id}`, { token: admin }))
+    .body.lines?.map((l) => [l.kind, l.mode, l.pct, l.baseAmount, l.amount]));
+  const before = await linesOf();
+
+  const patchLink = (body, token = admin) => api('PATCH', `/api/sales-agents/links/${link?.id}`, { token, body });
+  check('เซลแก้ดีลของตัวเองไม่ได้', (await patchLink({ commissionPct: 50 }, holderTok)).status === 403);
+  check('เซลคนอื่นแก้ดีลไม่ได้', (await patchLink({ commissionPct: 50 }, otherTok)).status === 403);
+  check('ร้านค้าแก้ดีลไม่ได้', (await patchLink({ commissionPct: 50 }, dtok)).status === 403);
+  check('เซล/ร้านปิดดีลเองไม่ได้',
+    (await api('POST', `/api/sales-agents/links/${link?.id}/end`, { token: holderTok, body: {} })).status === 403
+      && (await api('POST', `/api/sales-agents/links/${link?.id}/end`, { token: dtok, body: {} })).status === 403);
+  check('ดีลยังเหมือนเดิมหลังคนที่ไม่มีสิทธิ์พยายามแก้',
+    (await api('GET', `/api/sales-agents/links/${link?.id}`, { token: admin })).body.commissionPct === 5);
+  check('แก้จนไม่เหลือทั้ง % และเหมาไม่ได้', (await patchLink({ commissionPct: null, fixedAmount: null })).status === 400);
+  check('% เกิน 100 ไม่รับ', (await patchLink({ commissionPct: 150 })).status === 400);
+  const edited = await patchLink({ commissionPct: 7, fixedAmount: 400, note: 'ปรับเรต' });
+  check('ส่วนกลางแก้ % · เหมาต่อรอบ · หมายเหตุ ของดีลที่ผูกไว้แล้วได้ (ยังคิดจากยอดขายเต็ม · ดีลยังเปิดอยู่)',
+    edited.status === 200 && edited.body.commissionPct === 7 && edited.body.fixedAmount === 400 && edited.body.note === 'ปรับเรต'
+      && edited.body.basis === 'GROSS' && edited.body.endDate === null, edited.body);
+  check('แก้ดีลถูกจดประวัติ',
+    db.prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'sales_link.update' AND entity_id = ?").get(link?.id).n === 1);
+  const after = await linesOf();
+  check('บิลค่าคอมที่ทำไปแล้วไม่เปลี่ยนตามดีลที่แก้',
+    before === after && (await api('GET', `/api/sales-agents/commissions/${oldBill.body.id}`, { token: admin })).body.totalAmount === 800, { before, after });
+  const e2 = (await api('POST', '/api/sales-entries', { token: admin, body: { periodCode: '2029-08-H2', productId: prod?.id, grossAmount: 20000 } })).body;
+  await api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: dfid, periodCode: '2029-08-H2' } });
+  cand = (await api('GET', `/api/sales-agents/${holder?.id}/commission-candidates`, { token: admin })).body;
+  check('บิลค่าคอมที่ทำหลังจากนี้ใช้ค่าตั้งต้นใหม่ (7% · เหมา 400)',
+    itemOf(e2.id)?.deal?.pct === 7 && itemOf(e2.id).deal.fixedAmount === 400 && cand.fixed?.length === 1 && cand.fixed[0].amount === 400, cand);
+
+  const ended = await api('POST', `/api/sales-agents/links/${link?.id}/end`, { token: admin, body: {} });
+  check('ปิดดีลโดยไม่ต้องเลือกวันที่ (ปิดวันนี้)', ended.status === 200 && ended.body.endDate === todayTh && ended.body.isOpen === false, ended.body);
+  cand = (await api('GET', `/api/sales-agents/${holder?.id}/commission-candidates`, { token: admin })).body;
+  check('ปิดดีลแล้ว รายการจากบิลร้านที่ออกไปแล้วยังทำบิลค่าคอมให้เซลได้ (ป้ายดีลปิดแล้ว)',
+    itemOf(e2.id)?.deal?.isOpen === false && itemOf(e2.id).deal.pct === 7, cand.items);
+  const closedEdit = await patchLink({ commissionPct: 6 });
+  check('ดีลที่ปิดแล้วยังแก้ตัวเลขได้ (ใช้เป็นค่าตั้งต้นของรายการเก่า)',
+    closedEdit.status === 200 && closedEdit.body.commissionPct === 6 && closedEdit.body.endDate === todayTh, closedEdit.body);
+}
+
+/* ── สินค้ากลุ่ม (ชุด) ───────────────────────────────────────
+ * สินค้ากลุ่มคือสินค้าหนึ่งชิ้น: กรอกยอดขายก้อนเดียว คิด % ของกลุ่มบรรทัดเดียว
+ * รายการย่อยเป็นแค่เช็กลิสต์ว่าในชุดมีอะไร — บิลต้องจำรายการย่อย ณ ตอนออกบิลไว้ (แก้กลุ่มทีหลังบิลเก่าไม่เปลี่ยน)
+ */
+section('สินค้ากลุ่ม (ชุด) — คิดบิลก้อนเดียว ติ๊กรายการย่อย');
+{
+  const gs = await api('POST', '/api/franchises', { token: admin, body: { username: 'groupshop', password: 'groupshop-pass-1' } });
+  const gfid = gs.body.franchise?.id;
+  const gtok = (await shopLogin('groupshop', 'groupshop-pass-1', gfid)).body.token;
+  const mk = (sku, extra = {}) => api('POST', '/api/products', {
+    token: admin, body: { sku, name: `ชื่อ ${sku}`, commissionPct: 10, franchiseId: gfid, startDate: '2026-01-01', ...extra },
+  });
+  const skus = (arr) => (arr ?? []).map((x) => x.sku).join(',');
+  const errOf = (r) => r.body?.error?.message ?? '';
+  const i1 = (await mk('GI-1')).body.product;
+  const i2 = (await mk('GI-2')).body.product;
+  const i3 = (await mk('GI-3')).body.product;
+  const i4 = (await mk('GI-4')).body.product;
+  await api('PATCH', `/api/products/${i4?.id}`, { token: admin, body: { status: 'ARCHIVED' } });
+  check('สินค้าธรรมดาไม่ใช่กลุ่ม (ไม่มีรายการย่อย)', i1?.isGroup === false && i1.items?.length === 0 && i1.inGroups?.length === 0, i1);
+
+  const g = await mk('GSET-1', { isGroup: true, itemProductIds: [i2?.id, i1?.id, i1?.id] });
+  const g1 = g.body.product;
+  check('สร้างสินค้ากลุ่มพร้อมติ๊กรายการย่อย (เรียงตามที่ติ๊ก · ติ๊กซ้ำนับครั้งเดียว)',
+    g.status === 201 && g1?.isGroup === true && skus(g1.items) === 'GI-2,GI-1' && g1.items[0].status === 'ACTIVE', g.body);
+  const created = db.prepare("SELECT detail FROM audit_logs WHERE action = 'product.create' AND entity_id = ?").get(g1?.id);
+  check('ประวัติการสร้างบอกว่าเป็นกลุ่ม และมีรายการย่อยอะไร',
+    JSON.parse(created?.detail ?? '{}').isGroup === true && JSON.parse(created.detail).items?.join() === 'GI-2,GI-1', created);
+  const empty = await mk('GSET-X1', { isGroup: true, itemProductIds: [] });
+  check('สินค้ากลุ่มต้องมีรายการย่อยอย่างน้อย 1 รายการ',
+    empty.status === 400 && errOf(empty).includes('สินค้ากลุ่มต้องมีสินค้าย่อยอย่างน้อย 1 รายการ'), empty.body);
+  const nested = await mk('GSET-X2', { isGroup: true, itemProductIds: [g1?.id, i3?.id] });
+  check('เอาสินค้ากลุ่มไปเป็นรายการย่อยของกลุ่มอื่นไม่ได้ (ไม่ซ้อนกลุ่ม)',
+    nested.status === 400 && errOf(nested).includes('สินค้ากลุ่มใส่สินค้ากลุ่มอื่นเป็นรายการย่อยไม่ได้'), nested.body);
+  const withArchived = await mk('GSET-X3', { isGroup: true, itemProductIds: [i4?.id] });
+  check('สินค้าที่ปิดใช้งานแล้ว ติ๊กเข้ากลุ่มใหม่ไม่ได้', withArchived.status === 400 && errOf(withArchived).includes('GI-4'), withArchived.body);
+  check('ร้านค้าสร้างสินค้ากลุ่มเองไม่ได้', (await api('POST', '/api/products', {
+    token: gtok, body: { sku: 'GSET-SHOP', name: 'x', commissionPct: 1, isGroup: true, itemProductIds: [i1?.id] },
+  })).status === 403);
+
+  const toGroup = await api('PATCH', `/api/products/${i1?.id}`, { token: admin, body: { isGroup: true, itemProductIds: [i3?.id] } });
+  check('สินค้าที่อยู่ในกลุ่มอยู่แล้ว เปลี่ยนเป็นสินค้ากลุ่มไม่ได้ (ต้องเอาออกจากกลุ่มก่อน)',
+    toGroup.status === 400 && errOf(toGroup).includes('สินค้านี้อยู่ในสินค้ากลุ่ม') && errOf(toGroup).includes('GSET-1'), toGroup.body);
+  check('ร้านค้าแก้รายการย่อยของกลุ่มไม่ได้',
+    (await api('PATCH', `/api/products/${g1?.id}`, { token: gtok, body: { itemProductIds: [i3?.id] } })).status === 403);
+  const replaced = await api('PATCH', `/api/products/${g1?.id}`, { token: admin, body: { itemProductIds: [i3?.id, i2?.id] } });
+  check('แก้รายการย่อย = แทนที่ทั้งรายการ', replaced.status === 200 && skus(replaced.body.items) === 'GI-3,GI-2', replaced.body);
+  const itemsAudit = db.prepare("SELECT detail FROM audit_logs WHERE action = 'product.group_items' AND entity_id = ? ORDER BY id DESC").get(g1?.id);
+  check('ประวัติบอกว่าเพิ่ม/เอาออกรายการไหน',
+    JSON.stringify(JSON.parse(itemsAudit?.detail ?? '{}')) === JSON.stringify({ sku: 'GSET-1', added: ['GI-3'], removed: ['GI-1'] }), itemsAudit);
+  const listed = (await api('GET', '/api/products', { token: admin })).body.items ?? [];
+  check('รายการสินค้าบอกว่าสินค้าไหนอยู่ในกลุ่มไหน',
+    skus(listed.find((p) => p.sku === 'GI-2')?.inGroups) === 'GSET-1' && skus(listed.find((p) => p.sku === 'GSET-1')?.items) === 'GI-3,GI-2',
+    listed.filter((p) => /^G/.test(p.sku)).map((p) => [p.sku, skus(p.items), skus(p.inGroups)]));
+  const shopGroups = (await api('GET', '/api/products?isGroup=1', { token: gtok })).body.items ?? [];
+  check('ร้านเห็นสินค้ากลุ่มของตัวเองพร้อมรายการย่อย', shopGroups.length === 1 && skus(shopGroups[0].items) === 'GI-3,GI-2', shopGroups);
+
+  // ยอดขายของกลุ่ม = ก้อนเดียว → บิลบรรทัดเดียว % ของกลุ่ม + บอกว่าในชุดมีอะไร
+  const ge = await api('POST', '/api/sales-entries', { token: admin, body: { periodCode: '2029-07-H1', productId: g1?.id, grossAmount: 10000 } });
+  check('กรอกยอดขายของสินค้ากลุ่มเป็นยอดรวมก้อนเดียว (10,000 × 10% = 1,000)',
+    ge.status === 201 && ge.body.isGroup === true && skus(ge.body.components) === 'GI-3,GI-2' && ge.body.commissionAmount === 1000, ge.body);
+  const gbill = await api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: gfid, periodCode: '2029-07-H1' } });
+  const gline = gbill.body.lines?.find((l) => l.productId === g1?.id);
+  check('บิลแสดงสินค้ากลุ่มบรรทัดเดียว พร้อมรายการย่อย',
+    gbill.status === 201 && gbill.body.lines?.length === 1 && gline?.isGroup === true && skus(gline.components) === 'GI-3,GI-2'
+      && gbill.body.commissionTotal === 1000, gbill.body);
+  await api('PATCH', `/api/products/${g1?.id}`, { token: admin, body: { itemProductIds: [i1?.id] } });
+  const oldView = await api('GET', `/api/invoices/${gbill.body.id}`, { token: admin });
+  check('แก้รายการย่อยหลังออกบิล — บิลเดิมยังแสดงรายการย่อย ณ ตอนออกบิล',
+    skus(oldView.body.lines?.find((l) => l.productId === g1?.id)?.components) === 'GI-3,GI-2', oldView.body.lines);
+  const shopView = await api('GET', `/api/invoices/${gbill.body.id}`, { token: gtok });
+  check('ร้านเห็นรายการย่อยของสินค้ากลุ่มในบิลของตัวเอง',
+    shopView.status === 200 && skus(shopView.body.lines?.find((l) => l.productId === g1?.id)?.components) === 'GI-3,GI-2', shopView.body.lines);
+  check('ร้านอื่นเปิดบิลนี้ไม่ได้', (await api('GET', `/api/invoices/${gbill.body.id}`, { token: tokenB })).status === 403);
+}
+
+/* ── ทำงานพร้อมกันหลายจอ ───────────────────────────────────
+ * php -S ของชุดเทสต์รับทีละคำขอ — จำลองสองจอด้วยสองโปรเซส (e2e:call) ที่วิ่งพร้อมกัน
+ * โปรเซสที่สามถือล็อกแถวไว้ก่อน สองจอจึงอ่านข้อมูลก่อนล็อกแล้วไปรอคิวพร้อมกันแน่นอน (ไม่ขึ้นกับจังหวะเครื่อง)
+ */
+async function whileRowLocked(table, id, work, seconds = 4) {
+  const marker = path.join(stack.dataDir, `row-lock-${table}-${id}-${Date.now()}`);
+  const holder = call('holdRowLock', { table, id, seconds, marker });
+  for (let i = 0; i < 200 && !fs.existsSync(marker); i++) await new Promise((resolve) => setTimeout(resolve, 50));
+  const locked = fs.existsSync(marker);
+  const results = await work();
+  await holder;
+  return { locked, results };
+}
+const settle = (promise) => promise.then((ok) => ({ ok }), (err) => ({ err: err.message }));
+
+section('ทำงานพร้อมกันหลายจอ: ยอดบิลไม่ทับกัน · บิลค่าคอมไม่จ่ายซ้ำ · ทรานแซกชันไม่ commit ครึ่ง ๆ');
+{
+  const probe = await call('txProbe');
+  check('คำสั่งฐานข้อมูลที่พังกลางทรานแซกชัน → โยน error และไม่มีอะไรถูกบันทึก (ทั้งก่อนและหลังคำสั่งที่พัง)',
+    probe?.threw === true && probe.leftover === 0, probe);
+
+  const rs = await api('POST', '/api/franchises', { token: admin, body: { username: 'raceshop', password: 'raceshop-pass-1' } });
+  const rfid = rs.body.franchise?.id;
+  const mk = async (sku, pct) => (await api('POST', '/api/products', {
+    token: admin, body: { sku, name: `สินค้าพร้อมกัน ${sku}`, commissionPct: pct, franchiseId: rfid, startDate: '2026-01-01' },
+  })).body.product;
+  const [rp1, rp2, rp3] = [await mk('RACE-1', 10), await mk('RACE-2', 5), await mk('RACE-3', 10)];
+  const entryOf = async (productId, grossAmount, periodCode = '2029-05-H1') => (await api('POST', '/api/sales-entries', {
+    token: admin, body: { periodCode, productId, grossAmount },
+  })).body;
+  const re1 = await entryOf(rp1?.id, 1000);
+  const re2 = await entryOf(rp2?.id, 400);
+  const rinv = await api('POST', '/api/invoices/generate', {
+    token: admin, body: { franchiseId: rfid, periodCode: '2029-05-H1', adjustments: [{ kind: 'CHARGE', label: 'ค่าบริการ 10%', pct: 10 }] },
+  });
+  // 1,000 × 10% = 100 · 400 × 5% = 20 → 120 · ค่าบริการ 10% = 12 → 132
+  check('ตั้งฉาก: บิล 2 บรรทัด ส่วนต่าง 120 + ค่าบริการ 10% = 132',
+    rinv.status === 201 && rinv.body.commissionTotal === 120 && rinv.body.chargeTotal === 12 && rinv.body.netTotal === 132, rinv.body);
+
+  // สองจอแก้คนละบรรทัดของบิลเดียวพร้อมกัน — ยอดรวมต้องรวมของทั้งสองจอ (50 + 0 = 50 · ค่าบริการ 5 · สุทธิ 55)
+  const lineRace = await whileRowLocked('invoices', rinv.body.id, () => Promise.all([
+    settle(call('updateInvoiceLine', { invoiceId: rinv.body.id, entryId: re1.id, input: { mode: 'MANUAL', amount: 50 } })),
+    settle(call('updateInvoiceLine', { invoiceId: rinv.body.id, entryId: re2.id, input: { mode: 'MANUAL', amount: 0 } })),
+  ]));
+  const afterRace = (await api('GET', `/api/invoices/${rinv.body.id}`, { token: admin })).body;
+  const lineSum = db.prepare('SELECT COALESCE(SUM(commission_amount_satang), 0) AS s FROM sales_entries WHERE invoice_id = ?').get(rinv.body.id).s;
+  check('สองจอแก้วิธีคิดยอดคนละบรรทัดพร้อมกัน → ยอดบิลรวมของทั้งสองจอ (50 · ค่าบริการ 5 · สุทธิ 55) ไม่ทับกัน',
+    lineRace.locked && lineRace.results.every((r) => r.ok) && afterRace.commissionTotal === 50 && Number(lineSum) === 5000
+      && afterRace.chargeTotal === 5 && afterRace.netTotal === 55,
+    { results: lineRace.results.map((r) => r.err ?? 'ok'), commission: afterRace.commissionTotal, lineSum, charge: afterRace.chargeTotal, net: afterRace.netTotal });
+
+  // สองจอทำบิลค่าคอมจากรายการเดียวกันพร้อมกัน — ได้บิลเดียว อีกจอได้ 409 ไม่มีบิลผีที่ยอดไม่ตรงกับรายการ
+  const agent = (await api('POST', '/api/sales-agents', { token: admin, body: { username: 'salerace', password: 'salerace-pass-1', name: 'เซลพร้อมกัน' } })).body.agent;
+  await api('POST', '/api/sales-agents/links', { token: admin, body: { salesAgentId: agent?.id, items: [{ productId: rp3?.id, commissionPct: 5, fixedAmount: 200 }] } });
+  const re3 = await entryOf(rp3?.id, 8000, '2029-05-H2');
+  await api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: rfid, periodCode: '2029-05-H2' } });
+  const rcand = (await api('GET', `/api/sales-agents/${agent?.id}/commission-candidates`, { token: admin })).body;
+  const billInput = { items: [{ entryId: re3.id, mode: 'PCT', pct: 5 }], fixed: [{ key: rcand.fixed?.[0]?.key }] };
+  check('ตั้งฉาก: รายการและเหมาต่อรอบของเซลพร้อมให้ติ๊ก',
+    rcand.items?.some((i) => i.entryId === re3.id) && rcand.fixed?.length === 1, rcand);
+  const billRace = await whileRowLocked('sales_agents', agent?.id, () => Promise.all([
+    settle(call('createCommissionBill', { agentId: agent?.id, input: billInput })),
+    settle(call('createCommissionBill', { agentId: agent?.id, input: billInput })),
+  ]));
+  const okBills = billRace.results.filter((r) => r.ok);
+  const bills = db.prepare("SELECT id, status, total_satang FROM sales_commissions WHERE kind = 'BILL' AND sales_agent_id = ?").all(agent?.id);
+  const mismatched = db.prepare(`SELECT COUNT(*) AS n FROM sales_commissions c
+      WHERE c.kind = 'BILL' AND c.sales_agent_id = ?
+        AND c.total_satang <> (SELECT COALESCE(SUM(l.amount_satang), 0) FROM sales_commission_lines l WHERE l.commission_id = c.id)`).get(agent?.id).n;
+  check('สองจอทำบิลค่าคอมจากรายการเดียวกันพร้อมกัน → ได้บิลเดียว (600 = 8,000 × 5% + เหมา 200) อีกจอได้ "เพิ่งถูกทำบิลค่าคอมไปแล้ว"',
+    billRace.locked && okBills.length === 1 && okBills[0].ok.totalAmount === 600
+      && billRace.results.some((r) => /เพิ่งถูกทำบิลค่าคอมไปแล้ว/.test(r.err ?? '')) && bills.length === 1,
+    { results: billRace.results.map((r) => r.err ?? r.ok?.billNo), bills });
+  check('ไม่มีบิลค่าคอมที่ยอดหัวบิลไม่ตรงกับผลรวมรายการ และไม่มีประวัติชี้บิลที่ไม่มีอยู่จริง',
+    Number(mismatched) === 0
+      && db.prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'sales_commission.bill_create' AND (entity_id = 0 OR entity_id IS NULL)").get().n === 0,
+    { mismatched });
+}
+
+/* ── ข้อมูลเก่า/ขอบ ๆ ของเซล ────────────────────────────────
+ * ชื่อเซลยาว (เลขบิลค่าคอม VARCHAR(64)) · ดีลที่ยังไม่ถึงวันเริ่ม (จากหน้าเว็บรุ่นก่อน) · ค่าคอมแบบเก่าหลังออกบิลร้านใหม่
+ */
+section('เซล: ชื่อยาว · ปิดดีลที่ยังไม่ถึงวันเริ่ม · ค่าคอมแบบเก่าหลังยกเลิกแล้วออกบิลร้านใหม่');
+{
+  const name40 = `s${'x'.repeat(39)}`;
+  check('ชื่อผู้ใช้เซลยาวเกิน 40 ตัวไม่รับ (ชื่ออยู่ในเลขบิลค่าคอม)',
+    (await api('POST', '/api/sales-agents', { token: admin, body: { username: `${name40}y`, password: 'longname-pass-1', name: 'ชื่อยาวเกิน' } })).status === 400);
+  const longAgent = (await api('POST', '/api/sales-agents', { token: admin, body: { username: name40, password: 'longname-pass-1', name: 'ชื่อยาว 40' } })).body.agent;
+  const billOther = (agentId, amount) => api('POST', `/api/sales-agents/${agentId}/commission-bills`, {
+    token: admin, body: { others: [{ label: 'ค่าแนะนำ', amount }] },
+  });
+  const lb1 = await billOther(longAgent?.id, 100);
+  const lb2 = await billOther(longAgent?.id, 200);
+  check('เซลชื่อยาว 40 ตัว ทำบิลค่าคอมได้ วันเดียวกันใบที่สองต่อท้าย -2',
+    lb1.status === 201 && lb1.body.billNo === `COM-${todayTh.replace(/-/g, '')}-${name40}` && lb2.status === 201 && lb2.body.billNo?.endsWith(`${name40}-2`),
+    [lb1.body, lb2.body].map((b) => b.billNo ?? b));
+  // เซลเก่าที่ชื่อยาวกว่านั้น (สร้างก่อนมีเพดาน — username รับได้ถึง 100 ตัว)
+  const name90 = `legacy${'z'.repeat(84)}`;
+  db.prepare('UPDATE sales_agents SET username = ? WHERE id = ?').run(name90, longAgent?.id);
+  const lb3 = await billOther(longAgent?.id, 300);
+  check('เซลเก่าที่ชื่อยาว 90 ตัว ยังทำบิลค่าคอมได้ (ตัดชื่อในเลขบิล ไม่ใช่ 404/500)',
+    lb3.status === 201 && lb3.body.totalAmount === 300 && lb3.body.billNo?.length <= 64 && lb3.body.billNo.startsWith(`COM-${todayTh.replace(/-/g, '')}-legacy`),
+    lb3.body);
+
+  // ดีลที่ตั้งวันเริ่มไว้ในอนาคต — หน้าเว็บตอนนี้ไม่มีช่องวันที่ ปุ่ม "ปิดดีล" ต้องใช้ได้
+  const fs1 = await api('POST', '/api/franchises', { token: admin, body: { username: 'futureshop', password: 'futureshop-pass-1' } });
+  const ffid = fs1.body.franchise?.id;
+  const fprod = (await api('POST', '/api/products', {
+    token: admin, body: { sku: 'FUTURE-P', name: 'สินค้าดีลอนาคต', commissionPct: 10, franchiseId: ffid, startDate: '2026-01-01' },
+  })).body.product;
+  const fa = (await api('POST', '/api/sales-agents', { token: admin, body: { username: 'salefuture', password: 'salefuture-pass-1', name: 'เซลดีลอนาคต' } })).body.agent;
+  const fb = (await api('POST', '/api/sales-agents', { token: admin, body: { username: 'salefuture2', password: 'salefuture2-pass-1', name: 'เซลคนถัดไป' } })).body.agent;
+  const future = new Date(Date.parse(todayTh) + 17 * 86400000).toISOString().slice(0, 10);
+  const fl = (await api('POST', '/api/sales-agents/links', {
+    token: admin, body: { salesAgentId: fa?.id, startDate: future, items: [{ productId: fprod?.id, commissionPct: 5 }] },
+  })).body.items?.[0];
+  check('ตั้งฉาก: ดีลที่เริ่มในอนาคต', fl?.startDate === future && fl.isOpen === true, fl);
+  const fend = await api('POST', `/api/sales-agents/links/${fl?.id}/end`, { token: admin, body: {} });
+  check('กดปิดดีลที่ยังไม่ถึงวันเริ่มได้ (ยกเลิกดีลที่ยังไม่เริ่ม — ไม่ใช่ 400 "วันปิดต้องไม่ก่อนวันเริ่ม")',
+    fend.status === 200 && fend.body.endDate === todayTh && fend.body.startDate === todayTh && fend.body.isOpen === false && fend.body.isActive === false, fend.body);
+  const faudit = db.prepare("SELECT detail FROM audit_logs WHERE action = 'sales_link.end' AND entity_id = ? ORDER BY id DESC").get(fl?.id);
+  check('ประวัติจดวันเริ่มเดิมของดีลที่ถูกยกเลิก', JSON.parse(faudit?.detail ?? '{}').cancelledBeforeStart === future, faudit);
+  const fnext = await api('POST', '/api/sales-agents/links', { token: admin, body: { salesAgentId: fb?.id, items: [{ productId: fprod?.id, commissionPct: 6 }] } });
+  check('ปิดแล้วผูกสินค้านี้ให้เซลคนอื่นได้ในวันเดียวกัน', fnext.status === 201 && fnext.body.items?.[0]?.salesAgentId === fb?.id, fnext.body);
+  check('กดปิดซ้ำ = ไม่ทำอะไร (ไม่ error)', (await api('POST', `/api/sales-agents/links/${fl?.id}/end`, { token: admin, body: {} })).status === 200);
+
+  // ค่าคอมแบบเก่า (DEAL) ที่จ่ายไปแล้วในระบบเดิม — ยกเลิกบิลร้านแล้วออกใหม่ รายการเดิมต้องไม่กลับมาให้จ่ายซ้ำ
+  const ls = await api('POST', '/api/franchises', { token: admin, body: { username: 'legacyshop', password: 'legacyshop-pass-1' } });
+  const lfid = ls.body.franchise?.id;
+  const lprod = (await api('POST', '/api/products', {
+    token: admin, body: { sku: 'LEGACY-P', name: 'สินค้าค่าคอมเก่า', commissionPct: 10, franchiseId: lfid, startDate: '2026-01-01' },
+  })).body.product;
+  const la = (await api('POST', '/api/sales-agents', { token: admin, body: { username: 'salelegacy', password: 'salelegacy-pass-1', name: 'เซลระบบเดิม' } })).body.agent;
+  await api('POST', '/api/sales-agents/links', { token: admin, body: { salesAgentId: la?.id, items: [{ productId: lprod?.id, commissionPct: 5, fixedAmount: 100 }] } });
+  const lentry = (await api('POST', '/api/sales-entries', { token: admin, body: { periodCode: '2029-06-H1', productId: lprod?.id, grossAmount: 6000 } })).body;
+  const linv = (await api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: lfid, periodCode: '2029-06-H1' } })).body;
+  const lrow = db.prepare('SELECT franchise_id, period_id FROM invoices WHERE id = ?').get(linv.id);
+  db.prepare(`INSERT INTO sales_commissions
+      (sales_agent_id, franchise_id, period_id, invoice_id, kind, basis, base_amount_satang, commission_pct_bp,
+       pct_amount_satang, fixed_satang, total_satang, status, paid_at, created_at, updated_at)
+    VALUES (?, ?, ?, ?, 'DEAL', 'GROSS', 600000, 500, 30000, 10000, 40000, 'PAID', '2029-06-20', UTC_TIMESTAMP(), UTC_TIMESTAMP())`)
+    .run(la?.id, lrow.franchise_id, lrow.period_id, linv.id);
+  const lcandOf = async () => (await api('GET', `/api/sales-agents/${la?.id}/commission-candidates`, { token: admin })).body;
+  let lcand = await lcandOf();
+  check('ตั้งฉาก: รายการที่จ่ายไปแล้วในระบบเดิม (แถว DEAL) ไม่อยู่ในรายการที่ติ๊กได้',
+    !lcand.items?.some((i) => i.entryId === lentry.id) && lcand.fixed?.length === 0, lcand);
+  await api('POST', `/api/invoices/${linv.id}/void`, { token: admin, body: { reason: 'ทดสอบออกบิลใหม่หลังจ่ายค่าคอมแบบเก่า' } });
+  const lreissue = await api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: lfid, periodCode: '2029-06-H1' } });
+  lcand = await lcandOf();
+  const lagent = (await api('GET', `/api/sales-agents/${la?.id}`, { token: admin })).body;
+  check('ยกเลิกบิลร้านแล้วออกใหม่ → รายการที่จ่ายไปแล้วในระบบเดิมยังติ๊กซ้ำไม่ได้ (ทั้งรายการสินค้าและเหมาต่อรอบ · ตัวเลขข้างชื่อเซลเป็น 0)',
+    lreissue.status === 201 && lreissue.body.id !== linv.id && !lcand.items?.some((i) => i.entryId === lentry.id)
+      && lcand.fixed?.length === 0 && lagent.uncommissionedCount === 0,
+    { items: lcand.items, fixed: lcand.fixed, count: lagent.uncommissionedCount });
+}
+
 section('captcha หน้าเข้าสู่ระบบ: หลาย IP ผลัดกันเดารหัสบัญชีเดียว (botnet)');
 {
+  const botKeys = {};
   for (const u of ['botshop', 'botshop2', 'botshop3']) {
-    await api('POST', '/api/franchises', { token: admin, body: { username: u, password: `${u}-pass-1` } });
+    const created = await api('POST', '/api/franchises', { token: admin, body: { username: u, password: `${u}-pass-1` } });
+    botKeys[u] = await shopLoginKey(created.body.franchise.id);
   }
   // IP ละครั้ง — ด่านเดิม (10 ครั้งต่อ IP) ไม่มีวันเห็น ต้องเป็นด่านที่นับตามชื่อบัญชี
+  // ส่ง key ของลิงก์ร้านไปด้วยเสมอ (คนร้ายที่ได้ลิงก์ร้านไปแล้ว) — ครั้งที่รหัสผิดยังเป็น 401 ที่ถูกนับแบบเดิม
   let ipSeq = 0;
   const loginAs = (username, password, extra = {}) => api('POST', '/api/auth/login', {
-    body: { username, password, ...extra }, headers: { 'x-forwarded-for': `203.0.113.${++ipSeq}` },
+    body: { username, password, ...(botKeys[username] ? { loginKey: botKeys[username] } : {}), ...extra },
+    headers: { 'x-forwarded-for': `203.0.113.${++ipSeq}` },
   });
 
   const initial = await api('GET', '/api/settings/turnstile', { token: admin });

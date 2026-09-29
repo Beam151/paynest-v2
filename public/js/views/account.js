@@ -1,5 +1,8 @@
 import { api, session } from '../api.js';
-import { dateTimeTh, badge, card, confirmAction, el, field, formModal, icon, infoModal, table, toast } from '../ui.js';
+import {
+  dateTimeTh, badge, card, confirmAction, copyButton, copyText, el, field, formModal, icon, infoModal, loginSetModal,
+  loginSetText, loginUrl, randomPassword, resetPasswordModal, table, toast,
+} from '../ui.js';
 import { backupCodesBox, enrollFlow } from './twoFactor.js';
 import { render } from '../app.js';
 
@@ -38,10 +41,19 @@ export async function accountView() {
     api.get('/api/auth/telegram').catch(() => null),
     api.get('/api/auth/onboarding').catch(() => null),
   ]);
-  // เจ้าของบัญชีร้านเท่านั้นที่จัดการผู้ช่วยได้
-  const team = me.role === 'FRANCHISE' && me.isOwner
-    ? await api.get(`/api/franchises/${me.franchiseId}/users`)
-    : null;
+  // เจ้าของบัญชีร้านเท่านั้นที่จัดการผู้ช่วยได้ และเห็นลิงก์เข้าระบบของร้าน (ผู้ช่วยขอดูไม่ได้ — ส่งต่อไม่ได้)
+  const isOwner = me.role === 'FRANCHISE' && me.isOwner;
+  const [team, link] = isOwner
+    ? await Promise.all([
+      api.get(`/api/franchises/${me.franchiseId}/users`),
+      // โหลดไม่ได้ก็ยังใช้หน้านี้ได้ — การ์ดลิงก์บอกทางออกเอง
+      api.get(`/api/franchises/${me.franchiseId}/login-link`).catch(() => null),
+    ])
+    : [null, null];
+  const shopUrl = link ? loginUrl(link.path) : null;
+  const shopTitle = `ร้าน ${me.franchiseUsername ?? ''}`.trim();
+  // ผู้ช่วยลืมรหัส = เจ้าของร้านตั้งให้ใหม่เอง ไม่ต้องรอทางเรา
+  const assistantHint = '(ตามที่ตั้งไว้ — ถ้าลืม ให้เจ้าของร้านตั้งรหัสใหม่ให้)';
 
   const current = el('input', { type: 'password', autocomplete: 'current-password' });
   const next = el('input', { type: 'password', autocomplete: 'new-password' });
@@ -91,7 +103,8 @@ export async function accountView() {
     submitLabel: 'สร้างบัญชีผู้ช่วย',
     fields: [
       { name: 'username', label: 'ชื่อผู้ใช้', required: true, hint: 'ใช้ได้เฉพาะ a-z 0-9 . _ -' },
-      { name: 'password', label: 'รหัสผ่าน', required: true, hint: 'อย่างน้อย 8 ตัวอักษร' },
+      // สุ่มไว้ให้ — หลังสร้างได้ชุดข้อมูลเข้าระบบไปคัดลอกส่งให้ผู้ช่วยทีเดียว
+      { name: 'password', label: 'รหัสผ่าน', required: true, value: randomPassword(), hint: 'สุ่มให้แล้ว แก้เองได้ · อย่างน้อย 8 ตัวอักษร' },
       { name: 'displayName', label: 'ชื่อที่แสดง', placeholder: 'เช่น น้องเอ (ธุรการ)' },
       {
         // ตั้งต้นให้ดูได้แต่ยังแจ้งชำระไม่ได้ — เปิดสิทธิ์แตะเงินต้องเป็นการตัดสินใจ ไม่ใช่ค่าเริ่มต้น
@@ -104,9 +117,17 @@ export async function accountView() {
       },
     ],
     onSubmit: async (v) => {
-      await api.post(`/api/franchises/${me.franchiseId}/users`, v);
-      toast(`เพิ่มผู้ช่วย ${v.username} แล้ว`, 'success');
+      const created = await api.post(`/api/franchises/${me.franchiseId}/users`, v);
       render();
+      // รหัสผ่านอยู่ในเบราว์เซอร์แค่ตอนนี้ — โชว์ชุดให้คัดลอกเลย ปิดไปแล้วดูอีกไม่ได้
+      loginSetModal({
+        heading: `เพิ่มผู้ช่วย ${created?.username ?? v.username} แล้ว — ส่งข้อมูลเข้าระบบให้เขา`,
+        title: shopTitle,
+        url: shopUrl,
+        username: created?.username ?? v.username,
+        password: v.password,
+        mustChange: Boolean(created?.mustChangePassword),
+      });
     },
   });
 
@@ -150,18 +171,24 @@ export async function accountView() {
                   render();
                 },
               }),
-            }, '🔑 สิทธิ์'),
+            }, '🛡 สิทธิ์'),
             el('button', {
               class: 'btn ghost sm',
-              onclick: () => formModal({
-                title: `ตั้งรหัสผ่านใหม่ให้ ${u.username}`,
-                fields: [{ name: 'newPassword', label: 'รหัสผ่านใหม่', required: true, hint: 'อย่างน้อย 8 ตัวอักษร' }],
-                onSubmit: async (v) => {
-                  await api.post(`/api/franchises/${me.franchiseId}/users/${u.id}/reset-password`, v);
-                  toast('ตั้งรหัสผ่านใหม่แล้ว', 'success');
-                },
+              onclick: () => copyText(
+                loginSetText({ title: shopTitle, url: shopUrl, username: u.username, passwordHint: assistantHint }),
+                `คัดลอกข้อมูลเข้าระบบของ ${u.username} แล้ว (ไม่มีรหัสผ่าน — รหัสเดิมดูย้อนหลังไม่ได้)`,
+              ),
+            }, '📋 คัดลอกข้อมูลเข้าระบบ'),
+            el('button', {
+              class: 'btn ghost sm',
+              onclick: () => resetPasswordModal({
+                username: u.username,
+                title: shopTitle,
+                url: shopUrl,
+                passwordHint: assistantHint,
+                run: (body) => api.post(`/api/franchises/${me.franchiseId}/users/${u.id}/reset-password`, body),
               }),
-            }, 'ตั้งรหัสใหม่'),
+            }, '🔑 ตั้งรหัสใหม่ + คัดลอก'),
             el('button', {
               class: 'btn ghost sm',
               onclick: () => confirmAction(
@@ -198,6 +225,8 @@ export async function accountView() {
         { label: 'ข้อมูล', render: (r) => r.v },
       ], rows), { tight: true }),
 
+    isOwner ? shopLinkCard(shopUrl) : '',
+
     teamCard || '',
 
     me.role === 'FRANCHISE' ? telegramCard(telegram) : '',
@@ -224,6 +253,28 @@ export async function accountView() {
           field('รหัสผ่านใหม่', next, 'อย่างน้อย 8 ตัวอักษร'),
           field('ยืนยันรหัสผ่านใหม่', confirm)),
         el('div', { class: 'btn-row mt-14' }, button))));
+}
+
+/**
+ * ลิงก์เข้าระบบของร้าน (เจ้าของร้านเห็นคนเดียว) — ส่งให้ผู้ช่วยพร้อมชื่อผู้ใช้/รหัสผ่าน
+ * ไม่มีปุ่มสร้างลิงก์ใหม่ที่นี่: สร้างใหม่ = ทุกคนในร้านหลุดออก ทางเราเป็นคนทำ (ต้องยืนยันรหัส 6 หลัก + แจ้งกลุ่มส่วนกลาง)
+ */
+function shopLinkCard(url) {
+  if (!url) {
+    return card('ลิงก์เข้าระบบของร้าน',
+      el('div', { class: 'notice-box m-0' }, 'โหลดลิงก์เข้าระบบของร้านไม่ได้ — รีเฟรชหน้านี้อีกครั้ง หรือขอลิงก์จากทางเรา'));
+  }
+  const urlInput = el('input', { type: 'text', readonly: true, value: url, 'aria-label': 'ลิงก์เข้าระบบของร้าน' });
+  urlInput.addEventListener('focus', () => urlInput.select());
+  return card('ลิงก์เข้าระบบของร้าน',
+    el('div', {},
+      el('p', { style: 'margin-top:0' },
+        'ทุกคนในร้านต้องเข้าระบบผ่านลิงก์นี้ — ส่งให้ผู้ช่วยพร้อมชื่อผู้ใช้และรหัสผ่าน (ปุ่ม "📋 คัดลอกข้อมูลเข้าระบบ" ในการ์ดผู้ช่วยรวมให้แล้ว)'),
+      el('div', { class: 'login-link-row' },
+        urlInput,
+        copyButton(url, '📋 คัดลอกลิงก์', { toastText: 'คัดลอกลิงก์เข้าระบบของร้านแล้ว' })),
+      el('div', { class: 'sub-line mt-8' },
+        'ลิงก์นี้เป็นกุญแจของร้าน อย่าโพสต์ในที่สาธารณะ · ถ้าสงสัยว่าหลุด แจ้งทางเราให้สร้างลิงก์ใหม่ (ทุกคนในร้านจะถูกออกจากระบบ แล้วใช้ลิงก์ใหม่แทน)')));
 }
 
 /**
@@ -359,13 +410,27 @@ function telegramCard(status) {
   };
 
   const events = status.events ?? [];
-  const on = events.filter((e) => e.enabled).length;
+  const on = events.filter((e) => e.enabled || e.locked).length;
 
   /*
    * เลือกรับทีละเรื่อง — กดสวิตช์แล้วบันทึกทันที ไม่ต้องหาปุ่มบันทึก
    * ยังไม่เชื่อม: สวิตช์กดไม่ได้ แต่ยังเห็นว่าเชื่อมแล้วจะได้อะไรบ้าง
    */
   const eventRow = (e) => {
+    /*
+     * เรื่องที่ล็อกไว้ (บิลใหม่ / แจ้ง-เปลี่ยนบัญชีสำหรับโอน) เปิดไว้เสมอ ปิดไม่ได้
+     * ข้อความพวกนี้มีเลขบัญชีที่ร้านต้องใช้เทียบก่อนโอนทุกครั้ง — ปิดแล้วร้านไม่มีอะไรให้เทียบ
+     * (เซิร์ฟเวอร์ก็ไม่ยอมให้ปิดอยู่แล้ว สวิตช์นี้แค่บอกให้เห็นตรง ๆ แทนการกดแล้วเด้งกลับ)
+     */
+    if (e.locked) {
+      return el('label', { class: 'notify-row', style: status.linked ? '' : 'opacity:.6', title: 'เรื่องนี้ปิดไม่ได้ — มีเลขบัญชีสำหรับตรวจก่อนโอน' },
+        el('span', { class: 'notify-label' },
+          el('strong', {}, e.label, ' ', el('span', { class: 'badge gray' }, '🔒 ปิดไม่ได้')),
+          el('span', { class: 'sub-line' }, e.hint)),
+        el('span', { class: 'switch' },
+          el('input', { type: 'checkbox', checked: true, disabled: true, 'aria-label': `${e.label} (ปิดไม่ได้)` }),
+          el('span', { class: 'slider' })));
+    }
     const box = el('input', { type: 'checkbox', checked: e.enabled, disabled: !status.linked, 'aria-label': e.label });
     box.addEventListener('change', async () => {
       box.disabled = true;
@@ -392,8 +457,8 @@ function telegramCard(status) {
         el('div', { class: 'channel-text' },
           el('strong', {}, status.linked ? `เชื่อมแล้ว · รับ ${on} จาก ${events.length} เรื่อง` : 'ยังไม่ได้เชื่อม'),
           el('span', { class: 'sub-line' }, status.linked
-            ? 'เลือกได้ด้านล่างว่าอยากได้ข้อความเรื่องไหน — ตั้งของใครของมัน ไม่กระทบคนอื่นในร้าน'
-            : 'เชื่อมครั้งเดียว แล้วเลือกได้ว่าอยากได้เรื่องไหน — ฟรี ไม่มีค่าใช้จ่าย')),
+            ? 'เลือกได้ด้านล่างว่าอยากได้ข้อความเรื่องไหน — ตั้งของใครของมัน ไม่กระทบคนอื่นในร้าน · เรื่องที่มีเลขบัญชีสำหรับโอนปิดไม่ได้'
+            : 'เชื่อมครั้งเดียว แล้วเลือกได้ว่าอยากได้เรื่องไหน — ฟรี ไม่มีค่าใช้จ่าย · ทุกบิลจะได้เลขบัญชีสำหรับตรวจก่อนโอนทาง Telegram')),
         status.linked
           ? el('button', {
             class: 'btn ghost sm',

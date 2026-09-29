@@ -109,6 +109,33 @@ final class ChargeItemService
         return self::get($id);
     }
 
+    /**
+     * ลบรายการตั้งต้น — เจ้าของระบบ: "หน้านี้ต้องกดลบได้"
+     *
+     * ลบได้แม้เคยใช้ในบิลแล้ว เพราะบิลเก็บชื่อ % และจำนวนเงินของตัวเองไว้ใน invoice_adjustments ตั้งแต่ตอนใส่
+     * รายการนี้เป็นแค่ "ทางลัดตอนออกบิล" — ตัดความเชื่อมโยงของบิลเก่าออก (charge_item_id = NULL) แล้วลบได้เลย
+     * บิลเก่ายังแสดงชื่อและยอดเดิมครบ แค่เลือกรายการนี้ตอนออกบิลใหม่ไม่ได้แล้ว
+     * ต่างจากสินค้า (ลบไม่ได้) เพราะสินค้าผูกกับยอดขาย การมอบหมาย และดีลเซล ส่วนรายการนี้ไม่มีอะไรอ้างถึงนอกจากบิล
+     */
+    public static function delete(int $id, int $actorUserId): array
+    {
+        $item = self::get($id);
+
+        return Db::tx(static function () use ($id, $item, $actorUserId) {
+            $used = Db::int('SELECT COUNT(*) FROM invoice_adjustments WHERE charge_item_id = ?', [$id]);
+            Db::exec('UPDATE invoice_adjustments SET charge_item_id = NULL WHERE charge_item_id = ?', [$id]);
+            Db::exec('DELETE FROM charge_items WHERE id = ?', [$id]);
+            // จดชื่อไว้ในรายละเอียด — แถวถูกลบแล้ว หน้า "ประวัติรายการ" หาชื่อจาก id ไม่เจออีก
+            Audit::write($actorUserId, 'charge_item.delete', 'charge_item', $id, [
+                'name'        => $item['name'],
+                'kind'        => $item['kind'],
+                'usedOnBills' => $used,
+            ]);
+
+            return ['deleted' => true, 'id' => $id, 'name' => $item['name'], 'usedOnBills' => $used];
+        });
+    }
+
     public static function serialize(array $row): array
     {
         return [

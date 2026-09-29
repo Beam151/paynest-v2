@@ -45,4 +45,10 @@ class ChargeItems extends BaseApiController
 
         return $this->json(ChargeItemService::update($itemId, $body, (int) $this->user()['id']));
     }
+
+    /** ลบรายการตั้งต้น — บิลที่เคยใช้ยังเก็บชื่อและยอดของตัวเองไว้ครบ (ดู ChargeItemService::delete) */
+    public function delete(string $id)
+    {
+        return $this->json(ChargeItemService::delete(V::parseId($id), (int) $this->user()['id']));
+    }
 }

@@ -9,6 +9,7 @@ use App\Libraries\Jwt;
 use App\Libraries\V;
 use App\Services\Audit;
 use App\Services\BootstrapService;
+use App\Services\FranchiseService;
 use App\Services\NotificationService;
 use App\Services\OnboardingService;
 use App\Services\TelegramService;
@@ -24,6 +25,8 @@ class Auth extends BaseApiController
         $body = V::parse(V::object([
             'username' => V::string()->min(1, 'กรุณากรอกชื่อผู้ใช้'),
             'password' => V::string()->min(1, 'กรุณากรอกรหัสผ่าน'),
+            // key จากลิงก์เข้าระบบของร้าน (/#/s/<key>) — บังคับเฉพาะผู้ใช้ของร้าน · ส่วนกลาง/เซลส่งมาก็ไม่สนใจ
+            'loginKey' => V::string()->max(128)->nullable()->optional(),
         ]), $this->body());
 
         // ติดตั้งใหม่ยังไม่มีแอดมิน = สร้างให้ (รหัสสุ่มอยู่ในไฟล์บนเซิร์ฟเวอร์ ไม่มีใครเดาได้)
@@ -37,6 +40,18 @@ class Auth extends BaseApiController
             throw ApiException::unauthorized('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
         }
         if (! UserService::verifyPassword($body['password'], $user['password_hash'])) {
+            throw ApiException::unauthorized('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
+        }
+        /*
+         * ผู้ใช้ของร้านต้องมาจากลิงก์ของร้านตัวเอง — key ในลิงก์คือ "ของที่ต้องมี" คู่กับรหัสผ่านที่ "ต้องรู้"
+         * ไม่มี key / key ผิด / key ของร้านอื่น = ข้อความเดียวกับรหัสผิดทุกตัวอักษร และเป็น 401 ที่ตัวนับกันเดารหัสนับให้
+         * รหัสผ่านที่หลุดหรือเดาได้อย่างเดียวจึงยืนยันไม่ได้แม้แต่ว่าถูก (ไม่มีช่องให้ไล่เดาทีละชั้น)
+         * ตรวจหลังรหัสผ่าน: ตรวจก่อนจะตอบเร็วกว่าตอนรหัสถูก (ไม่ผ่าน bcrypt) → จับเวลาก็รู้ว่าชื่อไหนเป็นบัญชีร้าน
+         * ตรวจก่อนสถานะบัญชี: "บัญชีนี้ถูกปิดใช้งาน" ก็เท่ากับยืนยันว่ารหัสถูก — บอกเฉพาะคนที่ถือลิงก์ของร้าน
+         * mfaToken ออกหลังบรรทัดนี้ — ขั้น 2FA จึงต่อได้เฉพาะการล็อกอินที่ผ่าน key มาแล้ว
+         */
+        if ($user['role'] === 'FRANCHISE'
+            && ! FranchiseService::loginKeyMatches($user['franchise_id'] === null ? null : (int) $user['franchise_id'], $body['loginKey'] ?? null)) {
             throw ApiException::unauthorized('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
         }
         if ($user['status'] !== 'ACTIVE') {
@@ -126,7 +141,10 @@ class Auth extends BaseApiController
         if ((int) $user['must_change_password'] === 1) {
             Db::exec('UPDATE users SET must_change_password = 0 WHERE id = ?', [$user['id']]);
             // รหัสในไฟล์ใช้ไม่ได้แล้ว — ลบทิ้ง ไม่ให้ค้างอยู่บนดิสก์
-            @unlink(BootstrapService::initialPasswordFile());
+            // เฉพาะส่วนกลาง: ร้าน/เซลก็ถูกบังคับเปลี่ยนได้ (ตั้งรหัสใหม่ + คัดลอกส่ง) แต่ไฟล์นั้นเป็นรหัสของแอดมินคนแรก
+            if ($user['role'] === 'SUPER_ADMIN') {
+                @unlink(BootstrapService::initialPasswordFile());
+            }
         }
         Audit::write((int) $user['id'], 'auth.change_password', 'user', (int) $user['id']);
 

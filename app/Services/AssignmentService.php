@@ -35,7 +35,7 @@ final class AssignmentService
     {
         $product = ProductService::getRow((int) $input['productId']);
         if ($product['status'] !== 'ACTIVE') {
-            throw ApiException::badRequest("สินค้า {$product['sku']} ถูกเก็บเข้าคลังแล้ว (ARCHIVED)");
+            throw ApiException::badRequest("สินค้า {$product['sku']} ถูกปิดใช้งานแล้ว — เปิดใช้งานที่หน้าสินค้าก่อนจึงจะมอบหมายให้ร้านได้");
         }
         $franchise = Db::one('SELECT * FROM franchises WHERE id = ?', [(int) $input['franchiseId']]) ?? throw ApiException::notFound('ไม่พบร้านค้า');
         if ($franchise['status'] !== 'ACTIVE') {

@@ -14,7 +14,7 @@
   <h2 class="m-sub">งานทุกรอบบิล (ทำตามลำดับ)</h2>
   <div class="m-flow" aria-label="งานหนึ่งรอบบิล">
     <div><span class="m-task-ico">{i:shopping-cart}</span><strong>1. กรอกยอดขาย</strong><small>หลังจบรอบ</small><button class="m-back" data-guide="sales">ดูวิธี →</button></div>
-    <div><span class="m-task-ico">{i:receipt}</span><strong>2. ออกบิล</strong><small>ร้านได้ Telegram ทันที</small><button class="m-back" data-guide="issue">ดูวิธี →</button></div>
+    <div><span class="m-task-ico">{i:receipt}</span><strong>2. ออกบิล</strong><small>ร้านได้ Telegram พร้อมเลขบัญชี</small><button class="m-back" data-guide="issue">ดูวิธี →</button></div>
     <div><span class="m-task-ico">{i:eye}</span><strong>3. ตรวจสลิป</strong><small>ยืนยันแล้วยอดถูกตัด</small><button class="m-back" data-guide="slips">ดูวิธี →</button></div>
     <div><span class="m-task-ico">{i:circle-check}</span><strong>4. ตามบิลค้าง</strong><small>ระบบทักร้านให้เอง</small><button class="m-back" data-guide="today">ดูวิธี →</button></div>
   </div>
@@ -22,8 +22,10 @@
   <h2 class="m-sub">เรื่องอื่น ๆ</h2>
   <div class="m-tasks">
     <button class="m-task" data-guide="start"><span class="m-task-ico">{i:rocket}</span><strong>เริ่มต้นครั้งแรก</strong><small>ตั้งค่าก่อนเปิดใช้</small></button>
-    <button class="m-task" data-guide="shops"><span class="m-task-ico">{i:store}</span><strong>เพิ่มร้านและสินค้า</strong><small>มอบหมายสินค้าให้ร้าน</small></button>
-    <button class="m-task" data-guide="agents"><span class="m-task-ico">{i:handshake}</span><strong>เซลและค่าคอม</strong><small>ผูกดีล · จ่ายคอม</small></button>
+    <button class="m-task" data-guide="shops"><span class="m-task-ico">{i:store}</span><strong>เพิ่มร้านและสินค้า</strong><small>มอบหมายสินค้าให้ร้าน · สินค้ากลุ่ม (ชุด)</small></button>
+    <button class="m-task" data-guide="logins"><span class="m-task-ico">{i:key-round}</span><strong>ส่งข้อมูลเข้าระบบ</strong><small>ลิงก์ของร้าน · คัดลอกทั้งชุด · ตั้งรหัสใหม่</small></button>
+    <button class="m-task" data-guide="agents"><span class="m-task-ico">{i:handshake}</span><strong>เซลและค่าคอม</strong><small>ตั้งค่าคอม/แก้ดีล · ทำบิลค่าคอม · จ่ายคอม</small></button>
+    <button class="m-task" data-guide="account"><span class="m-task-ico">{i:landmark}</span><strong>เลขบัญชีกับร้าน</strong><small>ส่งเลขบัญชีทาง Telegram · เปลี่ยนบัญชีของบิล · กระเป๋า USD</small></button>
     <button class="m-task" data-guide="news"><span class="m-task-ico">{i:megaphone}</span><strong>ประกาศถึงร้าน</strong><small>โปรโมชั่น · วันหยุด</small></button>
     <button class="m-task" data-guide="settings"><span class="m-task-ico">{i:bell}</span><strong>แจ้งเตือน / สำรองข้อมูล</strong><small>Telegram · ระบบ</small></button>
     <button class="m-task" data-guide="reports"><span class="m-task-ico">{i:notebook-text}</span><strong>รายงาน / รายรับ-รายจ่าย</strong><small>เทียบยอด · กำไรจริงของรอบ</small></button>
@@ -35,6 +37,7 @@
     <span>{i:calendar} 2 รอบต่อเดือน: 1–15 และ 16–สิ้นเดือน</span>
     <span>{i:alarm-clock} ครบกำหนด 7 วันหลังจบรอบ</span>
     <span>{i:lock} เรื่องสำคัญต้องใส่รหัส 6 หลักจากแอป</span>
+    <span>{i:key-round} ร้านเข้าระบบผ่านลิงก์ของร้านเท่านั้น</span>
   </div>
 </div>
 
@@ -55,6 +58,8 @@
     </div>
     <div class="m-step-text"><span class="m-num">1</span><h3>เลือกรอบ แล้วกรอกยอดเต็ม</h3><p>{nav:sales} → เลือกรอบด้านบน → พิมพ์ยอดขายเต็มของแต่ละสินค้า → <span class="m-ui is-primary">💾 บันทึกทั้งหมด</span></p><p>ระบบคิดส่วนต่างให้เอง · ร้านคืนของมากกว่าขาย ใส่ติดลบได้</p></div>
   </div>
+  <div class="m-tip">{i:info}<span><b>สินค้าที่ปิดใช้งานแล้ว</b> กรอกยอดใหม่ไม่ได้ ยอดที่บันทึกไว้ก่อนยังโชว์เป็นแถว <span class="s-badge">ปิดใช้งาน</span> (ออกบิลได้ตามปกติ และไม่นับใน "กรอกแล้ว x/y") · ช่อง % ที่ขึ้น <span class="m-ui">กรอกยอดเอง</span> = ยอดนั้นกำหนดตอนออกบิล ไม่ได้คิดจาก %</span></div>
+  <div class="m-tip">{i:package}<span><b>สินค้ากลุ่ม (ชุด)</b> ขึ้นเป็นแถวเดียวมีป้าย <span class="s-badge">กลุ่ม</span> และรหัสสินค้าย่อยใต้ชื่อ — กรอก<b>ยอดขายรวมของทั้งชุด</b>ช่องเดียว ไม่ต้องกรอกยอดของสินค้าย่อย</span></div>
 </section>
 
 <!-- ── ออกบิล ── -->
@@ -73,9 +78,27 @@
         <span class="s-btn wide s-hl">ออกบิล 3 ร้านที่เลือก<span class="s-tap">{i:hand}</span></span>
       </div>
     </div>
-    <div class="m-step-text"><span class="m-num">1</span><h3>ติ๊กร้าน แล้วออกบิล</h3><p>{nav:bills} → แท็บ <span class="m-ui">พร้อมออกบิล</span> → ติ๊กร้าน → <span class="m-ui is-primary">ออกบิล N ร้านที่เลือก</span></p><p>ร้านได้ข้อความ "บิลรอบใหม่ออกแล้ว" ทันที</p></div>
+    <div class="m-step-text"><span class="m-num">1</span><h3>ติ๊กร้าน แล้วออกบิล</h3><p>{nav:bills} → แท็บ <span class="m-ui">พร้อมออกบิล</span> → ติ๊กร้าน → <span class="m-ui is-primary">ออกบิล N ร้านที่เลือก</span></p><p>ร้านได้ข้อความ "บิลรอบใหม่ออกแล้ว" ทันที พร้อม<b>ธนาคาร เลขที่บัญชี ชื่อบัญชี</b>และคำเตือนให้ตรวจก่อนโอน (ร้านปิดเรื่องนี้ไม่ได้)</p></div>
   </div>
-  <div class="m-tip">{i:info}<span>ต้องใส่ค่าใช้จ่าย/ส่วนลด เลือกบางสินค้า หรือให้จ่ายเป็นดอลลาร์ → ใช้ <span class="m-ui is-primary">+ ออกใบเรียกเก็บ</span> ทีละร้านแทน</span></div>
+  <div class="m-step">
+    <div class="m-shot" data-modal="ออกใบเรียกเก็บ" data-nav="bills" data-title="ออกใบเรียกเก็บ">
+            <div class="s-body">
+        <div class="s-card">
+          <div class="s-row" style="justify-content:flex-start;gap:6px"><span class="s-check on"></span><b>KF-01</b><span class="s-input" style="margin-left:auto">คิดตาม % ▾</span><b>5,136.00</b></div>
+          <div class="s-row s-hl" style="justify-content:flex-start;gap:6px;padding:2px"><span class="s-check on"></span><b>KF-02</b><span class="s-input" style="margin-left:auto">กรอกยอดเอง ▾</span><b>3,000.00</b></div>
+          <div class="s-row" style="justify-content:flex-start;gap:6px"><span class="s-check"></span><b>DR-01</b><span class="s-muted" style="margin-left:auto">ไม่ออกรอบนี้</span></div>
+        </div>
+        <div class="s-input">📎 รูปประกอบบิล: ใบส่งของ.jpg, สรุปยอด.pdf</div>
+        <span class="s-btn wide">ออกใบเรียกเก็บ</span>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">2</span><h3>ออกทีละร้าน — เลือกสินค้าและวิธีคิด</h3><p><span class="m-ui is-primary">+ ออกใบเรียกเก็บ</span> → เลือกรอบและร้าน → ติ๊กสินค้าที่จะเรียกเก็บ แต่ละสินค้าเลือกได้ว่า <span class="m-ui">คิดตาม %</span> (แก้ % ได้) หรือ <span class="m-ui">กรอกยอดเอง</span> (พิมพ์จำนวนเงินที่เรียกเก็บ)</p>
+      <p><b>รูปประกอบบิล</b> — แนบรูปหรือ PDF ได้สูงสุด 10 ไฟล์ต่อบิล ร้านเห็นในบิลของตัวเอง</p>
+      <p>ใช้ทางนี้ด้วยเมื่อต้องใส่ค่าใช้จ่าย/ส่วนลด หรือให้จ่ายเป็นดอลลาร์ · ออกหลายร้านพร้อมกัน (ขั้นที่ 1) ใช้ % ตั้งต้นทั้งหมด แก้ทีหลังได้ที่บิล</p>
+      <p>ออกบิลร้าน<b>ไม่สร้างค่าคอมเซล</b> — ค่าคอมทำเป็น "บิลค่าคอม" แยกทีหลังที่หน้าเซล (ดูเรื่อง "เซลและค่าคอม")</p></div>
+  </div>
+  <div class="m-tip">{i:info}<span><b>แก้วิธีคิดหลังออกบิล</b> เปิดบิลด้วย <span class="m-ui">แก้ไขบิล</span> → กด <span class="m-ui">แก้</span> ที่สินค้า (ได้เฉพาะบิลที่ยังไม่มีเงินเข้าและไม่มีสลิปรอตรวจ) · <b>แนบรูปเพิ่ม / ลบรูป</b> กด <span class="m-ui">📎 แนบรูป</span> ที่บิลได้ตลอด แม้ร้านจ่ายแล้ว</span></div>
+  <div class="m-tip">{i:package}<span><b>สินค้ากลุ่มในบิล</b> เป็นบรรทัดเดียว คิดตาม % ของกลุ่ม ใต้ชื่อเขียน "ประกอบด้วย: KF-01, KF-02" ให้ร้านรู้ว่าในชุดมีอะไร · บิลจำรายการย่อยไว้ตอนออกบิล — แก้ชุดทีหลัง บิลเก่าไม่เปลี่ยน (ยกเลิกแล้วออกใหม่ = ใช้รายการปัจจุบัน)</span></div>
 </section>
 
 <!-- ── ตรวจสลิป ── -->
@@ -87,6 +110,7 @@
             <div class="s-body">
         <div class="s-row"><b>bkk01 · INV-2609-014</b><b>15,614.00 ฿</b></div>
         <div class="s-slip">รูปสลิป</div>
+        <span class="s-badge green">✓ ร้านยืนยันว่าตรวจเลขบัญชีกับ Telegram แล้ว</span>
         <span class="s-btn ok wide s-hl">✓ ยืนยันรับเงิน 15,614.00 ฿<span class="s-tap">{i:hand}</span></span>
         <div class="s-row"><span class="s-btn ghost" style="flex:1;color:var(--danger)">✕ ปฏิเสธ</span><span class="s-btn ghost" style="flex:1">ข้าม →</span></div>
       </div>
@@ -97,6 +121,7 @@
         <li><span class="s-mark bad">✕</span><span><b>ไม่ถูกต้อง</b> ใส่เหตุผล ร้านเห็นแล้วแจ้งใหม่ได้</span></li>
         <li><span class="s-mark gray">→</span><span><b>ยังไม่แน่ใจ</b> ข้ามไปใบถัดไปก่อน</span></li>
       </ul>
+      <p>ใต้ยอดบอกว่าร้าน<b>ติ๊กยืนยันเลขบัญชี</b>หรือไม่ และตอนแจ้งบิลชี้บัญชีไหน — ถ้าขึ้นว่าตอนนี้บิลชี้บัญชีอื่นแล้ว ให้ดูเงินเข้าในบัญชีที่ร้านเห็นตอนแจ้ง</p>
     </div>
   </div>
 </section>
@@ -149,9 +174,10 @@
         <span class="s-btn wide s-hl">+ เพิ่มบัญชี<span class="s-tap">{i:hand}</span></span>
       </div>
     </div>
-    <div class="m-step-text"><span class="m-num">3</span><h3>บัญชีรับเงิน + รูป QR</h3><p>{nav:bank} → <span class="m-ui is-primary">+ เพิ่มบัญชี</span> ร้านสแกนโอนได้ ไม่พิมพ์เลขผิด</p></div>
+    <div class="m-step-text"><span class="m-num">3</span><h3>บัญชีรับเงิน + รูป QR</h3><p>{nav:bank} → <span class="m-ui is-primary">+ เพิ่มบัญชี</span> ร้านสแกนโอนได้ ไม่พิมพ์เลขผิด</p><p>รับเงินดอลลาร์: เพิ่มอีกบัญชีแบบ <span class="m-ui">ดอลลาร์ USD (กระเป๋าคริปโต)</span> (ดูเรื่อง "เลขบัญชีกับร้าน")</p></div>
   </div>
   <div class="m-tip">{i:info}<span>จากนั้น: <span class="m-ui">ค่าใช้จ่าย/ส่วนลด</span> ที่ใช้ประจำ → <span class="m-ui">สินค้า</span> → <span class="m-ui">ร้านค้า</span> → <span class="m-ui">เซล</span> (ดูเรื่อง "เพิ่มร้านและสินค้า")</span></div>
+  <div class="m-tip is-warn">{i:triangle-alert}<span><b>อัปเดตระบบเป็นรุ่นที่มีลิงก์ร้านครั้งแรก</b> ร้านทุกร้านเข้าระบบไม่ได้จนกว่าจะได้ลิงก์ของร้าน — ส่งลิงก์ให้ทุกร้านตามเรื่อง "ส่งข้อมูลเข้าระบบ" (ส่วนกลางและเซลเข้าได้ตามปกติ)</span></div>
 </section>
 
 <!-- ── ร้านและสินค้า ── -->
@@ -171,35 +197,213 @@
     <div class="m-step-text"><span class="m-num">1</span><h3>สร้างสินค้า พร้อมมอบให้ร้าน</h3><p>{nav:products} → <span class="m-ui is-primary">+ สร้างสินค้าใหม่</span> ใส่ % ส่วนต่าง และเลือกร้านได้ในหน้าเดียว</p><p>ย้ายสินค้าไปร้านอื่น: <span class="m-ui">ปิดสัญญา</span> ก่อน แล้วค่อย <span class="m-ui">มอบหมาย</span> ใหม่</p></div>
   </div>
   <div class="m-step">
+    <div class="m-shot" data-modal="แก้ไขสินค้า SET-01" data-nav="products" data-title="แก้ไขสินค้า SET-01">
+            <div class="s-body">
+        <div class="s-input" style="color:var(--text)">SET-01 · ชุดไก่ทอด + เฟรนช์ฟรายส์ · 10 %</div>
+        <div class="s-row s-hl" style="justify-content:flex-start;gap:6px;padding:2px"><span class="s-switch on"></span><b>สินค้ากลุ่ม (ชุด) — ขายและคิดบิลเป็นก้อนเดียว</b></div>
+        <div class="s-input">🔍 ค้นหารหัสหรือชื่อสินค้าย่อย…</div>
+        <div class="s-card">
+          <div class="s-row" style="justify-content:flex-start;gap:6px"><span class="s-check on"></span><b>KF-01</b><span class="s-muted">ไก่ทอด</span></div>
+          <div class="s-row" style="justify-content:flex-start;gap:6px"><span class="s-check on"></span><b>KF-02</b><span class="s-muted">เฟรนช์ฟรายส์</span></div>
+          <div class="s-row" style="justify-content:flex-start;gap:6px"><span class="s-check"></span><b>DR-01</b><span class="s-muted">น้ำอัดลม</span></div>
+        </div>
+        <span class="s-muted">เลือกแล้ว 2 รายการ</span>
+        <span class="s-btn wide">บันทึก</span>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">2</span><h3>สินค้ากลุ่ม (ชุด) — ติ๊กว่าในชุดมีอะไร</h3><p>{nav:products} → <span class="m-ui is-primary">+ สร้างสินค้าใหม่</span> (หรือ <span class="m-ui">แก้ไข</span> ที่สินค้าเดิม) → เปิดสวิตช์ <span class="m-ui">สินค้ากลุ่ม (ชุด)</span> → ค้นหาแล้วติ๊กสินค้าย่อย</p>
+      <p>กลุ่ม<b>คือสินค้าหนึ่งชิ้น</b> — มีรหัส % ส่วนต่าง และมอบหมายให้ร้านเหมือนสินค้าปกติ · กรอกยอดขายเป็น<b>ยอดรวมของทั้งชุด</b> บิลคิด % ของกลุ่มเป็น<b>บรรทัดเดียว</b> · สินค้าย่อยแค่บอกร้านว่าในชุดมีอะไร ไม่ได้คิดเงินแยก</p>
+      <p>ติ๊กได้ 1–100 รายการ · ใส่สินค้ากลุ่มอื่นไม่ได้ (ไม่มีกลุ่มซ้อนกลุ่ม) · สินค้าชิ้นเดียวอยู่ได้หลายกลุ่ม · สินค้าที่ปิดใช้งานเพิ่มใหม่ไม่ได้ · ในรายการสินค้า กลุ่มมีป้าย <span class="s-badge">กลุ่ม · 2 รายการ</span> ส่วนสินค้าย่อยขึ้นว่า "อยู่ในกลุ่ม SET-01"</p></div>
+  </div>
+  <div class="m-step">
+    <div class="m-shot" data-nav="products" data-tap-nav data-title="สินค้าทั้งหมด">
+            <div class="s-body">
+        <div class="s-row"><span class="s-btn">ใช้งาน (12)</span><span class="s-btn ghost">ปิดใช้งาน (2)</span><span class="s-btn ghost">ทั้งหมด (14)</span></div>
+        <div class="s-card">
+          <div class="s-row"><b>KF-09</b><span class="s-badge green">ใช้งาน</span></div>
+          <div class="s-row" style="justify-content:flex-end;gap:4px"><span class="s-btn ghost">แก้ไข</span><span class="s-btn ghost s-hl" style="color:var(--danger)">ปิดใช้งาน<span class="s-tap">{i:hand}</span></span></div>
+        </div>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">3</span><h3>เลิกขายสินค้า = ปิดใช้งาน (ลบไม่ได้)</h3><p>{nav:products} → กด <span class="m-ui">ปิดใช้งาน</span> ที่สินค้านั้น — ร้านไม่เห็น และกรอกยอดใหม่ไม่ได้ · ยอดที่บันทึกไว้แล้วยังออกบิลได้ · สัญญากับร้านและดีลของเซลยังอยู่</p><p>ขายต่อ: แท็บ <span class="m-ui">ปิดใช้งาน</span> → <span class="m-ui">เปิดใช้งาน</span> กลับมาใช้ได้ทันที ไม่ต้องมอบหมายใหม่</p></div>
+  </div>
+  <div class="m-step">
     <div class="m-shot" data-nav="shops" data-tap-nav data-title="ร้านค้า">
             <div class="s-body">
         <div class="s-card">
           <div class="s-row"><b>bkk01</b><span class="s-badge green">ใช้งาน</span></div>
-          <div class="s-row" style="flex-wrap:wrap;justify-content:flex-start;gap:4px"><span class="s-btn ghost">บิลและยอดค้าง</span><span class="s-btn ghost s-hl">👁 ดูมุมมองนี้</span><span class="s-btn ghost">ตั้งรหัสใหม่</span></div>
+          <div class="s-row" style="flex-wrap:wrap;justify-content:flex-start;gap:4px"><span class="s-btn ghost">👁 ดูมุมมองนี้</span><span class="s-btn ghost">บิลและยอดค้าง</span><span class="s-btn ghost s-hl">🔗 ลิงก์เข้าระบบ</span><span class="s-btn ghost">ยูสเซอร์</span></div>
         </div>
       </div>
     </div>
-    <div class="m-step-text"><span class="m-num">2</span><h3>สร้างร้าน แล้วส่งรหัสให้ร้าน</h3><p>{nav:shops} → <span class="m-ui is-primary">+ สร้างร้านค้าใหม่</span> ตั้งชื่อผู้ใช้กับรหัสผ่าน ส่งให้ร้าน</p><p><span class="m-ui">👁 ดูมุมมองนี้</span> = ดูระบบแบบที่ร้านเห็น (ดูอย่างเดียว) · <span class="m-ui">📱 ปลด 2FA</span> เมื่อร้านทำมือถือหาย</p></div>
+    <div class="m-step-text"><span class="m-num">4</span><h3>สร้างร้าน แล้วส่งข้อมูลเข้าระบบทั้งชุด</h3><p>{nav:shops} → <span class="m-ui is-primary">+ สร้างร้านค้าใหม่</span> ตั้งชื่อผู้ใช้กับรหัสผ่าน → ระบบโชว์ <b>ลิงก์ของร้าน + ชื่อผู้ใช้ + รหัสผ่าน</b> กด <span class="m-ui is-primary">📋 คัดลอกทั้งชุด</span> แล้ววางส่งให้ร้าน (รหัสผ่านแสดงครั้งเดียว)</p><p><span class="m-ui">👁 ดูมุมมองนี้</span> = ดูระบบแบบที่ร้านเห็น (ดูอย่างเดียว) · <span class="m-ui">ยูสเซอร์</span> = คัดลอกข้อมูลเข้าระบบ / ตั้งรหัสใหม่ / <span class="m-ui">📱 ปลด 2FA</span> ทีละคน</p></div>
   </div>
 </section>
 
 <!-- ── เซล ── -->
 <section class="m-guide" id="agents" hidden>
   <button class="m-back" data-home>← เลือกเรื่องอื่น</button>
-  <div class="m-guide-head"><span class="m-task-ico">{i:handshake}</span><div><h2>เซลและค่าคอม</h2><p>คอมเกิดเองตอนออกบิล</p></div></div>
+  <div class="m-guide-head"><span class="m-task-ico">{i:handshake}</span><div><h2>เซลและค่าคอม</h2><p>ตั้งค่าคอม → ออกบิลร้านตามปกติ → ทำบิลค่าคอม → จ่าย</p></div></div>
   <div class="m-step">
-    <div class="m-shot" data-nav="agents" data-tap-nav data-title="เซล — ค่าคอม">
+    <div class="m-shot" data-modal="ตั้งค่าคอมให้ sale01" data-nav="agents" data-title="ตั้งค่าคอมให้ sale01">
             <div class="s-body">
         <div class="s-card">
-          <div class="s-row"><b>1–15 ก.ย. 69 · sale01</b></div>
-          <div class="s-row"><span class="s-muted">ค้างจ่าย</span><b style="color:var(--warn)">2,340.00</b></div>
-          <span class="s-btn wide s-hl">จ่ายทั้งรอบ<span class="s-tap">{i:hand}</span></span>
+          <b>🤝 ดีลที่ถืออยู่ (1)</b>
+          <div class="s-row s-hl" style="gap:4px;padding:2px"><span style="flex:1"><b>KF-01</b> <span class="s-muted">bkk01</span></span><span class="s-input" style="color:var(--text)">5 %</span><span class="s-input" style="color:var(--text)">เหมา 300 ฿</span><span class="s-btn ghost" style="color:var(--danger)">ปิดดีล</span></div>
         </div>
-        <span class="s-btn ghost wide">+ เพิ่มค่าคอมอื่น ๆ</span>
+        <div class="s-card">
+          <b>📦 เพิ่มสินค้าที่ผูกดีล (1)</b>
+          <div class="s-row" style="gap:4px"><span class="s-input" style="flex:1;color:var(--text)">SET-01 — ชุดไก่ทอด (bkk01) ▾</span><span class="s-input" style="color:var(--text)">3 %</span></div>
+          <span class="s-muted">% คิดจากยอดขายเต็มของร้าน</span>
+        </div>
+        <span class="s-btn ghost wide">+ เพิ่มสินค้า</span>
+        <span class="s-btn wide">บันทึกดีล</span>
       </div>
     </div>
-    <div class="m-step-text"><h3>ผูกดีล → คอมเกิดเอง → กดจ่าย</h3><p>{nav:agents} → <span class="m-ui is-primary">+ เพิ่มเซล</span> → <span class="m-ui">+ ผูกดีล / ค่าคอมอื่น</span> เลือกสินค้า กี่ % และ/หรือเหมาต่อรอบ</p><p>โอนให้เซลแล้ว กด <span class="m-ui is-primary">จ่ายทั้งรอบ</span> · โบนัสพิเศษใช้ <span class="m-ui">+ เพิ่มค่าคอมอื่น ๆ</span></p></div>
+    <div class="m-step-text"><span class="m-num">1</span><h3>ตั้งค่าคอม (ผูกดีล) — ไม่มีวันที่</h3><p>{nav:agents} → <span class="m-ui is-primary">+ เพิ่มเซล</span> → ที่แถวเซลกด <span class="m-ui">ตั้งค่าคอม</span> — ดีลที่เซลถืออยู่ขึ้นก่อน <b>แก้ % / เหมาต่อรอบได้ตรงนั้น</b> หรือกด <span class="m-ui">ปิดดีล</span> (กดอีกครั้ง = ไม่ปิดแล้ว) · ผูกสินค้าใหม่กด <span class="m-ui">+ เพิ่มสินค้า</span> · กด <span class="m-ui is-primary">บันทึกดีล</span> ครั้งเดียว ระบบแก้ → ปิด (ถามยืนยันก่อน) → เพิ่ม ให้ครบ</p><p><b>% คิดจากยอดขายเต็มของร้านเสมอ</b> · ไม่ต้องเลือกวันที่ — เริ่มนับตั้งแต่วันที่บันทึก · สินค้าหนึ่งชิ้นมีเซลถือดีลได้ทีละคน · แก้ดีลแล้ว<b>มีผลกับบิลค่าคอมที่ทำหลังจากนี้</b> บิลค่าคอมที่ทำไปแล้วไม่เปลี่ยน</p><p><b>ไม่บังคับ</b> — เซลที่ได้แค่ค่าคอมอื่น ๆ ข้ามขั้นนี้ไปทำบิลค่าคอมได้เลย</p></div>
   </div>
+  <div class="m-step">
+    <div class="m-shot" data-modal="sale01 — สมชาย" data-nav="agents" data-title="sale01 — สมชาย">
+            <div class="s-body">
+        <b>ดีลที่ถืออยู่</b>
+        <div class="s-card">
+          <div class="s-row"><span><b>KF-01</b> <span class="s-muted">bkk01</span></span><span>5% · เหมา 300</span></div>
+          <div class="s-row"><span class="s-muted">เริ่ม 1 ก.ย. 69</span><span style="display:flex;gap:4px"><span class="s-btn ghost s-hl">แก้ไข<span class="s-tap">{i:hand}</span></span><span class="s-btn ghost" style="color:var(--danger)">ปิดดีล</span></span></div>
+        </div>
+        <div class="s-card s-dim">
+          <div class="s-row"><span><b>DR-01</b> <span class="s-muted">cnx01</span></span><span>2%</span></div>
+          <span class="s-muted">ปิดแล้ว 31 ส.ค. 69</span>
+        </div>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">2</span><h3>แก้ดีลทีละตัว — จากรายละเอียดเซล</h3><p>ที่แถวเซลกด <span class="m-ui">รายละเอียด</span> → ตาราง "ดีลที่ถืออยู่" → <span class="m-ui">แก้ไข</span> (% ของยอดขายเต็ม · เหมาต่อรอบ · หมายเหตุ) หรือ <span class="m-ui">ปิดดีล</span> — หน้าต่างอัปเดตให้ทันที ไม่ต้องเปิดใหม่</p><p>ดีลที่ปิดแล้วขึ้นว่า "ปิดแล้ว" พร้อมวันที่ ไม่มีปุ่ม · ดูดีลของทุกเซลได้ที่แท็บ <span class="m-ui">ดีล สินค้า ↔ เซล</span> (ดีลที่ปิดแล้วยังแก้ตัวเลขได้ที่นั่น — ใช้เป็นค่าตั้งต้นตอนทำบิลค่าคอมของบิลร้านเก่า)</p></div>
+  </div>
+  <div class="m-step">
+    <div class="m-shot" data-modal="ทำบิลค่าคอม — sale01" data-nav="agents" data-title="ทำบิลค่าคอม — sale01">
+            <div class="s-body">
+        <div class="s-row" style="justify-content:flex-start;gap:6px"><span class="s-check on"></span><b>INV-2609-014 · ร้าน bkk01 · 1–15 ก.ย. 69</b></div>
+        <div class="s-card">
+          <div class="s-row" style="justify-content:flex-start;gap:6px"><span class="s-check on"></span><b>KF-01</b><span class="s-muted">ยอดเต็ม 42,800</span></div>
+          <div class="s-row" style="justify-content:flex-end;gap:6px"><span class="s-input">% ของยอดเต็ม ▾</span><span class="s-input" style="color:var(--text)">5</span><b>2,140.00</b><span class="s-mark">1</span></div>
+          <div class="s-row" style="justify-content:flex-start;gap:6px"><span class="s-check on"></span><b>KF-02</b><span class="s-muted">ยอดเต็ม 31,500</span></div>
+          <div class="s-row s-hl" style="justify-content:flex-end;gap:6px;padding:2px"><span class="s-input">กรอกเอง ▾</span><span class="s-input" style="color:var(--text)">500</span><b>500.00</b><span class="s-mark">2</span></div>
+          <div class="s-row" style="justify-content:flex-start;gap:6px"><span class="s-check on"></span><span>เหมาต่อรอบ · ร้าน bkk01</span><b style="margin-left:auto">300.00</b><span class="s-mark">3</span></div>
+        </div>
+        <div class="s-card"><div class="s-row"><b>💰 ค่าคอมอื่น ๆ</b><span class="s-mark">4</span></div><div class="s-row" style="gap:4px"><span class="s-input" style="flex:1;color:var(--text)">โบนัสเปิดร้านใหม่</span><span class="s-input" style="color:var(--text)">1,000</span></div></div>
+        <div class="s-alert ok">รวมบิลค่าคอม 3,940.00 ฿</div>
+        <span class="s-btn wide">บันทึกบิลค่าคอม</span>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">3</span><h3>ทำบิลค่าคอม — ติ๊กเองว่ารอบนี้จ่ายอะไร</h3><p>ออกบิลร้านตามปกติก่อน (<b>ไม่ต้องรอร้านจ่าย</b>) แล้วที่แถวเซลกด <span class="m-ui is-primary">🧾 ทำบิลค่าคอม</span> — ระบบลิสต์รายการจากบิลร้านที่ออกแล้ว เฉพาะสินค้าที่เซลคนนี้ถือดีล จัดกลุ่มตามบิลร้าน</p>
+      <ul class="m-legend">
+        <li><span class="s-mark">1</span><span><b>% ของยอดเต็ม</b> — ตั้งต้นตาม % ในดีล แก้ได้ทีละรายการ</span></li>
+        <li><span class="s-mark">2</span><span><b>กรอกเอง</b> — พิมพ์จำนวนเงินค่าคอมของรายการนั้น</span></li>
+        <li><span class="s-mark">3</span><span><b>เหมาต่อรอบ</b> — ติ๊กแยก ได้ครั้งเดียวต่อร้านต่อรอบ</span></li>
+        <li><span class="s-mark">4</span><span><b>ค่าคอมอื่น ๆ</b> — พิมพ์รายการ + จำนวนเงิน ไม่ต้องเลือกรอบ (ใส่ติดลบได้ ถ้าเป็นการหักคืน)</span></li>
+      </ul>
+      <p>รายการที่ไม่ติ๊กยังรอให้ติ๊กในบิลค่าคอมครั้งหน้า · รายการที่อยู่ในบิลค่าคอมแล้วไม่โผล่ซ้ำ (จ่ายซ้ำไม่ได้) · ยอดรวมต้องมากกว่า 0</p>
+      <p>สินค้ากลุ่มเป็นรายการเดียว (ใต้ชื่อเขียน "ประกอบด้วย: …") คิด % จากยอดขายเต็มของทั้งชุด · ทำบิลค่าคอมแบบเลือกเซลเองได้จากแท็บ <span class="m-ui">ค่าคอมที่ต้องจ่าย</span> → <span class="m-ui is-primary">🧾 ทำบิลค่าคอม</span></p></div>
+  </div>
+  <div class="m-step">
+    <div class="m-shot" data-nav="agents" data-tap-nav data-title="เซล — ค่าคอมที่ต้องจ่าย">
+            <div class="s-body">
+        <div class="s-card">
+          <div class="s-row"><b>COM-20260929-sale01</b><span class="s-badge amber">รอจ่าย</span></div>
+          <div class="s-row"><span class="s-muted">sale01 · 4 รายการ</span><b>3,940.00</b></div>
+          <div class="s-row" style="justify-content:flex-end;gap:4px"><span class="s-btn ghost">ดู</span><span class="s-btn s-hl">จ่ายแล้ว<span class="s-tap">{i:hand}</span></span><span class="s-btn ghost" style="color:var(--danger)">ยกเลิก</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">4</span><h3>โอนให้เซลแล้วกด "จ่ายแล้ว"</h3><p>แท็บ <span class="m-ui">ค่าคอมที่ต้องจ่าย</span> → <span class="m-ui">ดู</span> รายการในบิล → โอนให้เซล → <span class="m-ui is-primary">จ่ายแล้ว</span></p><p>ทำบิลผิด (ยังไม่จ่าย): <span class="m-ui">ยกเลิก</span> ใส่เหตุผล รายการกลับไปให้ติ๊กใหม่ · จ่ายแล้วยกเลิกไม่ได้ — จ่ายเกินให้ใส่ค่าคอมอื่น ๆ ติดลบในบิลค่าคอมถัดไป</p></div>
+  </div>
+  <div class="m-tip">{i:package}<span><b>ดีลกับสินค้ากลุ่ม</b> ผูกดีลกับสินค้ากลุ่มได้เหมือนสินค้าปกติ · เซลที่ถือดีล<b>สินค้าย่อย</b> (เช่น KF-01) <b>ไม่ได้ค่าคอมจากยอดที่ขายเป็นชุด</b> เพราะยอดของชุดบันทึกที่สินค้ากลุ่ม (SET-01) — ถ้าเซลควรได้จากชุดด้วย ให้ผูกดีลสินค้ากลุ่มให้เขาด้วย</span></div>
+  <div class="m-tip">{i:info}<span><b>ยกเลิกบิลร้าน</b> รายการของบิลนั้นถูกถอดออกจากบิลค่าคอมที่ยังไม่จ่ายเอง (ไม่เหลือรายการ = บิลค่าคอมถูกยกเลิกทั้งใบ) · บิลค่าคอมที่จ่ายแล้วไม่ถูกแตะ — ในหน้า "ดู" รายการนั้นขึ้นว่า "บิลร้านถูกยกเลิก"</span></div>
+  <div class="m-tip">{i:key-round}<span><b>ส่งข้อมูลเข้าระบบให้เซล</b> สร้างเซลเสร็จระบบโชว์ลิงก์ + ชื่อผู้ใช้ + รหัสผ่าน กด <span class="m-ui is-primary">📋 คัดลอกทั้งชุด</span> · เซลลืมรหัส: <span class="m-ui">🔑 ตั้งรหัสใหม่ + คัดลอก</span> (ดูเรื่อง "ส่งข้อมูลเข้าระบบ") · เซลเข้าหน้าเข้าสู่ระบบปกติ ไม่มีลิงก์ร้าน</span></div>
+</section>
+
+<!-- ── ส่งข้อมูลเข้าระบบ: ลิงก์ของร้าน · คัดลอกทั้งชุด · ตั้งรหัสใหม่ ── -->
+<section class="m-guide" id="logins" hidden>
+  <button class="m-back" data-home>← เลือกเรื่องอื่น</button>
+  <div class="m-guide-head"><span class="m-task-ico">{i:key-round}</span><div><h2>ส่งข้อมูลเข้าระบบให้ร้านและเซล</h2><p>ร้านเข้าระบบได้เฉพาะผ่านลิงก์ของร้านตัวเอง</p></div></div>
+  <div class="m-step">
+    <div class="m-shot" data-modal="ลิงก์เข้าระบบของร้าน bkk01" data-nav="shops" data-title="ลิงก์เข้าระบบของร้าน bkk01">
+            <div class="s-body">
+        <div class="s-row" style="gap:4px"><span class="s-input" style="flex:1;color:var(--text)">https://…/#/s/k3XrT9…</span><span class="s-btn ghost">📋 คัดลอกลิงก์</span></div>
+        <b>ข้อมูลเข้าระบบของเจ้าของร้าน</b>
+        <div class="s-card" style="font-family:ui-monospace,monospace;font-size:11px;line-height:1.5">ลิงก์: https://…/#/s/k3XrT9…<br>ชื่อผู้ใช้: bkk01</div>
+        <span class="s-btn wide s-hl">📋 คัดลอกทั้งชุด<span class="s-tap">{i:hand}</span></span>
+        <span class="s-btn ghost wide">🔑 ตั้งรหัสใหม่ + คัดลอก (เจ้าของร้าน)</span>
+        <span class="s-btn ghost wide" style="color:var(--danger)">สร้างลิงก์ใหม่</span>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">1</span><h3>ลิงก์ของร้าน</h3><p>{nav:shops} → <span class="m-ui">🔗 ลิงก์เข้าระบบ</span> ที่แถวร้าน</p><p>ทุกร้านมีลิงก์ของตัวเอง (กุญแจไม่ซ้ำกัน) ร้านต้อง<b>เปิดลิงก์นี้ + ใส่ชื่อผู้ใช้และรหัสผ่าน</b>ถึงจะเข้าได้ — ไม่มีลิงก์ ระบบตอบเหมือนรหัสผิด · เปิดครั้งเดียว เครื่องนั้นจำไว้</p><p><span class="m-ui">📋 คัดลอกทั้งชุด</span> = ลิงก์ + ชื่อผู้ใช้ของเจ้าของร้าน (ไม่มีรหัสผ่าน) · ร้านลืมรหัสด้วย กด <span class="m-ui">🔑 ตั้งรหัสใหม่ + คัดลอก (เจ้าของร้าน)</span> ได้ชุดเต็มพร้อมรหัสใหม่</p><p>ใช้กับเจ้าของร้านและผู้ช่วยทุกคน · เจ้าของร้านเห็นลิงก์เดียวกันที่หน้าบัญชีของเขา (ไว้ส่งให้ผู้ช่วย)</p></div>
+  </div>
+  <div class="m-step">
+    <div class="m-shot" data-modal="ข้อมูลเข้าระบบของ bkk01" data-nav="shops" data-title="ข้อมูลเข้าระบบของ bkk01">
+            <div class="s-body">
+        <div class="s-card" style="font-family:ui-monospace,monospace;font-size:11px;line-height:1.5">ข้อมูลเข้าสู่ระบบ ระบบจัดการร้าน — ร้าน bkk01<br>ลิงก์: https://…/#/s/k3XrT9…<br>ชื่อผู้ใช้: bkk01<br>รหัสผ่าน: Hq7mT3xKp2<br>เข้าครั้งแรกระบบจะให้ตั้งรหัสผ่านใหม่</div>
+        <span class="s-btn wide s-hl">📋 คัดลอกทั้งชุด<span class="s-tap">{i:hand}</span></span>
+        <span class="s-muted">⚠ รหัสผ่านนี้แสดงครั้งเดียว</span>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">2</span><h3>คัดลอกทั้งชุด แล้ววางในแชต</h3><p>ลิงก์ + ชื่อผู้ใช้ + รหัสผ่าน เป็นข้อความก้อนเดียว — โผล่เองหลัง <span class="m-ui is-primary">+ สร้างร้านค้าใหม่</span> / <span class="m-ui is-primary">+ เพิ่มเซล</span> และหลังตั้งรหัสใหม่</p><p><b>รหัสผ่านดูย้อนหลังไม่ได้</b> (ระบบเก็บแบบเข้ารหัสทางเดียว) — ปิดหน้าต่างแล้ว <span class="m-ui">📋 คัดลอกข้อมูลเข้าระบบ</span> จะได้แค่ลิงก์กับชื่อผู้ใช้</p></div>
+  </div>
+  <div class="m-step">
+    <div class="m-shot" data-modal="ยูสเซอร์ของ bkk01" data-nav="shops" data-title="ยูสเซอร์ของ bkk01">
+            <div class="s-body">
+        <div class="s-card">
+          <div class="s-row"><b>bkk01</b><span class="s-badge">เจ้าของบัญชี</span></div>
+          <div class="s-row" style="flex-wrap:wrap;justify-content:flex-start;gap:4px"><span class="s-btn ghost">📋 คัดลอกข้อมูลเข้าระบบ</span><span class="s-btn ghost s-hl">🔑 ตั้งรหัสใหม่ + คัดลอก<span class="s-tap">{i:hand}</span></span></div>
+        </div>
+        <div class="s-card s-dim"><div class="s-row"><b>bkk01-staff</b><span class="s-badge">ผู้ช่วย</span></div></div>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">3</span><h3>ลืมรหัส = ตั้งรหัสใหม่ + คัดลอก</h3><p>ร้าน: {nav:shops} → <span class="m-ui">ยูสเซอร์</span> · เซล: {nav:agents} ที่แถวเซล → <span class="m-ui">🔑 ตั้งรหัสใหม่ + คัดลอก</span></p><p>ระบบสุ่มรหัสให้ (แก้ได้) แล้วโชว์ชุดเต็มให้คัดลอก · รหัสเดิมใช้ไม่ได้ทันที เจ้าของบัญชีถูกออกจากระบบทุกเครื่อง และ<b>เข้าครั้งแรกต้องตั้งรหัสใหม่ของตัวเอง</b></p></div>
+  </div>
+  <div class="m-tip is-warn">{i:triangle-alert}<span><b>สร้างลิงก์ใหม่</b> ใช้เมื่อสงสัยว่าลิงก์หลุดไปถึงคนนอก — ลิงก์เดิมใช้ไม่ได้ทันที ทุกคนของร้านถูกออกจากระบบ (ต้องใส่รหัส 6 หลัก และกลุ่ม Telegram ได้รับแจ้ง) แล้วส่งลิงก์ใหม่ให้ร้าน · ถ้ารหัสผ่านอาจหลุดด้วย ตั้งรหัสใหม่ด้วย</span></div>
+  <div class="m-tip">{i:info}<span>ร้านบอกว่า "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" ทั้งที่รหัสถูก = ยังไม่ได้เปิดลิงก์ของร้าน (หรือเปิดลิงก์เก่า/ของร้านอื่น) — ส่งลิงก์ให้ใหม่ ให้ร้านเปิดลิงก์ก่อนแล้วค่อยใส่รหัส</span></div>
+</section>
+
+<!-- ── เลขบัญชีกับร้าน ── -->
+<section class="m-guide" id="account" hidden>
+  <button class="m-back" data-home>← เลือกเรื่องอื่น</button>
+  <div class="m-guide-head"><span class="m-task-ico">{i:landmark}</span><div><h2>เลขบัญชีกับร้าน</h2><p>ร้านโอนเฉพาะเมื่อเลขบนเว็บตรงกับที่ได้ทาง Telegram</p></div></div>
+  <div class="m-step">
+    <div class="m-shot" data-modal="INV-2609-014 — bkk01" data-nav="bills" data-title="INV-2609-014 — bkk01">
+            <div class="s-body">
+        <div class="s-card" style="text-align:center"><span class="s-muted">โอนเข้าบัญชี กสิกรไทย</span><b>123-4-56789-0</b></div>
+        <div class="s-alert ok">📨 ส่งเลขบัญชีเข้า Telegram ของร้านแล้ว 1 ต.ค. 69 09:12 น.</div>
+        <span class="s-btn ghost wide s-hl">📨 ส่งเลขบัญชีให้ร้านทาง Telegram<span class="s-tap">{i:hand}</span></span>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">1</span><h3>ร้านได้เลขบัญชีกับทุกบิล</h3><p>ออกบิลเมื่อไร ร้านได้ข้อความพร้อมธนาคาร เลขที่บัญชี ชื่อบัญชี และคำเตือน "ไม่ตรง ห้ามโอน" เอง · ข้อความเตือนก่อนครบกำหนด/เลยกำหนดก็ย้ำเลขเดิม</p><p>ในบิลบอกว่าส่งเลขบัญชีให้ร้านแล้วหรือยัง ร้านเพิ่งเชื่อม Telegram หรือเลขไม่ตรง กด <span class="m-ui">📨 ส่งเลขบัญชีให้ร้านทาง Telegram</span> (ต้องใส่รหัส 6 หลัก)</p></div>
+  </div>
+  <div class="m-step">
+    <div class="m-shot" data-nav="bank" data-tap-nav data-title="บัญชีรับเงิน">
+            <div class="s-body">
+        <div class="s-card">
+          <div class="s-row"><b>กสิกรไทย 123-4-56789-0</b><span class="s-muted">ค้างจ่าย 3 ใบ</span></div>
+          <span class="s-btn ghost wide s-hl">📨 ส่งเลขบัญชีให้ร้านที่มีบิลค้าง<span class="s-tap">{i:hand}</span></span>
+        </div>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">2</span><h3>เปลี่ยนบัญชี → ตรวจ → กดส่งเอง</h3><p>เปลี่ยนบัญชีของบิล (<span class="m-ui">🏦 เปลี่ยนบัญชี / วันครบกำหนด</span>) หรือแก้เลขบัญชีที่ {nav:bank} — ต้องใส่รหัส 6 หลัก และกลุ่ม Telegram ส่วนกลางได้รับแจ้งทันที</p><p><b>ระบบไม่ส่งเลขใหม่ให้ร้านเอง</b> ร้านจะเห็นบนเว็บว่าไม่ตรงกับ Telegram และจะไม่โอน — ตรวจว่าถูกต้องแล้วกด <span class="m-ui">📨 ส่งเลขบัญชีให้ร้าน…</span> ที่บิล หรือ <span class="m-ui">📨 ส่งเลขบัญชีให้ร้านที่มีบิลค้าง</span> ที่หน้าบัญชีรับเงิน</p></div>
+  </div>
+  <div class="m-step">
+    <div class="m-shot" data-modal="เพิ่มบัญชีรับเงิน" data-nav="bank" data-title="เพิ่มบัญชีรับเงิน">
+            <div class="s-body">
+        <div class="s-input s-hl" style="color:var(--text)">สกุลเงินที่รับ: ดอลลาร์ USD (กระเป๋าคริปโต) ▾</div>
+        <div class="s-input" style="color:var(--text)">เครือข่าย (chain): TRC20</div>
+        <div class="s-input" style="color:var(--text);font-family:ui-monospace,monospace">ที่อยู่กระเป๋า: TXk2…9fQa</div>
+        <div class="s-input">รูป QR ของกระเป๋า (ไม่บังคับ)</div>
+        <div class="s-alert">⚠ โอนผิดเครือข่าย (chain) เงินจะสูญหายและกู้คืนไม่ได้</div>
+        <span class="s-btn wide">เพิ่มบัญชี</span>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">3</span><h3>รับเงิน USD = กระเป๋าคริปโต</h3><p>{nav:bank} → <span class="m-ui is-primary">+ เพิ่มบัญชี</span> → เลือกสกุลก่อน <span class="m-ui">ดอลลาร์ USD (กระเป๋าคริปโต)</span> แล้วกรอกแค่ <b>เครือข่าย (chain)</b> (เลือกจากรายการ เช่น TRC20, ERC20, BEP20 หรือพิมพ์เอง) · <b>ที่อยู่กระเป๋า</b> (คัดลอกจากแอปกระเป๋ามาวางทั้งชุด ห้ามพิมพ์เอง ห้ามมีช่องว่าง) · รูป QR ถ้ามี</p><p>ไม่มีช่องธนาคาร/ชื่อบัญชี/สาขา · ตรวจเครือข่ายกับที่อยู่ให้ตรงกับกระเป๋าจริงทุกตัวอักษรก่อนบันทึก — ร้านโอนผิดเครือข่ายเงินหายถาวร · แก้เครือข่ายหรือที่อยู่ต้องใส่รหัส 6 หลักเหมือนแก้เลขบัญชี</p><p>บิล USD ต้องชี้กระเป๋า USD · ร้านเห็นเครือข่ายตัวใหญ่ ที่อยู่เต็มพร้อมปุ่มคัดลอก และข้อความ Telegram ของบิลก็บอกเครือข่าย + ที่อยู่</p></div>
+  </div>
+  <div class="m-tip is-warn">{i:triangle-alert}<span><b>ไม่ได้เป็นคนเปลี่ยนบัญชี?</b> อย่ากดส่งเลขบัญชีให้ร้าน — แก้บัญชีกลับ เปลี่ยนรหัสผ่านทันที และแจ้งร้านที่มีบิลค้างว่าอย่าโอน</span></div>
+  <div class="m-tip">{i:info}<span>ร้านต้องติ๊กยืนยันเลขบัญชีทุกครั้งก่อนแจ้งชำระ — เห็นผลในหน้าตรวจสลิป · ยกเลิกบิลแล้วออกใหม่เลือกบัญชีได้เฉพาะบัญชีที่มีอยู่ในหน้าบัญชีรับเงิน (เพิ่มบัญชีต้องใส่รหัส 6 หลัก)</span></div>
 </section>
 
 <!-- ── ประกาศ ── -->
@@ -283,9 +487,16 @@
   <div class="m-tasks cols-3">
     <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:plus}</span><strong>ยอดเพิ่มหลังออกบิล</strong><small>แท็บพร้อมออกบิล → "ไปเพิ่มเข้าบิล" (ก่อนร้านจ่าย)</small></div>
     <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:file-pen-line}</span><strong>ยอดในบิลผิด</strong><small>"แก้ไขบิล" ได้ถ้ายังไม่มีเงินเข้า · ไม่งั้นยกเลิก (ใส่เหตุผล) แล้วออกใหม่</small></div>
-    <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:calendar}</span><strong>เลื่อนวันครบกำหนด / เปลี่ยนบัญชี</strong><small>เปิดบิลโหมดแก้ไข → "🏦 เปลี่ยนบัญชี / วันครบกำหนด"</small></div>
+    <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:calendar}</span><strong>เลื่อนวันครบกำหนด / เปลี่ยนบัญชี</strong><small>เปิดบิลโหมดแก้ไข → "🏦 เปลี่ยนบัญชี / วันครบกำหนด" · เปลี่ยนบัญชีต้องใส่รหัส 6 หลัก แล้วกด "📨 ส่งเลขบัญชีให้ร้าน"</small></div>
+    <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:file-pen-line}</span><strong>ยอดสินค้าไม่ได้คิดจาก %</strong><small>บิลที่ยังไม่มีเงินเข้า: แก้ไขบิล → "แก้" ที่สินค้า → กรอกยอดเอง</small></div>
+    <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:package}</span><strong>เลิกขายสินค้า</strong><small>ลบไม่ได้ — กด "ปิดใช้งาน" ที่หน้าสินค้า เปิดกลับได้ทุกเมื่อ</small></div>
     <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:refresh-cw}</span><strong>ร้านคืนของมากกว่าขาย</strong><small>ไม่ต้องโอนคืน ระบบหักบิลรอบถัดไปให้เอง</small></div>
-    <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:banknote}</span><strong>ร้านจ่ายเป็นดอลลาร์</strong><small>ตั้งอัตราของรอบข้างแถบรอบบิล → เลือก USD ตอนออกบิล</small></div>
+    <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:banknote}</span><strong>ร้านจ่ายเป็นดอลลาร์</strong><small>ตั้งอัตราของรอบข้างแถบรอบบิล → เลือก USD ตอนออกบิล → ร้านโอนเข้ากระเป๋า USD (เครือข่าย + ที่อยู่)</small></div>
+    <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:key-round}</span><strong>ร้าน/เซลลืมรหัส</strong><small>"🔑 ตั้งรหัสใหม่ + คัดลอก" แล้วส่งชุดใหม่ให้ · รหัสเดิมดูย้อนหลังไม่ได้</small></div>
+    <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:lock}</span><strong>ลิงก์ร้านหลุด</strong><small>🔗 ลิงก์เข้าระบบ → "สร้างลิงก์ใหม่" (ทุกคนของร้านถูกออก) แล้วส่งลิงก์ใหม่</small></div>
+    <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:handshake}</span><strong>จ่ายค่าคอมเซลเกิน / ขาด</strong><small>บิลค่าคอมถัดไปใส่ "ค่าคอมอื่น ๆ" ติดลบ (หักคืน) หรือบวกเพิ่ม</small></div>
+    <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:handshake}</span><strong>เปลี่ยน % ค่าคอมของเซล</strong><small>แถวเซล → "ตั้งค่าคอม" (หรือ "รายละเอียด" → "แก้ไข") · มีผลกับบิลค่าคอมที่ทำหลังจากนี้</small></div>
+    <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:package}</span><strong>ร้านขายเป็นชุด / เซต</strong><small>สร้างสินค้ากลุ่ม ติ๊กสินค้าย่อย · กรอกยอดขายของชุดก้อนเดียว บิลเป็นบรรทัดเดียว</small></div>
     <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:wallet}</span><strong>ร้านทยอยจ่าย</strong><small>ตรวจสลิปทีละงวด บิลเป็น "ชำระบางส่วน" จนครบ</small></div>
   </div>
 </section>
@@ -299,6 +510,15 @@
     <details class="m-faq"><summary>แก้ยอดขายที่ออกบิลไปแล้วไม่ได้</summary><div>ตั้งใจให้เป็นแบบนั้น ยอดในบิลต้องตรงกับที่ร้านเห็น ถ้ายังไม่มีเงินเข้า ยกเลิกบิล แก้ยอด แล้วออกใหม่</div></details>
     <details class="m-faq"><summary>ร้านไม่ได้ข้อความ Telegram</summary><div>ร้านต้องเชื่อม Telegram เองที่เมนูบัญชีของร้าน ใช้ "👁 ดูมุมมองนี้" ดูว่าเช็กลิสต์ "เชื่อม Telegram" ยังค้างอยู่ไหม</div></details>
     <details class="m-faq"><summary>มือถือที่มี Google Authenticator หาย</summary><div>เข้าด้วยรหัสสำรอง 1 ชุด แล้วตั้งใหม่ · รหัสสำรองหมด: ให้แอดมินอีกคนปลดให้ หรือให้ผู้ดูแลเซิร์ฟเวอร์ปลด</div></details>
+    <details class="m-faq"><summary>ร้านบอกว่าเลขบัญชีบนเว็บไม่ตรงกับ Telegram</summary><div>เปิดบิลนั้นดูสถานะ Telegram ใต้กล่องบัญชี ถ้าเพิ่งเปลี่ยนบัญชีเอง ตรวจเลขให้แน่ใจแล้วกด "📨 ส่งเลขบัญชีให้ร้านทาง Telegram" · ถ้าไม่ได้เปลี่ยนเอง ให้ถือว่าถูกแก้โดยไม่รู้ตัว (ข้อถัดไป)</div></details>
+    <details class="m-faq"><summary>ร้านบอกว่าเข้าระบบไม่ได้ ทั้งที่รหัสถูก</summary><div>ร้านต้องเปิดลิงก์ของร้านก่อน ({nav:shops} → "🔗 ลิงก์เข้าระบบ") — ไม่มีลิงก์ ลิงก์เก่า หรือลิงก์ของร้านอื่น ระบบตอบว่า "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" เหมือนรหัสผิดโดยตั้งใจ (คนที่เดารหัสได้จะไม่รู้ว่าเดาถูก) · ใต้ฟอร์มเข้าสู่ระบบบอกว่าเครื่องนั้นจำลิงก์ไว้แล้วหรือยัง</div></details>
+    <details class="m-faq"><summary>ดูรหัสผ่านเดิมของร้านหรือเซลได้ไหม</summary><div>ไม่ได้ ระบบเก็บรหัสแบบเข้ารหัสทางเดียว ไม่มีใครเห็นรหัสเดิม — ใช้ "🔑 ตั้งรหัสใหม่ + คัดลอก" แล้วส่งชุดใหม่ให้ เข้าครั้งแรกเขาจะต้องตั้งรหัสของตัวเอง</div></details>
+    <details class="m-faq"><summary>ออกบิลร้านแล้ว ทำไมไม่มีค่าคอมเซลเกิดขึ้น</summary><div>ตั้งใจ — ค่าคอมเซลไม่เกิดเองตอนออกบิลร้านแล้ว ไปที่ {nav:agents} กด "🧾 ทำบิลค่าคอม" ที่แถวเซล แล้วติ๊กรายการที่จะจ่ายรอบนี้ (รายการจากบิลร้านรอให้ติ๊กจนกว่าจะอยู่ในบิลค่าคอม)</div></details>
+    <details class="m-faq"><summary>ทำบิลค่าคอมแล้วไม่เห็นสินค้าบางตัว</summary><div>ติ๊กได้เฉพาะสินค้าที่เซลคนนั้นถือดีล (ดีลที่ปิดแล้วก็ยังติ๊กได้) จากบิลร้านที่ออกแล้วและไม่ถูกยกเลิก · รายการที่อยู่ในบิลค่าคอมใบอื่นแล้วไม่โผล่ซ้ำ — ถ้าบิลค่าคอมใบนั้นผิด ยกเลิกก่อน (ยังไม่จ่าย) รายการจะกลับมา</div></details>
+    <details class="m-faq"><summary>แก้ % ในดีลของเซลแล้ว บิลค่าคอมเก่าเปลี่ยนไหม</summary><div>ไม่เปลี่ยน — บิลค่าคอมเก็บตัวเลขตอนทำบิลไว้แล้ว % ใหม่เป็นค่าตั้งต้นตอนติ๊กรายการในบิลค่าคอมที่ทำหลังจากนี้ (ยังแก้ทีละรายการได้ตอนทำบิล) · บิลค่าคอมที่ยังไม่จ่ายและต้องการคิดใหม่: ยกเลิกบิลนั้น แล้วทำใหม่</div></details>
+    <details class="m-faq"><summary>สินค้ากลุ่มคิดเงินซ้ำกับสินค้าย่อยไหม</summary><div>ไม่ — ยอดขายของชุดกรอกที่สินค้ากลุ่มช่องเดียว บิลมีบรรทัดเดียวตาม % ของกลุ่ม · สินค้าย่อยเป็นแค่รายการ "ประกอบด้วย" ให้ร้านเห็น ถ้าร้านขายสินค้าย่อยแยกชิ้นด้วย ยอดนั้นกรอกที่สินค้าย่อยตามปกติ (คนละยอดกัน)</div></details>
+    <details class="m-faq"><summary>ลบสินค้าไม่ได้</summary><div>ตั้งใจให้เป็นแบบนั้น สินค้าผูกกับยอดขาย บิล และดีลของเซล — ใช้ "ปิดใช้งาน" แทน ประวัติยังอยู่ครบ และเปิดกลับได้</div></details>
+    <details class="m-faq"><summary>ลบรายการค่าใช้จ่าย/ส่วนลดแล้ว บิลเก่าเปลี่ยนไหม</summary><div>ไม่เปลี่ยน — {nav:charges} กด <span class="m-ui">ลบ</span> ได้เลย แม้เคยใส่ในบิลแล้ว เพราะบิลเก็บชื่อและยอดของรายการนั้นไว้เองตั้งแต่ตอนใส่ แค่เลือกรายการนี้ตอนออกบิลใหม่ไม่ได้แล้ว · ถ้าแค่ไม่อยากให้เลือกชั่วคราว ใช้ "แก้ไข" → สถานะ "ปิดใช้งาน" แทน (เปิดกลับได้)</div></details>
     <details class="m-faq"><summary>บัญชีรับเงินถูกแก้โดยไม่รู้ตัว</summary><div>ระบบแจ้งกลุ่มทันทีและขึ้นแถบเตือนทุกหน้า ถ้าไม่ได้แก้เอง ให้เปลี่ยนรหัสผ่านทันที (ทุกเครื่องหลุด) แล้วแก้บัญชีกลับ</div></details>
   </div>
 </section>

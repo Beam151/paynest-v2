@@ -47,6 +47,7 @@ class SalesAgents extends BaseApiController
         return $this->json(SalesAgentService::listCommissions([
             'salesAgentId' => $this->scopedAgentId(),
             'status'       => $this->q('status'),
+            'kind'         => $this->q('kind'),
             'periodCode'   => $this->q('periodCode'),
             'fromPeriod'   => $this->q('fromPeriod'),
             'toPeriod'     => $this->q('toPeriod'),
@@ -55,12 +56,14 @@ class SalesAgents extends BaseApiController
 
     /* ── ค่าคอม ───────────────────────────────────────────────── */
 
+    /** kind = BILL (บิลค่าคอม) / DEAL / MANUAL (แบบเก่า) · periodCode, fromPeriod กรองได้เฉพาะแถวเก่า (บิลค่าคอมไม่มีรอบ) */
     public function commissions()
     {
         return $this->json(SalesAgentService::listCommissions([
             'salesAgentId' => $this->q('salesAgentId'),
             'franchiseId'  => $this->q('franchiseId'),
             'status'       => $this->q('status'),
+            'kind'         => $this->q('kind'),
             'periodCode'   => $this->q('periodCode'),
             'fromPeriod'   => $this->q('fromPeriod'),
             'toPeriod'     => $this->q('toPeriod'),
@@ -109,6 +112,51 @@ class SalesAgents extends BaseApiController
         return $this->json(SalesAgentService::markPaid(V::parseId($id), $body, $this->user()));
     }
 
+    /**
+     * รายการที่ติ๊กทำบิลค่าคอมให้เซลคนนี้ได้ — บรรทัดบิลร้าน (สินค้าที่เซลถือดีล) + เหมาต่อรอบ
+     */
+    public function commissionCandidates(string $id)
+    {
+        return $this->json(SalesAgentService::commissionCandidates(V::parseId($id)));
+    }
+
+    /**
+     * ทำบิลค่าคอม — ITEM: PCT ส่ง pct · MANUAL ส่ง amount (ส่งเฉพาะช่องของวิธีที่เลือก)
+     * fixed: ไม่ส่ง amount = ใช้ยอดเหมาของดีล · others: ค่าคอมอื่น ๆ (ติดลบได้ = หักคืน) ไม่มีรอบ
+     */
+    public function createCommissionBill(string $id)
+    {
+        $body = V::parse(V::object([
+            'items' => V::array(V::object([
+                'entryId' => V::id(),
+                'mode'    => V::enum(['PCT', 'MANUAL']),
+                'pct'     => V::pct()->optional(),
+                'amount'  => V::amount()->optional(),
+            ]))->max(500, 'ทำบิลได้ครั้งละไม่เกิน 500 รายการ')->optional(),
+            'fixed' => V::array(V::object([
+                'key'    => V::string()->min(1)->max(64),
+                'amount' => V::amount()->optional(),
+            ]))->max(200, 'เหมาต่อรอบได้ครั้งละไม่เกิน 200 รายการ')->optional(),
+            'others' => V::array(V::object([
+                'label'  => V::string()->trim()->min(1, 'ต้องระบุชื่อรายการ')->max(200, 'ชื่อรายการยาวได้ไม่เกิน 200 ตัวอักษร'),
+                'amount' => V::amount(),
+            ]))->max(50, 'ค่าคอมอื่น ๆ ได้ครั้งละไม่เกิน 50 รายการ')->optional(),
+            'note' => V::string()->max(500, 'หมายเหตุยาวได้ไม่เกิน 500 ตัวอักษร')->optional(),
+        ]), $this->body());
+
+        return $this->json(SalesAgentService::createCommissionBill(V::parseId($id), $body, $this->user()), 201);
+    }
+
+    /** ยกเลิกบิลค่าคอมที่ยังไม่จ่าย — รายการกลับไปให้ติ๊กทำบิลใหม่ได้ */
+    public function voidCommission(string $id)
+    {
+        $body = V::parse(V::object([
+            'reason' => V::string()->trim()->min(3, 'ต้องระบุเหตุผลที่ยกเลิก (อย่างน้อย 3 ตัวอักษร)')->max(500, 'เหตุผลยาวได้ไม่เกิน 500 ตัวอักษร'),
+        ]), $this->bodyOrEmpty());
+
+        return $this->json(SalesAgentService::voidCommission(V::parseId($id), $body['reason'], $this->user()));
+    }
+
     /* ── ดีล: เซลคนไหนถือสินค้าไหน ──────────────────────── */
 
     private static function linkShape(): array
@@ -116,7 +164,6 @@ class SalesAgents extends BaseApiController
         return [
             'salesAgentId'  => V::id(),
             'productId'     => V::id(),
-            'basis'         => V::enum(['COMMISSION', 'GROSS'])->optional(),
             'commissionPct' => V::pct()->nullable()->optional(),
             'fixedAmount'   => V::amount()->nullable()->optional(),
             'startDate'     => V::date()->optional(),
@@ -126,14 +173,14 @@ class SalesAgents extends BaseApiController
     }
 
     /**
-     * ผูกดีลได้หลายสินค้าในครั้งเดียว — เงื่อนไขร่วม (เซล ฐานที่คิด ช่วงเวลา) อยู่ชั้นนอก
-     * ส่วน % กับค่าคงที่แยกรายสินค้าได้ เพราะของบางชิ้นอาจตกลงกันคนละเรต
+     * ผูกดีลได้หลายสินค้าในครั้งเดียว — เซล (และหมายเหตุ) อยู่ชั้นนอก
+     * ส่วน % กับเหมาต่อรอบแยกรายสินค้าได้ เพราะของบางชิ้นอาจตกลงกันคนละเรต
+     * ไม่ต้องส่งวันที่ (เริ่มวันนี้ เปิดไว้จนกดปิดดีล) · % คิดจากยอดขายเต็มเสมอ — ส่ง basis มาก็ถูกตัดทิ้ง (V ไม่รับคีย์ที่ไม่รู้จัก)
      */
     public function createLinks()
     {
         $body = V::parse(V::object([
             'salesAgentId' => V::id(),
-            'basis'        => V::enum(['COMMISSION', 'GROSS'])->optional(),
             'startDate'    => V::date()->optional(),
             'endDate'      => V::date()->nullable()->optional(),
             'note'         => V::string()->optional(),
@@ -187,7 +234,8 @@ class SalesAgents extends BaseApiController
         $block = self::userBlock();
         $body  = V::parse(V::object([
             // username เดียวใช้ทั้งเป็นตัวระบุเซลและชื่อผู้ใช้สำหรับเข้าระบบ
-            'username' => $block['username'],
+            // เพดาน 40 ตัว: ชื่อเซลเป็นส่วนหนึ่งของเลขบิลค่าคอม (COM-YYYYMMDD-ชื่อ-N ต้องพอดี VARCHAR(64))
+            'username' => $block['username']->max(40, 'ชื่อผู้ใช้เซลยาวได้ไม่เกิน 40 ตัวอักษร'),
             'password' => $block['password'],
             'name'     => V::string()->min(1),
             'phone'    => V::string()->optional(),
@@ -235,5 +283,25 @@ class SalesAgents extends BaseApiController
         $body = V::parse(V::object(self::userBlock()), $this->body());
 
         return $this->json(UserService::serialize(UserService::create([...$body, 'role' => 'SALES', 'salesAgentId' => $agentId])), 201);
+    }
+
+    /**
+     * ตั้งรหัสผ่านใหม่ให้ยูสเซอร์ของเซล (super) — หน้าเว็บสุ่มรหัส แล้วคัดลอกชุดเข้าระบบส่งให้เซล
+     * mustChange = ให้เซลตั้งรหัสเองตอนเข้าครั้งแรก
+     */
+    public function resetUserPassword(string $id, string $userId)
+    {
+        $body = V::parse(V::object([
+            'newPassword' => V::string()->min(8, 'รหัสผ่านอย่างน้อย 8 ตัวอักษร'),
+            'mustChange'  => V::boolean()->optional(),
+        ]), $this->body());
+
+        return $this->json(SalesAgentService::resetUserPassword(
+            V::parseId($id),
+            V::parseId($userId),
+            $body['newPassword'],
+            ($body['mustChange'] ?? false) === true,
+            (int) $this->user()['id'],
+        ));
     }
 }

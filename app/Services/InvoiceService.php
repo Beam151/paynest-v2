@@ -20,7 +20,7 @@ final class InvoiceService
     private const SELECT_INVOICE = "
         SELECT i.*, f.username AS franchise_username,
                ba.bank_name, ba.account_name, ba.account_number, ba.branch AS bank_branch,
-               ba.currency AS bank_currency, ba.qr_url AS bank_qr_url,
+               ba.currency AS bank_currency, ba.qr_url AS bank_qr_url, ba.chain AS bank_chain,
                bp.code AS period_code, bp.start_date AS period_start, bp.end_date AS period_end,
                (SELECT COALESCE(SUM(fc.amount_satang), 0) FROM franchise_credits fc
                  WHERE fc.source_invoice_id = i.id AND fc.status <> 'CANCELLED') AS credit_created,
@@ -28,7 +28,9 @@ final class InvoiceService
                  WHERE ps.invoice_id = i.id AND ps.status = 'PENDING') AS pending_submissions,
                (SELECT COUNT(*) FROM sales_entries se
                  WHERE se.franchise_id = i.franchise_id AND se.period_id = i.period_id
-                   AND se.status <> 'INVOICED') AS pending_entries
+                   AND se.status <> 'INVOICED') AS pending_entries,
+               (SELECT COUNT(*) FROM invoice_attachments ia
+                 WHERE ia.invoice_id = i.id AND ia.removed_at IS NULL) AS attachment_count
           FROM invoices i
           JOIN franchises f       ON f.id = i.franchise_id
           JOIN billing_periods bp ON bp.id = i.period_id
@@ -37,6 +39,17 @@ final class InvoiceService
     private static function row(int $id): array
     {
         return Db::one('SELECT * FROM invoices WHERE id = ?', [$id]) ?? throw ApiException::notFound('ไม่พบใบเรียกเก็บ');
+    }
+
+    /** รายการยอดขายที่ยังไม่ได้ขึ้นบิลของร้าน/รอบนั้น (+ sku ไว้ใช้ในข้อความ error รายสินค้า) */
+    private static function pendingEntries(int $franchiseId, int $periodId): array
+    {
+        return Db::all(
+            "SELECT se.*, p.sku FROM sales_entries se JOIN products p ON p.id = se.product_id
+              WHERE se.franchise_id = ? AND se.period_id = ? AND se.status <> 'INVOICED'
+              ORDER BY se.id",
+            [$franchiseId, $periodId],
+        );
     }
 
     /* ── คำนวณยอดรวมใหม่ทุกครั้งที่บิลเปลี่ยน ──────────────────── */
@@ -124,6 +137,7 @@ final class InvoiceService
         $p   = Period::fromCode($periodCode);
         $pid = (int) (Db::val('SELECT id FROM billing_periods WHERE code = ?', [$p['code']]) ?? -1);
 
+        // "มีสินค้าต้องขาย" นับเฉพาะสินค้าที่ยังใช้งาน — ร้านที่เหลือแต่สินค้าปิดใช้งานกรอกยอดไม่ได้แล้ว ห้ามค้างเป็น "ยังไม่กรอกยอด"
         $rows = Db::all(
             "SELECT f.id, f.username,
                     (SELECT COUNT(*) FROM sales_entries se
@@ -134,6 +148,7 @@ final class InvoiceService
                       WHERE se.franchise_id = f.id AND se.period_id = ? AND se.status <> 'INVOICED') AS pending_gross,
                     i.id AS invoice_id, i.invoice_no, i.net_total_satang,
                     (SELECT COUNT(*) FROM product_assignments a
+                       JOIN products p ON p.id = a.product_id AND p.status = 'ACTIVE'
                       WHERE a.franchise_id = f.id AND a.start_date <= ? AND (a.end_date IS NULL OR a.end_date >= ?)) AS assigned
                FROM franchises f
                LEFT JOIN invoices i ON i.franchise_id = f.id AND i.period_id = ? AND i.status <> 'VOID'
@@ -245,7 +260,7 @@ final class InvoiceService
             : BankAccountService::assertUsable((int) $input['bankAccountId'], $currency);
 
         // ยอดที่บันทึกแล้วพร้อมเรียกเก็บทันที ไม่ต้องรออนุมัติซ้ำ
-        $available = Db::all("SELECT * FROM sales_entries WHERE franchise_id = ? AND period_id = ? AND status <> 'INVOICED' ORDER BY id", [$franchise['id'], $period['id']]);
+        $available = self::pendingEntries((int) $franchise['id'], (int) $period['id']);
         if ($available === []) {
             $existing = array_column(Db::all("SELECT invoice_no FROM invoices WHERE franchise_id = ? AND period_id = ? AND status <> 'VOID' ORDER BY id", [$franchise['id'], $period['id']]), 'invoice_no');
 
@@ -269,15 +284,27 @@ final class InvoiceService
             $entries = array_map(static fn ($id) => $byId[$id], $wanted);
         }
 
-        $grossTotal      = array_sum(array_map(static fn ($e) => (int) $e['gross_amount_satang'], $entries));
-        $commissionTotal = array_sum(array_map(static fn ($e) => (int) $e['commission_amount_satang'], $entries));
+        /*
+         * วิธีคิดยอดรายบรรทัด (กรอกยอดเอง / คิดตาม %) ตรวจให้ครบก่อนเปิด transaction
+         * ยอดรวมต้องมาจากยอดที่ "ใช้จริง" หลังเลือกวิธีคิดแล้ว — ค่าใช้จ่าย % ที่แนบมาตอนออกบิลคิดจากก้อนนี้
+         * บรรทัดที่ไม่ได้ส่งมาใช้ค่าที่เก็บไว้กับรายการ (ค่าตั้งต้น หรือค่าที่เลือกไว้ก่อนยกเลิกบิลใบเดิม)
+         */
+        $plan            = self::planLineModes(array_column($entries, null, 'id'), $input['lines'] ?? []);
+        $effective       = $plan['entries'];
+        $grossTotal      = array_sum(array_map(static fn ($e) => (int) $e['gross_amount_satang'], $effective));
+        $commissionTotal = array_sum(array_map(static fn ($e) => (int) $e['commission_amount_satang'], $effective));
         $due             = ! empty($input['dueDate'])
             ? Period::assertDate($input['dueDate'], 'dueDate')
             : Period::addDays($period['end_date'], config(Paynest::class)->invoiceDueDays);
         $invoiceNo   = self::nextInvoiceNo($period['code'], $franchise['username']);
         $adjustments = $input['adjustments'] ?? [];
+        $attachments = InvoiceAttachmentService::prepare(null, $input['attachments'] ?? []);
 
-        return Db::tx(static function () use ($invoiceNo, $franchise, $period, $grossTotal, $commissionTotal, $due, $input, $bankAccount, $currency, $user, $entries, $adjustments) {
+        /*
+         * ออกบิลร้านไม่สร้างค่าคอมเซลแล้ว — ส่วนกลางทำ "บิลค่าคอม" ให้เซลทีหลัง โดยติ๊กเลือกบรรทัดจากบิลร้านที่ออกไปแล้ว
+         * (SalesAgentService::createCommissionBill) เจ้าของระบบ: แต่ละรอบจ่ายค่าคอมไม่เหมือนกัน
+         */
+        return Db::tx(static function () use ($invoiceNo, $franchise, $period, $grossTotal, $commissionTotal, $due, $input, $bankAccount, $currency, $user, $entries, $adjustments, $plan, $attachments) {
             $invoiceId = Db::insert(
                 'INSERT INTO invoices
                    (invoice_no, franchise_id, period_id, gross_total_satang, commission_total_satang,
@@ -292,20 +319,27 @@ final class InvoiceService
             foreach ($entries as $e) {
                 Db::exec("UPDATE sales_entries SET status = 'INVOICED', invoice_id = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?", [$invoiceId, $e['id']]);
             }
-            // ค่าใช้จ่ายอื่น/ส่วนลดที่แนบมาพร้อมตอนออกบิล
+            // สินค้ากลุ่ม: จดว่าในชุดมีอะไร ณ วันที่ออกบิล — แก้รายการย่อยทีหลังบิลใบนี้ไม่เปลี่ยน
+            SalesService::snapshotComponents($entries);
+            self::writeLineModes($plan['changes'], (int) $user['id']);
+
+            /*
+             * ค่าใช้จ่ายอื่น/ส่วนลดที่แนบมาพร้อมตอนออกบิล — คิด % จากยอดที่ใช้จริงแล้ว
+             * ไม่ใช้ refreshTotals ที่นี่ เพราะมันคิด % ใหม่ทับจำนวนเงินที่พิมพ์มาพร้อม % ตอนออกบิล
+             */
             foreach ($adjustments as $adj) {
                 self::insertAdjustment($invoiceId, $commissionTotal, $adj, $user);
             }
             self::recalc($invoiceId, $user);
 
-            // ค่าคอมของเซลที่ถือดีลของสินค้าในบิลนี้ (ดีลผูกกับสินค้า บิลใบเดียวจึงอาจมีค่าคอมของเซลหลายคน)
-            $commissionIds = SalesAgentService::createCommissionForInvoice(self::row($invoiceId), $period, (int) $user['id']);
+            InvoiceAttachmentService::insert($invoiceId, $attachments, (int) $user['id']);
 
             Audit::write((int) $user['id'], 'invoice.create', 'invoice', $invoiceId, [
-                'invoiceNo'          => $invoiceNo,
-                'lines'              => count($entries),
-                'adjustments'        => count($adjustments),
-                'salesCommissionIds' => $commissionIds,
+                'invoiceNo'   => $invoiceNo,
+                'lines'       => count($entries),
+                'adjustments' => count($adjustments),
+                'lineModes'   => $plan['audit'],
+                'attachments' => ['count' => count($attachments), 'urls' => array_column($attachments, 'url')],
             ]);
 
             return self::get($invoiceId, $user);
@@ -317,52 +351,225 @@ final class InvoiceService
      *
      * มีเพราะหนึ่งรอบบิลออกได้ใบเดียว — ถ้ากรอกยอดเพิ่มทีหลังหรือตอนออกบิลไม่ได้ติ๊กครบ
      * รายการที่เหลือต้องมีทางขึ้นบิล ไม่งั้นจะค้างเก็บเงินไม่ได้ตลอดไป
-     * ค่าใช้จ่าย/ส่วนลดที่คิดเป็น % ถูกคำนวณใหม่ตามส่วนต่างก้อนใหม่ และค่าคอมเซลถูกคิดใหม่ด้วย
+     * ค่าใช้จ่าย/ส่วนลดที่คิดเป็น % ถูกคำนวณใหม่ตามส่วนต่างก้อนใหม่
+     * เลือกวิธีคิดยอด (lines) ของรายการที่กำลังเพิ่มได้ เหมือนตอนออกบิล
+     * รายการที่เพิ่มเข้ามาไปโผล่ในหน้า "ทำบิลค่าคอม" ของเซลที่ถือดีลเอง — ไม่มีค่าคอมเกิดตรงนี้
      */
-    public static function addEntries(int $invoiceId, ?array $entryIds, array $user): array
+    public static function addEntries(int $invoiceId, ?array $entryIds, array $user, array $lines = []): array
     {
+        // ตรวจรอบแรกนอกทรานแซกชัน = ตอบ error ได้ทันทีไม่ต้องรอล็อก · ตัวที่ตัดสินจริงคือรอบหลังล็อกบิลข้างล่าง
         $inv = self::row($invoiceId);
         self::assertEditable($inv);
-        $pending = Db::all("SELECT * FROM sales_entries WHERE franchise_id = ? AND period_id = ? AND status <> 'INVOICED' ORDER BY id", [$inv['franchise_id'], $inv['period_id']]);
-        if ($pending === []) {
-            throw ApiException::badRequest('ไม่มีรายการที่ยังไม่ได้เรียกเก็บในรอบนี้');
-        }
-        $picked = $pending;
-        if ($entryIds !== null) {
-            $wanted = array_values(array_unique(array_map('intval', $entryIds)));
-            if ($wanted === []) {
-                throw ApiException::badRequest('ต้องเลือกอย่างน้อยหนึ่งรายการ');
-            }
-            $byId    = array_column($pending, null, 'id');
-            $missing = array_values(array_filter($wanted, static fn ($id) => ! isset($byId[$id])));
-            if ($missing !== []) {
-                throw ApiException::badRequest('รายการที่เลือกไม่อยู่ในรอบนี้ของร้านนี้ หรือออกบิลไปแล้ว (id: ' . implode(', ', $missing) . ')');
-            }
-            $picked = array_map(static fn ($id) => $byId[$id], $wanted);
-        }
+        self::planLineModes(array_column(self::pickPending($inv, $entryIds), null, 'id'), $lines);
 
-        return Db::tx(static function () use ($invoiceId, $inv, $picked, $user) {
+        return Db::tx(static function () use ($invoiceId, $entryIds, $user, $lines) {
+            /*
+             * ล็อกบิลก่อน แล้วเลือกรายการ/คิดยอดใหม่จากข้อมูลหลังได้ล็อก — อีกจอที่เพิ่มรายการเดียวกันเข้าบิลนี้
+             * commit ไปแล้วก็เห็น (ไม่งั้นรายการเดียวถูกนับสองครั้ง หรือยอดรวมทับกันเหลือของจอเดียว)
+             */
+            $inv    = self::lockEditable($invoiceId);
+            $picked = self::pickPending($inv, $entryIds);
+            $plan   = self::planLineModes(array_column($picked, null, 'id'), $lines);
             foreach ($picked as $e) {
-                Db::exec("UPDATE sales_entries SET status = 'INVOICED', invoice_id = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?", [$invoiceId, $e['id']]);
+                // บิลใบอื่น (ออกบิลใหม่ของรอบเดียวกัน) ไม่ได้ล็อกบิลใบนี้ — กันรายการที่เพิ่งขึ้นบิลอื่นไปแล้วถูกย้ายมาเงียบ ๆ
+                $moved = Db::exec(
+                    "UPDATE sales_entries SET status = 'INVOICED', invoice_id = ?, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status <> 'INVOICED'",
+                    [$invoiceId, $e['id']],
+                );
+                if ($moved !== 1) {
+                    throw ApiException::conflict("รายการ {$e['sku']} เพิ่งถูกออกบิลไปแล้ว — โหลดหน้าใหม่แล้วลองอีกครั้ง");
+                }
             }
-            $gross      = (int) $inv['gross_total_satang'] + array_sum(array_map(static fn ($e) => (int) $e['gross_amount_satang'], $picked));
-            $commission = (int) $inv['commission_total_satang'] + array_sum(array_map(static fn ($e) => (int) $e['commission_amount_satang'], $picked));
-            Db::exec('UPDATE invoices SET gross_total_satang = ?, commission_total_satang = ? WHERE id = ?', [$gross, $commission, $invoiceId]);
+            SalesService::snapshotComponents($picked); // เหมือนตอนออกบิล — จดรายการย่อยของสินค้ากลุ่ม ณ ตอนเพิ่มเข้าบิล
+            self::writeLineModes($plan['changes'], (int) $user['id']);
 
-            // รายการที่คิดเป็น % ต้องเดินตามส่วนต่างก้อนใหม่ ไม่งั้นยอดจะเพี้ยน
-            foreach (Db::all('SELECT id, pct_bp FROM invoice_adjustments WHERE invoice_id = ? AND pct_bp IS NOT NULL', [$invoiceId]) as $a) {
-                Db::exec('UPDATE invoice_adjustments SET amount_satang = ? WHERE id = ?', [Money::commissionOf($commission, (int) $a['pct_bp']), $a['id']]);
-            }
-            self::recalc($invoiceId, $user);
+            // รวมยอดใหม่จากรายการในบิลทั้งหมด (ไม่บวกต่อจากยอดเดิม) — % ค่าใช้จ่ายเดินตามส่วนต่างก้อนใหม่ในนั้นด้วย
+            self::refreshTotals($invoiceId, $user);
 
-            // คิดค่าคอมเซลใหม่ให้ตรงยอด (ของที่จ่ายให้เซลไปแล้วไม่ถูกแตะ)
-            $period = Db::one('SELECT * FROM billing_periods WHERE id = ?', [$inv['period_id']]);
-            SalesAgentService::recalcCommissionForInvoice(self::row($invoiceId), $period, (int) $user['id']);
-
-            Audit::write((int) $user['id'], 'invoice.add_lines', 'invoice', $invoiceId, ['added' => count($picked), 'gross' => $gross, 'commission' => $commission]);
+            $fresh = self::row($invoiceId);
+            Audit::write((int) $user['id'], 'invoice.add_lines', 'invoice', $invoiceId, [
+                'added'      => count($picked),
+                'gross'      => (int) $fresh['gross_total_satang'],
+                'commission' => (int) $fresh['commission_total_satang'],
+                'lineModes'  => $plan['audit'],
+            ]);
 
             return self::get($invoiceId, $user);
         });
+    }
+
+    /**
+     * แก้วิธีคิดยอดของบรรทัดเดียวในบิลที่ยังแก้ได้ (ยังไม่มีเงินเข้า · ไม่มีสลิปรอตรวจ · ไม่ถูกยกเลิก)
+     * บรรทัดต้องเป็นของบิลใบนี้จริง — ไม่งั้นแค่ใส่ id บิลที่แก้ได้ ก็เอื้อมไปแก้บรรทัดของบิลที่จ่ายแล้วได้
+     */
+    public static function updateLine(int $invoiceId, int $entryId, array $input, array $user): array
+    {
+        self::assertEditable(self::row($invoiceId));
+
+        return Db::tx(static function () use ($invoiceId, $entryId, $input, $user) {
+            // ล็อกบิลก่อนแตะบรรทัด — สองจอแก้คนละบรรทัดของบิลเดียวพร้อมกัน ยอดรวมต้องรวมของทั้งสองจอ (ดู lockEditable)
+            self::lockEditable($invoiceId);
+            $entry = Db::one(
+                'SELECT se.*, p.sku FROM sales_entries se JOIN products p ON p.id = se.product_id
+                  WHERE se.id = ? AND se.invoice_id = ? FOR UPDATE',
+                [$entryId, $invoiceId],
+            ) ?? throw ApiException::notFound('ไม่พบรายการนี้ในบิล');
+
+            $plan = self::planLineModes([$entryId => $entry], [['entryId' => $entryId, ...$input]]);
+            if ($plan['changes'] === []) {
+                return self::get($invoiceId, $user); // ค่าเดิมทุกอย่าง ไม่ต้องคิดใหม่หรือจดประวัติ
+            }
+            /*
+             * ไม่แตะบิลค่าคอมเซล — ค่าคอมคิดจากยอดขายเต็ม (ไม่ใช่ส่วนต่างที่แก้ตรงนี้) และบรรทัดในบิลค่าคอมเก็บยอดเต็มไว้แล้ว
+             * ยอดเต็มของบรรทัดที่อยู่ในบิลร้านแก้ไม่ได้อยู่แล้ว (ต้องยกเลิกบิลร้านก่อน)
+             */
+            self::writeLineModes($plan['changes'], (int) $user['id']);
+            self::refreshTotals($invoiceId, $user);
+
+            Audit::write((int) $user['id'], 'invoice.line.update', 'invoice', $invoiceId, $plan['audit'][0]);
+
+            return self::get($invoiceId, $user);
+        });
+    }
+
+    /* ── วิธีคิดยอดรายบรรทัด (กรอกยอดเอง / คิดตาม %) ─────────────────── */
+
+    /** กันตัวเลขยาวผิดปกติ — Money::toSatang กับเลขที่เกิน int64 พังเป็น 500 แทนที่จะบอกผู้ใช้ */
+    private const MAX_MANUAL_BAHT = 100_000_000;
+
+    /**
+     * ตรวจและคิดยอดของแต่ละบรรทัดตามวิธีที่เลือก — ยังไม่เขียนอะไรลงฐานข้อมูล
+     * แยกตัวคิดกับตัวเขียน เพื่อให้ตรวจ input ครบทุกบรรทัดก่อนเปิด transaction
+     * และให้ generate เอายอดที่ใช้จริงไปตั้งยอดรวมได้ตั้งแต่ INSERT แรก
+     *
+     *   PCT     ส่วนต่าง = ยอดเต็ม × % (ไม่ส่ง % = ใช้ % ที่เก็บไว้กับรายการ)
+     *   MANUAL  ส่วนต่าง = จำนวนที่กรอก · % เดิมเก็บไว้เฉย ๆ เป็นข้อมูลประกอบ
+     *
+     * @param array<int, array>                                                     $entriesById แถว sales_entries (+ sku) ของบรรทัดที่กำลังออกบิล/แก้
+     * @param list<array{entryId: int, mode: string, pct?: mixed, amount?: mixed}> $lines
+     *
+     * @return array{entries: array<int, array>, changes: list<array>, audit: list<array>}
+     */
+    private static function planLineModes(array $entriesById, array $lines): array
+    {
+        $entries = $entriesById;
+        $changes = [];
+        $audit   = [];
+        $seen    = [];
+        foreach ($lines as $line) {
+            $id = (int) $line['entryId'];
+            if (! isset($entries[$id])) {
+                throw ApiException::badRequest("รายการ id {$id} ไม่ได้อยู่ในรายการที่เลือกออกบิล");
+            }
+            if (isset($seen[$id])) {
+                throw ApiException::badRequest("รายการ id {$id} ถูกส่งมาซ้ำ — แต่ละบรรทัดเลือกวิธีคิดยอดได้ครั้งเดียว");
+            }
+            $seen[$id] = true;
+            $e         = $entries[$id];
+            $sku       = $e['sku'] ?? "id {$id}";
+            $gross     = (int) $e['gross_amount_satang'];
+            $mode      = $line['mode'];
+            $pctBp     = (int) $e['commission_pct_bp'];
+
+            if ($mode === 'PCT') {
+                if (array_key_exists('amount', $line)) {
+                    throw ApiException::badRequest("สินค้า {$sku}: เลือก \"คิดตาม %\" ไม่ต้องใส่จำนวนเงิน — ถ้าจะกำหนดยอดเองให้เลือก \"กรอกยอดเอง\"");
+                }
+                if (array_key_exists('pct', $line)) {
+                    $pctBp = Money::pctToBp($line['pct'], "pct (สินค้า {$sku})");
+                }
+                $amount = Money::commissionOf($gross, $pctBp);
+            } elseif ($mode === 'MANUAL') {
+                if (array_key_exists('pct', $line)) {
+                    throw ApiException::badRequest("สินค้า {$sku}: เลือก \"กรอกยอดเอง\" ไม่ต้องใส่ % — ใส่แค่จำนวนเงินที่เรียกเก็บ");
+                }
+                if (! array_key_exists('amount', $line)) {
+                    throw ApiException::badRequest("สินค้า {$sku}: เลือก \"กรอกยอดเอง\" ต้องใส่จำนวนเงิน");
+                }
+                $amount = self::manualSatang($line['amount'], $sku);
+                /*
+                 * ยอดที่กรอกต้องอยู่ระหว่าง 0 ถึงยอดเต็ม และเครื่องหมายเดียวกับยอดเต็ม
+                 * กันพิมพ์ "-" หลงบนบรรทัดขายปกติ — ยอดบิลติดลบกลายเป็นเครดิตที่เราติดค้างร้านจริง ๆ
+                 * และพอเครดิตถูกหักไปใช้ บิลใบนี้จะแก้/ยกเลิกไม่ได้อีก
+                 */
+                if ($amount !== 0 && (($amount > 0) !== ($gross > 0) || abs($amount) > abs($gross))) {
+                    throw ApiException::badRequest("สินค้า {$sku}: ยอดที่เรียกเก็บต้องอยู่ระหว่าง 0 ถึงยอดเงินเต็ม (" . Money::fmtSatang($gross) . ' บาท)');
+                }
+            } else {
+                throw ApiException::badRequest("สินค้า {$sku}: วิธีคิดยอดต้องเป็น PCT หรือ MANUAL");
+            }
+
+            $from = (int) $e['commission_amount_satang'];
+            if ($mode === ($e['bill_mode'] ?? 'PCT') && $pctBp === (int) $e['commission_pct_bp'] && $amount === $from) {
+                continue; // ค่าเดิม — ไม่ต้องเขียนหรือจดประวัติ
+            }
+            $changes[] = ['id' => $id, 'bill_mode' => $mode, 'commission_pct_bp' => $pctBp, 'commission_amount_satang' => $amount];
+            $audit[]   = [
+                'entryId'    => $id,
+                'sku'        => $sku,
+                'mode'       => $mode,
+                'fromMode'   => $e['bill_mode'] ?? 'PCT',
+                'pctBp'      => $mode === 'PCT' ? $pctBp : null,
+                'amount'     => Money::toBaht($amount),
+                'fromAmount' => Money::toBaht($from),
+            ];
+            $entries[$id] = [...$e, 'bill_mode' => $mode, 'commission_pct_bp' => $pctBp, 'commission_amount_satang' => $amount];
+        }
+
+        return ['entries' => $entries, 'changes' => $changes, 'audit' => $audit];
+    }
+
+    /** เขียนผลของ planLineModes — เรียกภายใน transaction เท่านั้น */
+    private static function writeLineModes(array $changes, int $actorUserId): void
+    {
+        foreach ($changes as $c) {
+            Db::exec(
+                'UPDATE sales_entries
+                    SET bill_mode = ?, commission_pct_bp = ?, commission_amount_satang = ?,
+                        updated_by_user_id = ?, updated_at = UTC_TIMESTAMP()
+                  WHERE id = ?',
+                [$c['bill_mode'], $c['commission_pct_bp'], $c['commission_amount_satang'], $actorUserId, $c['id']],
+            );
+        }
+    }
+
+    private static function manualSatang(mixed $amount, string $sku): int
+    {
+        $raw = is_string($amount) ? str_replace(',', '', trim($amount)) : $amount;
+        if (is_numeric($raw) && abs((float) $raw) > self::MAX_MANUAL_BAHT) {
+            throw ApiException::badRequest("สินค้า {$sku}: จำนวนเงินเกินกำหนด (ไม่เกิน " . Money::fmt(self::MAX_MANUAL_BAHT) . ' บาท)');
+        }
+        $satang = Money::toSatang($amount, "amount (สินค้า {$sku})");
+        if (abs($satang) > self::MAX_MANUAL_BAHT * 100) {
+            throw ApiException::badRequest("สินค้า {$sku}: จำนวนเงินเกินกำหนด (ไม่เกิน " . Money::fmt(self::MAX_MANUAL_BAHT) . ' บาท)');
+        }
+
+        return $satang;
+    }
+
+    /**
+     * รวมยอดเต็ม/ส่วนต่างของบิลใหม่จากรายการในบิลทั้งหมด แล้วคิดยอดสุทธิใหม่
+     * ใช้หลังรายการในบิลเปลี่ยน (เพิ่มรายการ · แก้วิธีคิดยอด)
+     *
+     * ค่าใช้จ่าย/ส่วนลดที่ตั้งเป็น % ถูกคิดใหม่จากส่วนต่างก้อนใหม่ทุกแถว — รวมแถวที่ตอนเพิ่มพิมพ์จำนวนเงินมาพร้อม %
+     * (ทับจำนวนที่พิมพ์ แบบเดียวกับการเพิ่มรายการที่ทำมาแต่เดิม)
+     * รอบที่ส่วนต่างติดลบ % ของมันเป็น 0 — ค่าใช้จ่าย/ส่วนลดติดลบไม่มีความหมาย (และฐานข้อมูลไม่รับ)
+     */
+    private static function refreshTotals(int $invoiceId, ?array $user): void
+    {
+        $sums = Db::one(
+            'SELECT COALESCE(SUM(gross_amount_satang), 0) AS gross, COALESCE(SUM(commission_amount_satang), 0) AS commission
+               FROM sales_entries WHERE invoice_id = ?',
+            [$invoiceId],
+        );
+        $gross      = (int) $sums['gross'];
+        $commission = (int) $sums['commission'];
+        Db::exec('UPDATE invoices SET gross_total_satang = ?, commission_total_satang = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?', [$gross, $commission, $invoiceId]);
+
+        foreach (Db::all('SELECT id, pct_bp FROM invoice_adjustments WHERE invoice_id = ? AND pct_bp IS NOT NULL', [$invoiceId]) as $a) {
+            Db::exec('UPDATE invoice_adjustments SET amount_satang = ? WHERE id = ?', [max(0, Money::commissionOf($commission, (int) $a['pct_bp'])), $a['id']]);
+        }
+        self::recalc($invoiceId, $user);
     }
 
     private static function nextInvoiceNo(string $periodCode, string $franchiseUsername): string
@@ -427,6 +634,48 @@ final class InvoiceService
     }
 
     /**
+     * ล็อกหัวบิลเป็นคำสั่งแรกของทรานแซกชันที่แก้ยอด แล้วตรวจว่ายังแก้ได้จากแถวที่ล็อกแล้ว — ใช้กับทุกทางที่เรียก refreshTotals/recalc
+     *
+     * ทำไมต้องเป็นคำสั่งแรก: InnoDB (REPEATABLE READ) สร้างภาพข้อมูลของทรานแซกชันตอน SELECT ธรรมดาครั้งแรก
+     * ถ้าอ่านอะไรก่อนได้ล็อก ยอดที่ SUM ทีหลังจะไม่เห็นของอีกจอที่เพิ่ง commit — สองจอแก้คนละบรรทัดพร้อมกัน
+     * จอหลังเขียนยอดรวมทับด้วยตัวเลขที่ขาดบรรทัดของจอแรก (บิลเก็บเงินร้านผิดจนกว่าจะมีคนแก้บิลอีกครั้ง)
+     * ยกเลิกบิล (void) ล็อกแถวเดียวกันนี้ จึงเข้าคิวกันหมด
+     */
+    private static function lockEditable(int $invoiceId): array
+    {
+        $inv = Db::one('SELECT * FROM invoices WHERE id = ? FOR UPDATE', [$invoiceId]) ?? throw ApiException::notFound('ไม่พบใบเรียกเก็บ');
+        self::assertEditable($inv);
+
+        return $inv;
+    }
+
+    /**
+     * รายการที่จะเติมเข้าบิล: ไม่ส่ง entryIds = ทุกรายการที่ยังไม่ขึ้นบิลของร้าน/รอบนี้ · ส่งมา = ต้องอยู่ในนั้นทุกตัว
+     * เรียกสองรอบ (ก่อนและหลังล็อกบิล) — รอบหลังคือตัวตัดสิน
+     */
+    private static function pickPending(array $inv, ?array $entryIds): array
+    {
+        $pending = self::pendingEntries((int) $inv['franchise_id'], (int) $inv['period_id']);
+        if ($pending === []) {
+            throw ApiException::badRequest('ไม่มีรายการที่ยังไม่ได้เรียกเก็บในรอบนี้');
+        }
+        if ($entryIds === null) {
+            return $pending;
+        }
+        $wanted = array_values(array_unique(array_map('intval', $entryIds)));
+        if ($wanted === []) {
+            throw ApiException::badRequest('ต้องเลือกอย่างน้อยหนึ่งรายการ');
+        }
+        $byId    = array_column($pending, null, 'id');
+        $missing = array_values(array_filter($wanted, static fn ($id) => ! isset($byId[$id])));
+        if ($missing !== []) {
+            throw ApiException::badRequest('รายการที่เลือกไม่อยู่ในรอบนี้ของร้านนี้ หรือออกบิลไปแล้ว (id: ' . implode(', ', $missing) . ')');
+        }
+
+        return array_map(static fn ($id) => $byId[$id], $wanted);
+    }
+
+    /**
      * บิลที่ส่งไปแล้วและมีความเคลื่อนไหวเรื่องเงินแล้ว ห้ามแก้ยอด
      * ไม่งั้นสิ่งที่ร้านเห็นตอนจ่าย กับยอดในระบบจะไม่ตรงกัน แล้วตามหลังยาก
      */
@@ -454,11 +703,12 @@ final class InvoiceService
 
     public static function addAdjustment(int $invoiceId, array $input, array $user): array
     {
-        $inv = self::row($invoiceId);
-        self::assertEditable($inv);
+        self::assertEditable(self::row($invoiceId));
 
-        return Db::tx(static function () use ($invoiceId, $inv, $input, $user) {
-            $id = self::insertAdjustment($invoiceId, (int) $inv['commission_total_satang'], $input, $user);
+        return Db::tx(static function () use ($invoiceId, $input, $user) {
+            // % คิดจากส่วนต่างของแถวที่ล็อกแล้ว — ไม่ใช่ค่าที่อ่านก่อนเปิดทรานแซกชัน (อีกจออาจเพิ่งแก้บรรทัดไป)
+            $inv = self::lockEditable($invoiceId);
+            $id  = self::insertAdjustment($invoiceId, (int) $inv['commission_total_satang'], $input, $user);
             self::recalc($invoiceId, $user);
             Audit::write((int) $user['id'], 'invoice.adjustment.add', 'invoice', $invoiceId, ['adjustmentId' => $id, 'label' => $input['label'] ?? null]);
 
@@ -467,16 +717,37 @@ final class InvoiceService
     }
 
     /**
+     * การแก้หัวบิลครั้งนี้เปลี่ยนบัญชีที่ให้ร้านโอนเข้าไหม — controller ใช้ตัดสินว่าต้องยืนยันรหัส 6 หลักก่อนหรือไม่
+     * (แบบเดียวกับ BankAccountService::changes) ส่งค่าเดิมมาหรือไม่ได้ส่งมา = ไม่เปลี่ยน
+     */
+    public static function changesBankAccount(int $id, array $patch): bool
+    {
+        if (! array_key_exists('bankAccountId', $patch)) {
+            return false;
+        }
+        $current = self::row($id)['bank_account_id'];
+
+        return ($patch['bankAccountId'] === null ? null : (int) $patch['bankAccountId']) !== ($current === null ? null : (int) $current);
+    }
+
+    /**
      * แก้ข้อมูลหัวบิลที่ไม่เกี่ยวกับตัวเลขยอดขาย — บัญชีปลายทาง วันครบกำหนด หมายเหตุ สกุลที่ให้จ่าย
      * กติกาเดียวกับการแก้ยอด: แก้ได้เฉพาะตอนที่ยังไม่มีเงินเข้าและไม่มีสลิปรอตรวจ
      * (ถ้าร้านโอนไปแล้ว การเปลี่ยนบัญชีปลายทางจะทำให้สลิปที่ถืออยู่ไม่ตรงกับบิล)
+     *
+     * เปลี่ยนบัญชีปลายทาง = เปลี่ยนว่าเงินไปเข้าที่ไหน จึงแจ้งกลุ่ม Telegram ส่วนกลาง (ปิดไม่ได้) และขึ้นแถบเตือนในเว็บ
+     * แต่ "ไม่" ส่งเลขบัญชีใหม่ให้ร้านเอง — ข้อความ Telegram ที่ร้านถืออยู่คือหลักฐานนอกระบบที่ร้านใช้เทียบก่อนโอน
+     * ถ้าระบบส่งบัญชีใหม่ให้ทันที คนที่ยึดบัญชีแอดมินได้ก็ใช้ระบบบอกร้านให้โอนเข้าบัญชีตัวเองได้ในคลิกเดียว
+     * ร้านจึงเห็น "ไม่ตรงกับ Telegram" จนกว่าส่วนกลางตรวจแล้วกด "ส่งเลขบัญชีให้ร้าน" เอง (notifyAccount)
      */
     public static function updateHeader(int $id, array $patch, array $user): array
     {
         $inv = self::row($id);
         self::assertEditable($inv);
-        $sets   = [];
-        $params = [];
+        $sets        = [];
+        $params      = [];
+        $bankChanged = false;
+        $newBankId   = null;
 
         /*
          * เปลี่ยนสกุลที่ให้ร้านจ่าย — ยอดในฐานข้อมูลยังเป็นบาทเท่าเดิม แค่เปลี่ยนตัวที่ร้านเห็นและโอน
@@ -502,14 +773,16 @@ final class InvoiceService
          * เปลี่ยนสกุลอย่างเดียวโดยไม่เลือกบัญชีใหม่ = บัญชีเดิมต้องผ่านด่านนี้ด้วย ไม่งั้นบิลจะชี้บัญชีผิดสกุล
          */
         if (array_key_exists('bankAccountId', $patch)) {
-            $sets[]   = 'bank_account_id = ?';
-            $params[] = $patch['bankAccountId'] === null ? null : BankAccountService::assertUsable((int) $patch['bankAccountId'], $currency);
+            $newBankId   = $patch['bankAccountId'] === null ? null : BankAccountService::assertUsable((int) $patch['bankAccountId'], $currency);
+            $bankChanged = $newBankId !== ($inv['bank_account_id'] === null ? null : (int) $inv['bank_account_id']);
+            $sets[]      = 'bank_account_id = ?';
+            $params[]    = $newBankId;
         } elseif ($currency !== $inv['currency'] && $inv['bank_account_id']) {
             // เช็กแค่สกุล ไม่เช็กสถานะ เพราะบัญชีที่ปิดใช้งานทีหลังไม่ใช่ความผิดของบิลใบนี้
             $cur = Db::one('SELECT * FROM bank_accounts WHERE id = ?', [$inv['bank_account_id']]);
             if ($cur !== null && $cur['currency'] !== $currency) {
                 throw ApiException::badRequest(
-                    'บิลใบนี้ผูกบัญชี' . BankAccountService::CURRENCY_LABEL[$cur['currency']] . " ({$cur['bank_name']} {$cur['account_number']}) อยู่ "
+                    'บิลใบนี้ผูกบัญชี' . BankAccountService::CURRENCY_LABEL[$cur['currency']] . ' (' . BankAccountService::labelOf($cur) . ') อยู่ '
                     . '— เปลี่ยนเป็นสกุล' . BankAccountService::CURRENCY_LABEL[$currency] . ' ต้องเลือกบัญชีที่รับสกุลนั้นพร้อมกันด้วย',
                 );
             }
@@ -529,20 +802,67 @@ final class InvoiceService
         }
         $sets[]   = 'updated_at = UTC_TIMESTAMP()';
         $params[] = $id;
-        Db::exec('UPDATE invoices SET ' . implode(', ', $sets) . ' WHERE id = ?', $params);
-        Audit::write((int) $user['id'], 'invoice.update', 'invoice', $id, $patch);
+        // แถวก่อนแก้ (มีชื่อร้าน/บัญชีเดิม) ไว้เขียนข้อความแจ้งเตือนว่า "จากอะไร เป็นอะไร"
+        $before = $bankChanged ? Db::one(self::SELECT_INVOICE . ' WHERE i.id = ?', [$id]) : null;
+
+        Db::tx(static function () use ($id, $sets, $params, $patch, $user, $inv, $bankChanged, $newBankId, $before) {
+            Db::exec('UPDATE invoices SET ' . implode(', ', $sets) . ' WHERE id = ?', $params);
+            Audit::write((int) $user['id'], 'invoice.update', 'invoice', $id, $patch);
+            if (! $bankChanged) {
+                return;
+            }
+            $oldBank = $inv['bank_account_id'] ? Db::one('SELECT * FROM bank_accounts WHERE id = ?', [$inv['bank_account_id']]) : null;
+            $newBank = $newBankId ? Db::one('SELECT * FROM bank_accounts WHERE id = ?', [$newBankId]) : null;
+            Audit::write((int) $user['id'], 'invoice.bank_account', 'invoice', $id, [
+                'fromId'    => $oldBank === null ? null : (int) $oldBank['id'],
+                'fromLabel' => $oldBank === null ? null : NotificationService::snapshotLabel(NotificationService::bankSnapshotFromRow($oldBank)),
+                'toId'      => $newBankId,
+                'toLabel'   => $newBank === null ? null : NotificationService::snapshotLabel(NotificationService::bankSnapshotFromRow($newBank)),
+            ]);
+            // ในทรานแซกชันเดียวกัน — แถวแจ้งเตือนในเว็บต้องมีเสมอเมื่อการเปลี่ยนบัญชีบันทึกสำเร็จ
+            NotificationService::invoiceAccountChanged($before, $oldBank, $newBank, $user);
+        });
 
         return self::get($id, $user);
     }
 
+    /**
+     * ส่งเลขบัญชีปัจจุบันของบิลให้ร้านทาง Telegram — ส่วนกลางกดเองหลังตรวจแล้วว่าบัญชีถูกต้อง
+     * (ต้องยืนยันรหัส 6 หลัก: ข้อความนี้คือสิ่งที่ร้านใช้ตัดสินว่าจะโอนเข้าบัญชีไหน)
+     * ถ้าบัญชีต่างจากที่เคยแจ้งร้าน NotificationService แจ้งกลุ่มส่วนกลางด้วย ว่ามีการส่งบัญชีใหม่ออกไปแล้ว
+     */
+    public static function notifyAccount(int $id, array $user): array
+    {
+        $inv = self::row($id);
+        if ($inv['status'] === 'VOID') {
+            throw ApiException::conflict('บิลนี้ถูกยกเลิกแล้ว — ไม่ต้องส่งเลขบัญชีให้ร้าน');
+        }
+        if ((int) $inv['net_total_satang'] - (int) $inv['paid_satang'] <= 0) {
+            throw ApiException::conflict('บิลนี้ไม่มียอดค้างแล้ว — ไม่ต้องส่งเลขบัญชีให้ร้าน');
+        }
+        if (! TelegramService::isConfigured()) {
+            throw ApiException::badRequest('ยังไม่ได้ตั้งค่า Telegram ของระบบ — ตั้งค่าที่หน้า "ตั้งค่าแจ้งเตือน" ก่อน หรือแจ้งเลขบัญชีกับร้านโดยตรง');
+        }
+        $result = NotificationService::notifyBillAccount($id, $user);
+        Audit::write((int) $user['id'], 'invoice.notify_account', 'invoice', $id, [
+            'sent'     => $result['sent'],
+            'changed'  => $result['changed'],
+            'account'  => $result['current'],
+            'previous' => $result['previous'],
+        ]);
+
+        return ['sent' => $result['sent'], 'changed' => $result['changed'], 'invoice' => self::get($id, $user)];
+    }
+
     public static function removeAdjustment(int $invoiceId, int $adjustmentId, array $user): array
     {
-        $inv = self::row($invoiceId);
-        self::assertEditable($inv);
-        $row = Db::one('SELECT * FROM invoice_adjustments WHERE id = ? AND invoice_id = ?', [$adjustmentId, $invoiceId])
-            ?? throw ApiException::notFound('ไม่พบรายการในใบเรียกเก็บนี้');
+        self::assertEditable(self::row($invoiceId));
 
-        return Db::tx(static function () use ($invoiceId, $adjustmentId, $row, $user) {
+        return Db::tx(static function () use ($invoiceId, $adjustmentId, $user) {
+            self::lockEditable($invoiceId);
+            // อ่านหลังล็อก — อีกจอเพิ่งลบแถวนี้ไปแล้ว = 404 ไม่ใช่คิดยอดใหม่ซ้ำ
+            $row = Db::one('SELECT * FROM invoice_adjustments WHERE id = ? AND invoice_id = ?', [$adjustmentId, $invoiceId])
+                ?? throw ApiException::notFound('ไม่พบรายการในใบเรียกเก็บนี้');
             Db::exec('DELETE FROM invoice_adjustments WHERE id = ?', [$adjustmentId]);
             self::recalc($invoiceId, $user);
             Audit::write((int) $user['id'], 'invoice.adjustment.remove', 'invoice', $invoiceId, ['label' => $row['label']]);
@@ -596,9 +916,45 @@ final class InvoiceService
             'status'       => $s['status'],
             'rejectReason' => $s['reject_reason'],
             'createdAt'    => $s['created_at'],
+            // ร้านยืนยันว่าตรวจเลขบัญชีกับ Telegram แล้ว + บัญชีที่บิลชี้อยู่ตอนแจ้ง — หลักฐานเวลามีข้อโต้แย้งเรื่องโอนผิดบัญชี
+            'accountConfirmedAt' => $s['account_confirmed_at'] ?? null,
+            'bankAccountLabel'   => PaymentSubmissionService::bankLabelOf($s['bank_snapshot'] ?? null),
         ], Db::all('SELECT * FROM payment_submissions WHERE invoice_id = ? ORDER BY created_at DESC, id DESC', [$id]));
 
-        return [...self::serialize($row), 'lines' => $lines, 'adjustments' => $adjustments, 'payments' => $payments, 'submissions' => $submissions];
+        $out = [
+            ...self::serialize($row),
+            'lines'       => $lines,
+            'adjustments' => $adjustments,
+            'payments'    => $payments,
+            'submissions' => $submissions,
+            // get() ตรวจแล้วว่าเป็นบิลของร้านนี้ ร้านจึงได้ลิงก์เฉพาะรูปของบิลตัวเอง
+            'attachments' => InvoiceAttachmentService::listFor($id),
+        ];
+        if (AuthContext::isSuperAdmin($user)) {
+            $out['telegramAccount'] = self::telegramAccount($row);
+        }
+
+        return $out;
+    }
+
+    /**
+     * บัญชีที่ส่งเข้า Telegram ของร้านล่าสุด เทียบกับบัญชีที่บิลชี้อยู่ตอนนี้ — ส่วนกลางเท่านั้น
+     * null = ยังไม่เคยส่งเลขบัญชีของบิลนี้ให้ร้านเลย (ร้านอาจยังไม่ได้เชื่อม Telegram)
+     * "ส่งแล้ว" คือเข้าคิวส่งแล้ว ไม่ได้แปลว่าร้านเปิดอ่านแล้ว
+     */
+    private static function telegramAccount(array $row): ?array
+    {
+        $snapshot = NotificationService::notifiedSnapshot($row);
+        if ($snapshot === null) {
+            return null;
+        }
+
+        return [
+            'sentAt'  => $row['notified_bank_at'],
+            'matches' => NotificationService::accountCheck($row) === 'MATCH',
+            'account' => $snapshot,
+            'label'   => NotificationService::snapshotLabel($snapshot),
+        ];
     }
 
     public static function list(array $filters, array $user): array
@@ -721,7 +1077,10 @@ final class InvoiceService
         });
     }
 
-    /** ยกเลิกใบเรียกเก็บ คืนรายการยอดขายเป็น APPROVED และยกเลิกค่าคอมเซลที่ผูกอยู่ */
+    /**
+     * ยกเลิกใบเรียกเก็บ คืนรายการยอดขายเป็น APPROVED และจัดการค่าคอมเซลที่อ้างบิลนี้
+     * (แถวแบบเก่ายกเลิกตาม · บิลค่าคอมที่ยังไม่จ่ายถูกถอดรายการของบิลนี้ออก · บิลค่าคอมที่จ่ายแล้วไม่แตะ)
+     */
     public static function void(int $id, string $reason, array $user): array
     {
         $inv = self::row($id);
@@ -733,9 +1092,14 @@ final class InvoiceService
         }
 
         return Db::tx(static function () use ($id, $reason, $inv, $user) {
+            /*
+             * ล็อกบิลก่อนอย่างอื่น — การทำบิลค่าคอมล็อกบิลร้านเดียวกันก่อนเพิ่มรายการ
+             * สองทางนี้จึงเข้าคิวกัน ไม่มีรายการค่าคอมผูกกับบิลที่เพิ่งถูกยกเลิกค้างอยู่
+             */
+            Db::one('SELECT id FROM invoices WHERE id = ? FOR UPDATE', [$id]);
             Db::exec("UPDATE sales_entries SET status = 'APPROVED', invoice_id = NULL, updated_at = UTC_TIMESTAMP() WHERE invoice_id = ?", [$id]);
             Db::exec("UPDATE payment_submissions SET status = 'CANCELLED', updated_at = UTC_TIMESTAMP() WHERE invoice_id = ? AND status = 'PENDING'", [$id]);
-            SalesAgentService::voidCommissionsForInvoice($id, (int) $user['id']);
+            SalesAgentService::onInvoiceVoided($id, (int) $user['id']);
             /*
              * เครดิตสองทางต้องจัดการคนละแบบ
              *   ใบนี้ "หัก" เครดิตไป → คืนกลับให้ร้าน ยังใช้กับใบอื่นได้
@@ -768,6 +1132,37 @@ final class InvoiceService
             'signedAmount' => Money::toBaht($row['kind'] === 'DISCOUNT' ? -$amount : $amount),
             'note'         => $row['note'],
             'createdAt'    => $row['created_at'],
+        ];
+    }
+
+    /**
+     * บัญชีของบิล (คอลัมน์ ba.* จาก SELECT_INVOICE)
+     * บัญชี USD คือกระเป๋าคริปโต: เลขบัญชี = ที่อยู่กระเป๋า · bank_name = เครือข่าย (chain) — ป้ายชื่อใช้ตัวช่วยกลางตัวเดียวทั้งระบบ
+     * ร้านต้องเห็น chain ชัด ๆ เพราะโอนผิดเครือข่ายเงินหายกู้คืนไม่ได้
+     */
+    private static function serializeBank(array $row, string $invoiceCurrency): array
+    {
+        $bankCurrency = $row['bank_currency'] ?? 'THB';
+        $isWallet     = $bankCurrency === 'USD';
+
+        return [
+            'id'              => (int) $row['bank_account_id'],
+            'bankName'        => $row['bank_name'],
+            'accountName'     => $row['account_name'],
+            'accountNumber'   => $row['account_number'],
+            'branch'          => $row['bank_branch'],
+            'currency'        => $bankCurrency,
+            'chain'           => $isWallet ? ($row['bank_chain'] ?? $row['bank_name']) : null,
+            'isWallet'        => $isWallet,
+            'qrUrl'           => SignedUrl::sign($row['bank_qr_url']),
+            'currencyMatches' => $bankCurrency === $invoiceCurrency,
+            'label'           => BankAccountService::labelOf([
+                'bank_name'      => $row['bank_name'],
+                'account_number' => $row['account_number'],
+                'account_name'   => $row['account_name'],
+                'currency'       => $bankCurrency,
+                'chain'          => $row['bank_chain'] ?? null,
+            ]),
         ];
     }
 
@@ -818,6 +1213,13 @@ final class InvoiceService
             'daysOverdue' => Period::daysBetween($row['due_date'], $today),
             'paidAt'      => $row['paid_at'],
             'note'        => $row['note'],
+            // จำนวนรูปประกอบ — รายการบิลโชว์ 📎 N ได้โดยไม่ต้องเซ็นลิงก์ทุกรูปของทุกใบ
+            'attachmentCount' => (int) ($row['attachment_count'] ?? 0),
+            /*
+             * บัญชีที่บิลชี้อยู่ตรงกับที่ส่งเข้า Telegram ของร้านล่าสุดไหม (ไม่มีข้อมูลบัญชีในนี้ ร้านเห็นได้)
+             *   MATCH ตรงกัน · NOT_SENT ยังไม่เคยส่ง · CHANGED บัญชีเปลี่ยนหลังส่ง → หน้าแจ้งชำระเตือนร้านห้ามโอน
+             */
+            'accountCheck' => NotificationService::accountCheck($row),
             /*
              * สกุลที่ให้ร้านจ่าย + ยอดในสกุลนั้น
              * payAmount/payOutstanding คือตัวเลขที่เอาไปโชว์บนบิลและในฟอร์มจ่ายได้เลย
@@ -832,19 +1234,7 @@ final class InvoiceService
                 ? ($void ? 0 : $usd($net - $paid))
                 : ($void ? 0 : Money::toBaht($net - $paid)),
             // บัญชีที่ให้ร้านโอนเข้า ตรึงไว้ตั้งแต่ตอนออกบิล ถึงเปลี่ยนบัญชีหลักทีหลังก็ไม่กระทบใบเก่า
-            'bankAccount' => $row['bank_account_id']
-                ? [
-                    'id'              => (int) $row['bank_account_id'],
-                    'bankName'        => $row['bank_name'],
-                    'accountName'     => $row['account_name'],
-                    'accountNumber'   => $row['account_number'],
-                    'branch'          => $row['bank_branch'],
-                    'currency'        => $row['bank_currency'] ?? 'THB',
-                    'qrUrl'           => SignedUrl::sign($row['bank_qr_url']),
-                    'currencyMatches' => ($row['bank_currency'] ?? 'THB') === $currency,
-                    'label'           => "{$row['bank_name']} · {$row['account_number']} ({$row['account_name']})",
-                ]
-                : null,
+            'bankAccount' => $row['bank_account_id'] ? self::serializeBank($row, $currency) : null,
         ];
     }
 }

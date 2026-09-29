@@ -6,6 +6,7 @@ use App\Libraries\ApiException;
 use App\Libraries\AuthContext;
 use App\Libraries\Permissions;
 use App\Libraries\V;
+use App\Services\Audit;
 use App\Services\CreditService;
 use App\Services\FranchiseService;
 use App\Services\UserService;
@@ -77,6 +78,39 @@ class Franchises extends BaseApiController
         ]), $this->body());
 
         return $this->json(FranchiseService::update(V::parseId($id), $body, (int) $this->user()['id']));
+    }
+
+    /* ── ลิงก์เข้าระบบของร้าน ─────────────────────────────────────── */
+
+    /**
+     * ดูลิงก์เข้าระบบของร้าน — ส่วนกลาง และเจ้าของบัญชีร้านนั้น (ไว้ส่งให้ผู้ช่วยของตัวเอง)
+     * ผู้ช่วยดูไม่ได้: ลิงก์คือกุญแจชั้นที่สองของทั้งร้าน คนที่ไม่ได้จัดการผู้ใช้ไม่ควรถือไว้ส่งต่อ
+     * ไม่เขียนประวัติ — แค่เปิดดู ไม่มีอะไรเปลี่ยน
+     */
+    public function loginLink(string $id)
+    {
+        $user = $this->user();
+        // ร้านอื่น → 403 จาก franchiseScope ก่อนตรวจอย่างอื่น (ไม่ให้แยกได้ว่าร้าน id ไหนมีจริง)
+        $franchiseId = AuthContext::isSuperAdmin($user) ? V::parseId($id) : (int) AuthContext::franchiseScope($user, $id);
+        if (! AuthContext::isSuperAdmin($user) && ! AuthContext::isFranchiseOwner($user, $franchiseId)) {
+            throw ApiException::forbidden('เฉพาะเจ้าของบัญชีร้านเท่านั้นที่ดูลิงก์เข้าระบบของร้านได้ — ขอลิงก์จากเจ้าของบัญชีร้าน');
+        }
+        try {
+            return $this->json(FranchiseService::getLoginLink($franchiseId));
+        } catch (ApiException $e) {
+            // เจ้าของร้านกด "สร้างลิงก์ใหม่" เองไม่ได้ — บอกให้ติดต่อทางเราแทนข้อความสำหรับส่วนกลาง
+            if ($e->errorCode === 'LOGIN_LINK_UNREADABLE' && ! AuthContext::isSuperAdmin($user)) {
+                throw new ApiException(409, $e->errorCode, 'ตอนนี้เปิดลิงก์เข้าระบบของร้านไม่ได้ — ติดต่อทางเราเพื่อขอลิงก์ใหม่ครับ');
+            }
+
+            throw $e;
+        }
+    }
+
+    /** สร้างลิงก์ใหม่ (ลิงก์เดิมใช้ไม่ได้ + ทุกคนในร้านหลุด) — ส่วนกลางเท่านั้น ต้องใส่รหัส 6 หลัก (guard) */
+    public function rotateLoginLink(string $id)
+    {
+        return $this->json(FranchiseService::rotateLoginLink(V::parseId($id), $this->user()));
     }
 
     /* ── ยูสเซอร์ในสาขา ───────────────────────────────────────── */
@@ -171,10 +205,20 @@ class Franchises extends BaseApiController
         if (! $allowed) {
             throw ApiException::forbidden('ไม่มีสิทธิ์ตั้งรหัสผ่านให้ผู้ใช้รายนี้');
         }
-        $body = V::parse(V::object(['newPassword' => V::string()->min(8)]), $this->body());
-        UserService::setPassword($targetId, $body['newPassword']);
+        $body = V::parse(V::object([
+            'newPassword' => V::string()->min(8, 'รหัสผ่านอย่างน้อย 8 ตัวอักษร'),
+            // true = รหัสนี้ถูกคัดลอกส่งทางแชต — ให้เจ้าของบัญชีตั้งรหัสของตัวเองตอนเข้าครั้งแรก
+            'mustChange'  => V::boolean()->optional(),
+        ]), $this->body());
+        $mustChange = ($body['mustChange'] ?? false) === true;
+        UserService::setPassword($targetId, $body['newPassword'], $mustChange);
+        Audit::write((int) $user['id'], 'user.reset_password', 'user', $targetId, [
+            'username'    => $target['username'],
+            'franchiseId' => $franchiseId,
+            'mustChange'  => $mustChange,
+        ]);
 
-        return $this->json(['ok' => true]);
+        return $this->json(['ok' => true, 'user' => UserService::serialize(UserService::getById($targetId))]);
     }
 
     public function userStatus(string $id, string $userId)

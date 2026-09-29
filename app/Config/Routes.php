@@ -43,6 +43,9 @@ $routes->group('api', ['namespace' => 'App\Controllers\Api'], static function (R
     $routes->get('franchises', 'Franchises::index', $g('auth,staff'));
     $routes->get('franchises/(:segment)', 'Franchises::show/$1', $g('auth,staff'));
     $routes->get('franchises/(:segment)/credits', 'Franchises::credits/$1', $g('auth,staff,perm.bills'));
+    // ลิงก์เข้าระบบของร้าน: ดูได้ทั้งส่วนกลางและเจ้าของร้าน (controller ตรวจ) · สร้างใหม่ = ทุกคนในร้านหลุด → ส่วนกลาง + รหัส 6 หลัก
+    $routes->get('franchises/(:segment)/login-link', 'Franchises::loginLink/$1', $g('auth,staff'));
+    $routes->post('franchises/(:segment)/login-link/rotate', 'Franchises::rotateLoginLink/$1', $g('auth,staff,super,elevated'));
     $routes->patch('franchises/(:segment)', 'Franchises::update/$1', $g('auth,staff,super'));
     $routes->get('franchises/(:segment)/users', 'Franchises::users/$1', $g('auth,staff'));
     $routes->post('franchises/(:segment)/users', 'Franchises::addUser/$1', $g('auth,staff'));
@@ -55,7 +58,7 @@ $routes->group('api', ['namespace' => 'App\Controllers\Api'], static function (R
     $routes->get('products', 'Products::index', $g('auth,staff,perm.products'));
     $routes->get('products/(:segment)', 'Products::show/$1', $g('auth,staff,perm.products'));
     $routes->patch('products/(:segment)', 'Products::update/$1', $g('auth,staff,perm.products,super'));
-    $routes->delete('products/(:segment)', 'Products::delete/$1', $g('auth,staff,perm.products,super'));
+    // ไม่มี DELETE — สินค้าลบไม่ได้ ใช้ "ปิดใช้งาน" (PATCH status) แทน ประวัติยอดขาย/บิลจะได้อ้างถึงได้ครบ
 
     $routes->post('assignments', 'Assignments::create', $g('auth,staff,super'));
     $routes->get('assignments', 'Assignments::index', $g('auth,staff,perm.products'));
@@ -84,6 +87,11 @@ $routes->group('api', ['namespace' => 'App\Controllers\Api'], static function (R
     $routes->post('invoices/generate', 'Invoices::generate', $g('auth,staff,perm.bills,super'));
     $routes->patch('invoices/(:segment)', 'Invoices::update/$1', $g('auth,staff,perm.bills,super'));
     $routes->post('invoices/(:segment)/lines', 'Invoices::addLines/$1', $g('auth,staff,perm.bills,super'));
+    $routes->patch('invoices/(:segment)/lines/(:segment)', 'Invoices::updateLine/$1/$2', $g('auth,staff,perm.bills,super'));
+    $routes->post('invoices/(:segment)/attachments', 'Invoices::addAttachments/$1', $g('auth,staff,perm.bills,super'));
+    $routes->delete('invoices/(:segment)/attachments/(:segment)', 'Invoices::removeAttachment/$1/$2', $g('auth,staff,perm.bills,super'));
+    // ข้อความนี้คือสิ่งที่ร้านใช้ตัดสินว่าจะโอนเข้าบัญชีไหน — ต้องยืนยันรหัส 6 หลักเหมือนแก้บัญชีรับเงิน
+    $routes->post('invoices/(:segment)/notify-account', 'Invoices::notifyAccount/$1', $g('auth,staff,perm.bills,super,elevated'));
     $routes->get('invoices', 'Invoices::index', $g('auth,staff,perm.bills'));
     $routes->get('invoices/(:segment)', 'Invoices::show/$1', $g('auth,staff,perm.bills'));
     $routes->post('invoices/(:segment)/adjustments', 'Invoices::addAdjustment/$1', $g('auth,staff,perm.bills,super'));
@@ -94,6 +102,7 @@ $routes->group('api', ['namespace' => 'App\Controllers\Api'], static function (R
     $routes->get('charge-items/(:segment)', 'ChargeItems::show/$1', $g('auth,staff'));
     $routes->post('charge-items', 'ChargeItems::create', $g('auth,staff,super'));
     $routes->patch('charge-items/(:segment)', 'ChargeItems::update/$1', $g('auth,staff,super'));
+    $routes->delete('charge-items/(:segment)', 'ChargeItems::delete/$1', $g('auth,staff,super'));
 
     /* ── แจ้งชำระ · ตรวจสลิป · อัปโหลดไฟล์ ── */
     $routes->get('payments/nav-counts', 'Payments::navCounts', $g('auth,staff,perm.bills'));
@@ -121,6 +130,7 @@ $routes->group('api', ['namespace' => 'App\Controllers\Api'], static function (R
     $routes->delete('sales-agents/commissions/manual/(:segment)', 'SalesAgents::deleteManual/$1', $g('auth,agent,super'));
     $routes->get('sales-agents/commissions/(:segment)', 'SalesAgents::commission/$1', $g('auth,agent'));
     $routes->post('sales-agents/commissions/(:segment)/pay', 'SalesAgents::payCommission/$1', $g('auth,agent,super'));
+    $routes->post('sales-agents/commissions/(:segment)/void', 'SalesAgents::voidCommission/$1', $g('auth,agent,super'));
     $routes->post('sales-agents/links', 'SalesAgents::createLinks', $g('auth,agent,super'));
     $routes->get('sales-agents/links', 'SalesAgents::links', $g('auth,agent'));
     $routes->get('sales-agents/links/(:segment)', 'SalesAgents::link/$1', $g('auth,agent,super'));
@@ -131,6 +141,10 @@ $routes->group('api', ['namespace' => 'App\Controllers\Api'], static function (R
     $routes->get('sales-agents/(:segment)', 'SalesAgents::show/$1', $g('auth,agent,super'));
     $routes->patch('sales-agents/(:segment)', 'SalesAgents::update/$1', $g('auth,agent,super'));
     $routes->post('sales-agents/(:segment)/users', 'SalesAgents::addUser/$1', $g('auth,agent,super'));
+    $routes->post('sales-agents/(:segment)/users/(:segment)/reset-password', 'SalesAgents::resetUserPassword/$1/$2', $g('auth,agent,super'));
+    // บิลค่าคอม: ติ๊กรายการจากบิลร้านที่ออกแล้ว (เฉพาะสินค้าที่เซลคนนี้ถือดีล) + ค่าคอมอื่น ๆ → บิลเดียว
+    $routes->get('sales-agents/(:segment)/commission-candidates', 'SalesAgents::commissionCandidates/$1', $g('auth,agent,super'));
+    $routes->post('sales-agents/(:segment)/commission-bills', 'SalesAgents::createCommissionBill/$1', $g('auth,agent,super'));
 
     /* ── รายงาน · หน้าแรก · อันดับร้าน ── */
     foreach (['by-period' => 'byPeriod', 'by-month' => 'byMonth', 'compare' => 'compare', 'compare-range' => 'compareRange',
@@ -154,6 +168,8 @@ $routes->group('api', ['namespace' => 'App\Controllers\Api'], static function (R
     // แก้เฉพาะสาขา/หมายเหตุไม่ต้องยืนยัน — controller ตัดสินเองว่าการแก้ครั้งนี้เปลี่ยนปลายทางเงินไหม
     $routes->patch('bank-accounts/(:segment)', 'BankAccounts::update/$1', $g('auth,staff,super'));
     $routes->delete('bank-accounts/(:segment)', 'BankAccounts::delete/$1', $g('auth,staff,super,elevated'));
+    // ส่งเลขบัญชีให้ทุกร้านที่มีบิลค้างชี้บัญชีนี้ — ระบบไม่ส่งเองตอนแก้บัญชี (ดู InvoiceService::updateHeader)
+    $routes->post('bank-accounts/(:segment)/notify-shops', 'BankAccounts::notifyShops/$1', $g('auth,staff,super,elevated'));
 
     /* ── ตั้งค่าแจ้งเตือน · Telegram กลุ่ม · captcha หน้าเข้าสู่ระบบ · สำรองข้อมูล (แก้อะไรต้องยืนยันรหัส 6 หลัก) ── */
     $routes->get('settings/notifications', 'Settings::notifications', $g('auth,super'));

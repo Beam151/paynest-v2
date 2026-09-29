@@ -4,7 +4,7 @@ import { viewState } from './viewState.js';
  * ปุ่มคัดลอกข้อความ — ร้านโอนจากมือถือ กดค้างเพื่อเลือกตัวเลขบนจอเล็กยากและพลาดง่าย
  * clipboard API ใช้ได้เฉพาะ https/localhost — ใช้ไม่ได้ก็ถอยไปวิธีเก่า
  */
-export function copyButton(text, label = '📋 คัดลอก', { iconOnly = false } = {}) {
+export function copyButton(text, label = '📋 คัดลอก', { iconOnly = false, toastText } = {}) {
   const button = el('button', {
     type: 'button',
     class: iconOnly ? 'copy-icon' : 'btn ghost sm',
@@ -12,16 +12,9 @@ export function copyButton(text, label = '📋 คัดลอก', { iconOnly =
     'aria-label': iconOnly ? label.replace(/^📋\s*/, '') : undefined,
     title: iconOnly ? label.replace(/^📋\s*/, '') : undefined,
     onclick: async () => {
-      try {
-        await navigator.clipboard.writeText(String(text));
-      } catch {
-        const area = el('textarea', { style: 'position:fixed;opacity:0' }, String(text));
-        document.body.append(area);
-        area.select();
-        document.execCommand('copy');
-        area.remove();
-      }
-      toast(`คัดลอกแล้ว: ${text}`, 'success');
+      await writeClipboard(String(text));
+      // toastText: ข้อความยาว/ลับ (ลิงก์เข้าระบบของร้าน) ไม่ต้องโชว์ซ้ำทั้งก้อนในแถบแจ้ง
+      toast(toastText ?? `คัดลอกแล้ว: ${text}`, 'success');
       // ปุ่มไอคอน: เปลี่ยนเป็นเครื่องหมายถูกครู่หนึ่ง ให้เห็นว่ากดติดแล้วตรงนั้นเลย
       if (iconOnly) {
         button.classList.add('done');
@@ -31,6 +24,33 @@ export function copyButton(text, label = '📋 คัดลอก', { iconOnly =
     },
   }, iconOnly ? icon('clipboard-copy') : label);
   return button;
+}
+
+/** คืน true เมื่อคัดลอกได้จริง — ถอยไปวิธีเก่าเมื่อ clipboard API ใช้ไม่ได้ (http ที่ไม่ใช่ localhost) */
+async function writeClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const area = el('textarea', { style: 'position:fixed;opacity:0' }, text);
+    document.body.append(area);
+    area.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch { ok = false; }
+    area.remove();
+    return ok;
+  }
+}
+
+/**
+ * คัดลอกแล้วบอกผลด้วยข้อความที่กำหนด (ไม่โชว์เนื้อหาที่คัดลอก — อาจมีรหัสผ่านอยู่ข้างใน)
+ * ต้องเรียกตรง ๆ ในจังหวะที่ผู้ใช้กด: Safari ไม่ยอมให้คัดลอกหลังรอ API แล้ว จึงต้องโหลดข้อมูลไว้ก่อน
+ */
+export async function copyText(text, doneMessage = 'คัดลอกแล้ว') {
+  const ok = await writeClipboard(String(text));
+  if (ok) toast(doneMessage, 'success');
+  else toast('คัดลอกไม่ได้ — กดค้างที่ข้อความเพื่อเลือกแล้วคัดลอกเอง', 'error');
+  return ok;
 }
 
 /*
@@ -150,7 +170,8 @@ const BADGES = {
   OPEN: 'amber', PARTIAL: 'blue', PAID: 'green', VOID: 'red', LOCKED: 'gray',
 };
 const LABELS = {
-  ACTIVE: 'ใช้งาน', SUSPENDED: 'ระงับ', CLOSED: 'ปิด', ARCHIVED: 'เก็บเข้าคลัง', DISABLED: 'ปิดใช้งาน',
+  // ARCHIVED ใช้ร่วมกันทั้งสินค้าและรายการค่าใช้จ่าย — เจ้าของระบบเรียกว่า "ปิดใช้งาน" (ลบไม่ได้ เปิดกลับได้)
+  ACTIVE: 'ใช้งาน', SUSPENDED: 'ระงับ', CLOSED: 'ปิด', ARCHIVED: 'ปิดใช้งาน', DISABLED: 'ปิดใช้งาน',
   // ยอดที่บันทึกแล้วพร้อมเรียกเก็บทันที — สามสถานะแรกจึงสื่อความหมายเดียวกันกับผู้ใช้
   // (SUBMITTED/APPROVED เหลือไว้รองรับข้อมูลเก่าที่บันทึกตอนยังมีขั้นอนุมัติ)
   DRAFT: 'บันทึกแล้ว', SUBMITTED: 'บันทึกแล้ว', APPROVED: 'บันทึกแล้ว', INVOICED: 'ออกบิลแล้ว',
@@ -494,12 +515,46 @@ export function delta(amount, growthPct) {
 }
 
 /**
+ * รายชื่อไฟล์ที่เลือกในช่องแนบหลายไฟล์ + รูปย่อ — ให้เห็นก่อนกดยืนยันว่าเลือกถูกไฟล์
+ * รูปย่อใช้ object URL ของไฟล์ในเครื่อง (ยังไม่ได้อัปโหลด) ต้องคืนหน่วยความจำเองเมื่อเลือกใหม่/ปิดฟอร์ม
+ */
+function fileListPreview(inputNode, { max } = {}) {
+  const list = el('div', { class: 'file-list' });
+  let urls = [];
+  const release = () => { urls.forEach((u) => URL.revokeObjectURL(u)); urls = []; };
+  const paint = () => {
+    release();
+    const files = [...(inputNode.files ?? [])];
+    list.replaceChildren(...files.map((file) => {
+      const isImage = /^image\/(jpeg|png|gif|webp)$/i.test(file.type);
+      let thumb = el('span', { class: 'file-chip-ico' }, file.type === 'application/pdf' ? '📄' : '🖼');
+      if (isImage) {
+        const url = URL.createObjectURL(file);
+        urls.push(url);
+        thumb = el('img', { src: url, alt: '' });
+        // รูปที่เบราว์เซอร์นี้เปิดไม่ได้ (เช่น HEIC บนคอม) — โชว์ไอคอนแทนรูปแตก
+        thumb.addEventListener('error', () => thumb.replaceWith(el('span', { class: 'file-chip-ico' }, '🖼')), { once: true });
+      }
+      return el('span', { class: 'file-chip', title: file.name }, thumb, el('span', { class: 'file-chip-name' }, file.name));
+    }),
+    max && files.length > max
+      ? el('span', { class: 'hint text-danger' }, `เลือกได้สูงสุด ${max} ไฟล์ — ตอนนี้เลือกไว้ ${files.length}`)
+      : '');
+  };
+  inputNode.addEventListener('change', paint);
+  return { list, release };
+}
+
+/**
  * โมดัลฟอร์ม — fields: [{ name, label, type, options, value, hint, required }]
  * onSubmit(values) คืน promise; throw เพื่อให้โมดัลค้างไว้พร้อมข้อความผิดพลาด
+ * width: ความกว้างสูงสุด (px) — ฟอร์มที่มีตารางแก้ได้หลายคอลัมน์ (เช่นออกบิล) แคบ 520px ไม่พอ
+ * ช่อง type 'file' + multiple: true → ค่าเป็นอาเรย์ของ File (ไม่ได้เลือก = undefined) · max = จำนวนไฟล์ที่เตือน
  */
-export function formModal({ title, fields, submitLabel = 'บันทึก', onSubmit, preview, onClose }) {
+export function formModal({ title, fields, submitLabel = 'บันทึก', onSubmit, preview, onClose, width }) {
   const errorBox = el('div', { class: 'error-box', style: 'display:none' });
   const inputs = {};
+  const fileLists = [];
 
   const rows = {};
   // label เป็นฟังก์ชันได้ เพื่อให้เปลี่ยนตามค่าช่องอื่น (เช่น เลือก % แล้วหัวข้อเปลี่ยนเป็น "% ของส่วนต่าง")
@@ -551,14 +606,21 @@ export function formModal({ title, fields, submitLabel = 'บันทึก', o
       ? select(optionsOf(f, initialValues), f.value === undefined ? {} : { value: f.value })
       : f.type === 'file'
         // ช่องแนบไฟล์ไม่ตั้งค่า value ได้ (เบราว์เซอร์ห้าม) จึงไม่ส่ง value เข้าไป
-        ? el('input', { type: 'file', accept: f.accept ?? 'image/*' })
+        ? el('input', { type: 'file', accept: f.accept ?? 'image/*', multiple: f.multiple ? true : undefined })
         : f.type === 'textarea'
           ? el('textarea', { rows: f.rows ?? 5, maxlength: f.maxlength, placeholder: f.placeholder ?? '' }, f.value ?? '')
-          : el('input', { type: f.type ?? 'text', value: f.value ?? '', step: f.step, placeholder: f.placeholder ?? '' });
+          : el('input', { type: f.type ?? 'text', value: f.value ?? '', step: f.step, maxlength: f.maxlength, placeholder: f.placeholder ?? '' });
     // ช่องที่แก้ไม่ได้ในบริบทนั้น — ยังโชว์ค่าให้เห็น แต่กดเปลี่ยนไม่ได้
     // collect() ยังอ่านค่าเดิมส่งไป ฝั่งเซิร์ฟเวอร์เห็นค่าเท่าเดิมจึงไม่นับเป็นการแก้
     if (f.disabled) node.disabled = true;
     inputs[f.name] = node;
+    if (f.type === 'file' && f.multiple) {
+      const picked = fileListPreview(node, { max: f.max });
+      fileLists.push(picked);
+      rows[f.name] = field(labelOf(f) + (f.required ? ' *' : ''), el('div', { class: 'file-pick' }, node, picked.list), f.hint);
+      rows[f.name].style.gridColumn = '1 / -1'; // รูปย่อหลายรูปต้องใช้เต็มแถว
+      return rows[f.name];
+    }
     rows[f.name] = field(labelOf(f) + (f.required ? ' *' : ''), node, f.hint);
     if (f.type === 'textarea') rows[f.name].style.gridColumn = '1 / -1'; // ข้อความยาวใช้เต็มแถว
     return rows[f.name];
@@ -566,7 +628,7 @@ export function formModal({ title, fields, submitLabel = 'บันทึก', o
 
   const submitBtn = el('button', { class: 'btn' }, submitLabel);
   const backdrop = el('div', { class: 'modal-backdrop' });
-  const close = () => { backdrop.remove(); onClose?.(); };
+  const close = () => { fileLists.forEach((p) => p.release()); backdrop.remove(); onClose?.(); };
 
   /** ช่องที่ถูกซ่อนอยู่ ไม่ถูกนับเป็นค่าและไม่ถูกบังคับกรอก */
   const isVisible = (f, values) => !f.showWhen || f.showWhen(values);
@@ -580,9 +642,14 @@ export function formModal({ title, fields, submitLabel = 'บันทึก', o
         continue;
       }
       // ช่องไฟล์คืน File object ไม่ใช่ข้อความ — .value ของมันเป็น path หลอก ใช้ไม่ได้
+      // แบบหลายไฟล์คืนอาเรย์ แต่ไม่ได้เลือกเลยยังเป็น undefined — required ตรวจแบบเดียวกับช่องอื่นได้
       if (f.type === 'file') {
-        const [file] = inputs[f.name].files ?? [];
-        if (file) values[f.name] = file;
+        const files = [...(inputs[f.name].files ?? [])];
+        if (f.multiple) {
+          if (files.length) values[f.name] = files;
+        } else if (files[0]) {
+          values[f.name] = files[0];
+        }
         continue;
       }
       const raw = f.type === 'password' ? String(inputs[f.name].value ?? '') : String(inputs[f.name].value ?? '').trim();
@@ -680,7 +747,7 @@ export function formModal({ title, fields, submitLabel = 'บันทึก', o
   backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
   backdrop.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
 
-  backdrop.append(el('div', { class: 'modal' },
+  backdrop.append(el('div', { class: 'modal', style: width ? `max-width:${width}px` : undefined },
     el('header', {}, el('h2', {}, title), el('button', { class: 'close', onclick: close }, '×')),
     el('div', { class: 'body' }, errorBox, preview ? previewBox : '', body),
     el('footer', {}, el('button', { class: 'btn ghost', onclick: close }, 'ยกเลิก'), submitBtn)));
@@ -715,4 +782,117 @@ export async function confirmAction(message, run) {
     toast(err.fullMessage ?? err.message, 'error');
     return false;
   }
+}
+
+/* ── ชุดข้อมูลเข้าระบบ (ลิงก์ + ชื่อผู้ใช้ + รหัสผ่าน) ───────────────────────
+   ส่งให้ลูกค้าเป็นก้อนเดียว กดคัดลอกครั้งเดียวแล้ววางในแชตได้เลย ไม่ต้องพิมพ์ทีละบรรทัด
+   รหัสผ่านเก็บแบบ bcrypt (ทางเดียว) — ชุดที่มีรหัสผ่านจึงโชว์ได้แค่ตอนที่หน้าเว็บรู้รหัสอยู่
+   คือหลังสร้างบัญชีหรือหลังตั้งรหัสใหม่เท่านั้น หลังจากนั้นดูย้อนหลังไม่ได้อีก */
+
+// ชื่อระบบเดียวกับหัวเมนูและหน้าล็อกอิน (paynest.appName ฝั่งเซิร์ฟเวอร์ไม่ได้ส่งมาถึงหน้าเว็บ)
+export const APP_NAME = 'ระบบจัดการร้าน';
+
+/*
+ * ตัดตัวที่หน้าตาคล้ายกัน (0 O 1 l I) — รหัสถูกอ่านออกเสียง/พิมพ์ตามจากแชตบนมือถือ
+ * สุ่มด้วย crypto.getRandomValues + ทิ้งไบต์ที่เกิน (ไม่ใช้ % ตรง ๆ ตัวอักษรต้น ๆ จะออกบ่อยกว่า)
+ */
+const PASSWORD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+
+export function randomPassword(len = 10) {
+  // เซิร์ฟเวอร์รับรหัสอย่างน้อย 8 ตัว — สั้นกว่านั้นส่งไปก็โดนตีกลับ
+  const size = Math.max(8, Math.floor(Number(len) || 10));
+  const limit = 256 - (256 % PASSWORD_ALPHABET.length);
+  for (;;) {
+    let out = '';
+    while (out.length < size) {
+      for (const b of crypto.getRandomValues(new Uint8Array(size * 2))) {
+        if (b < limit && out.length < size) out += PASSWORD_ALPHABET[b % PASSWORD_ALPHABET.length];
+      }
+    }
+    // มีทั้งตัวอักษรและตัวเลข — ลูกค้าบางคนตั้งใจว่ารหัสต้องมีเลข เห็นตัวอักษรล้วนแล้วนึกว่าคัดลอกมาไม่ครบ
+    if (/\d/.test(out) && /[A-Za-z]/.test(out)) return out;
+  }
+}
+
+/** ลิงก์เต็มสำหรับส่งให้ลูกค้า — API ส่งมาแค่ path (/#/s/…) เพราะเซิร์ฟเวอร์ไม่รู้ว่าเราเปิดผ่านโดเมนไหน */
+export const loginUrl = (path = '/#/login') => `${location.origin}${String(path).startsWith('/') ? '' : '/'}${path}`;
+
+/**
+ * ข้อความชุดข้อมูลเข้าระบบ (ข้อความล้วน ส่งในแชตได้ทุกแอป)
+ *   title       ใครเป็นเจ้าของชุดนี้ เช่น 'ร้าน bkk01' / 'เซล sale01'
+ *   url         ลิงก์เข้าระบบ — ร้าน = ลิงก์ของร้าน · เซล = loginUrl()
+ *   password    ไม่มี = รหัสเดิมที่ดูย้อนหลังไม่ได้ (ใส่ passwordHint แทนข้อความตั้งต้นได้)
+ *   mustChange  ระบบจะให้ตั้งรหัสใหม่ตอนเข้าครั้งแรก — บอกลูกค้าไว้ก่อน จะได้ไม่ตกใจ
+ */
+export function loginSetText({ title, url, username, password, mustChange = false, passwordHint } = {}) {
+  const head = String(title ?? '').startsWith('ข้อมูลเข้าสู่ระบบ')
+    ? title
+    : `ข้อมูลเข้าสู่ระบบ ${APP_NAME}${title ? ` — ${title}` : ''}`;
+  return [
+    head,
+    `ลิงก์: ${url || '(ขอลิงก์เข้าระบบจากทางเรา)'}`,
+    `ชื่อผู้ใช้: ${username ?? ''}`,
+    `รหัสผ่าน: ${password || passwordHint || '(ตามที่ตั้งไว้ — ถ้าลืม ให้ทางเราตั้งรหัสใหม่)'}`,
+    mustChange ? 'เข้าครั้งแรกระบบจะให้ตั้งรหัสผ่านใหม่' : null,
+  ].filter(Boolean).join('\n');
+}
+
+/**
+ * กล่องชุดข้อมูลเข้าระบบ — ตัวหนังสือความกว้างเท่ากัน + ปุ่มใหญ่ "คัดลอกทั้งชุด"
+ * opts เหมือน loginSetText + note (ข้อความใต้ปุ่ม · ไม่ส่ง = ใช้คำเตือนตั้งต้น · '' = ไม่มี)
+ */
+export function loginSetBox(opts = {}) {
+  const text = loginSetText(opts);
+  const note = opts.note !== undefined ? opts.note
+    : opts.password
+      ? '⚠ รหัสผ่านนี้แสดงครั้งเดียว — ระบบเก็บรหัสแบบเข้ารหัสทางเดียว ปิดหน้าต่างนี้แล้วดูอีกไม่ได้ · คัดลอกส่งให้เจ้าของบัญชีทางแชตส่วนตัวตอนนี้เลย'
+      : 'รหัสผ่านที่ตั้งไว้แล้วดูย้อนหลังไม่ได้ (ระบบเก็บแบบเข้ารหัสทางเดียว) — ถ้าลืมรหัส ใช้ปุ่ม "🔑 ตั้งรหัสใหม่ + คัดลอก" แทน';
+  return el('div', { class: 'login-set' },
+    el('pre', {}, text),
+    el('button', {
+      type: 'button',
+      class: 'btn block',
+      onclick: () => copyText(text, 'คัดลอกข้อมูลเข้าระบบทั้งชุดแล้ว — วางในแชตส่งให้เจ้าของบัญชีได้เลย'),
+    }, '📋 คัดลอกทั้งชุด'),
+    note ? el('div', { class: `login-set-note${opts.password ? ' warn' : ''}` }, note) : '');
+}
+
+/** โมดัลโชว์ชุดข้อมูลเข้าระบบ (หลังสร้างบัญชี / ตั้งรหัสใหม่) */
+export function loginSetModal({ heading, ...opts }) {
+  return infoModal({
+    title: heading ?? `ข้อมูลเข้าระบบของ ${opts.username}`,
+    width: 520,
+    content: loginSetBox(opts),
+  });
+}
+
+/**
+ * "🔑 ตั้งรหัสใหม่ + คัดลอก" — สุ่มรหัสให้ (แก้เองได้) → run(body) เรียก API → โชว์ชุดพร้อมรหัสให้คัดลอก
+ * body = { newPassword, mustChange: true } เสมอ: รหัสนี้ผ่านมือคนอื่นมาแล้ว (แอดมิน/แชต)
+ * เจ้าของบัญชีต้องตั้งรหัสของตัวเองตอนเข้าครั้งแรก ข้อความในชุดจึงบอกไว้ตรงกัน
+ */
+export function resetPasswordModal({ username, title, url, run, onDone, passwordHint }) {
+  return formModal({
+    title: `ตั้งรหัสผ่านใหม่ให้ ${username}`,
+    submitLabel: 'ตั้งรหัสใหม่ แล้วคัดลอก',
+    fields: [{
+      name: 'newPassword',
+      label: 'รหัสผ่านใหม่',
+      required: true,
+      value: randomPassword(),
+      hint: 'สุ่มให้แล้ว (ไม่มีตัวที่หน้าตาคล้ายกันอย่าง 0/O หรือ 1/l/I) · แก้เองได้ อย่างน้อย 8 ตัวอักษร',
+    }],
+    preview: () => el('div', { class: 'notice-box m-0' },
+      `รหัสเดิมของ ${username} ใช้ไม่ได้ทันที และ ${username} จะถูกออกจากระบบทุกเครื่อง · `
+      + 'เข้าครั้งแรกด้วยรหัสนี้ ระบบจะให้ตั้งรหัสผ่านใหม่ของตัวเอง'),
+    onSubmit: async (v) => {
+      if (v.newPassword.length < 8) throw new Error('รหัสผ่านต้องยาวอย่างน้อย 8 ตัวอักษร');
+      await run({ newPassword: v.newPassword, mustChange: true });
+      loginSetModal({
+        heading: `รหัสใหม่ของ ${username} — คัดลอกส่งให้เลย`,
+        title, url, username, password: v.newPassword, mustChange: true, passwordHint,
+      });
+      onDone?.();
+    },
+  });
 }

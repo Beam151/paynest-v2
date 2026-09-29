@@ -1,6 +1,7 @@
 <!--
   คู่มือสำหรับเซล — เซิร์ฟเวอร์ส่งให้เฉพาะบัญชีเซล (GET /api/manual)
   โครงเดียวกับคู่มือร้าน: .m-home → .m-guide ทีละเรื่อง · {i:ชื่อไอคอน} = ไอคอนจาก public/icons.svg
+  ค่าคอมจ่ายเป็น "บิลค่าคอม" ที่ส่วนกลางทำเป็นครั้ง ๆ (ไม่เกิดเองตอนออกบิลร้านแล้ว) — แก้คู่มือนี้เมื่อหน้ารายได้ของเซลเปลี่ยน
 -->
 <div class="manual">
 
@@ -10,12 +11,12 @@
     <p>อยากทำอะไร กดเลือกได้เลย</p>
   </div>
   <div class="m-tasks cols-3">
-    <button class="m-task" data-guide="income"><span class="m-task-ico">{i:target}</span><strong>ดูค่าคอมของฉัน</strong><small>แต่ละรอบได้เท่าไร ได้รับหรือยัง</small></button>
+    <button class="m-task" data-guide="income"><span class="m-task-ico">{i:target}</span><strong>ดูค่าคอมของฉัน</strong><small>บิลค่าคอมแต่ละใบ ได้รับหรือยัง</small></button>
     <button class="m-task" data-guide="deals"><span class="m-task-ico">{i:package}</span><strong>สินค้าที่ถือดีล</strong><small>เงื่อนไขคอมของแต่ละชิ้น</small></button>
-    <button class="m-task is-ok" data-guide="faq"><span class="m-task-ico">{i:circle-help}</span><strong>คำถามที่พบบ่อย</strong><small>คอมเกิดเมื่อไร ฯลฯ</small></button>
+    <button class="m-task is-ok" data-guide="faq"><span class="m-task-ico">{i:circle-help}</span><strong>คำถามที่พบบ่อย</strong><small>คอมเกิดเมื่อไร · ลืมรหัส ฯลฯ</small></button>
   </div>
   <div class="m-know">
-    <span>{i:calendar} คอมคิดทุกรอบบิล (1–15 และ 16–สิ้นเดือน)</span>
+    <span>{i:receipt} ทางเราจ่ายค่าคอมเป็น "บิลค่าคอม" ทีละครั้ง</span>
     <span>{i:smartphone} ใช้บนมือถือได้ ไม่ต้องลงแอป</span>
   </div>
 </div>
@@ -26,20 +27,44 @@
   <div class="m-step">
     <div class="m-shot" data-nav="mysales" data-tap-nav data-title="รายได้ของฉัน">
             <div class="s-body">
-        <div class="s-row"><div class="s-card" style="flex:1"><span class="s-muted">รอรับ</span><b style="color:var(--warn)">2,340 ฿</b></div><span class="s-mark">1</span></div>
+        <div class="s-row"><div class="s-card" style="flex:1"><span class="s-muted">รอรับ</span><b style="color:var(--warn)">3,940 ฿</b></div><span class="s-mark">1</span></div>
         <div class="s-row"><div class="s-card" style="flex:1"><span class="s-muted">ได้รับแล้วสะสม</span><b style="color:var(--success)">18,600 ฿</b></div><span class="s-mark">2</span></div>
         <div class="s-card">
-          <div class="s-row"><b>1–15 ก.ย. 69</b><b>2,340.00</b></div>
-          <span class="s-btn wide s-hl">ดูใบสรุป<span class="s-tap">{i:hand}</span></span>
+          <div class="s-row"><span class="s-muted">ก.ย. 69</span><b>3,940.00</b></div>
+          <div class="s-row"><span class="s-muted">ส.ค. 69</span><b>5,210.00</b></div>
+          <span class="s-mark">3</span>
         </div>
       </div>
     </div>
     <div class="m-step-text"><h3>อ่านหน้าแรก</h3>
       <ul class="m-legend">
-        <li><span class="s-mark">1</span><span><b>รอรับ</b> คอมที่เกิดแล้ว ยังไม่ได้รับเงิน</span></li>
+        <li><span class="s-mark">1</span><span><b>รอรับ</b> บิลค่าคอมที่ทางเราทำแล้ว ยังไม่ได้โอน</span></li>
         <li><span class="s-mark">2</span><span><b>ได้รับแล้วสะสม</b> ตั้งแต่เริ่มทำ</span></li>
+        <li><span class="s-mark">3</span><span><b>รายเดือน</b> ยอดค่าคอมย้อนหลัง 12 เดือน (ตามวันที่ทำบิลค่าคอม)</span></li>
+      </ul></div>
+  </div>
+  <div class="m-step">
+    <div class="m-shot" data-nav="mysales" data-title="รายได้ของฉัน — บิลค่าคอม">
+            <div class="s-body">
+        <div class="s-card">
+          <div class="s-row"><b>COM-20260929-sale01</b><span class="s-badge amber">รอรับ</span></div>
+          <div class="s-row"><span><b>KF-01</b> <span class="s-muted">INV-2609-014 · bkk01 · 1–15 ก.ย. 69</span></span></div>
+          <div class="s-row"><span class="s-muted">% ของยอดเต็ม · 5% ของ 42,800</span><span><b>2,140.00</b> <span class="s-mark">1</span></span></div>
+          <div class="s-row"><span><b>KF-02</b> <span class="s-muted">กรอกเอง</span></span><span><b>500.00</b> <span class="s-mark">2</span></span></div>
+          <div class="s-row"><span class="s-muted">เหมาต่อรอบ · bkk01 · 1–15 ก.ย. 69</span><span><b>300.00</b> <span class="s-mark">3</span></span></div>
+          <div class="s-row s-hl" style="padding:2px 4px"><span>ค่าคอมอื่น ๆ · โบนัสเปิดร้านใหม่</span><span><b>1,000.00</b> <span class="s-mark">4</span></span></div>
+          <div class="s-row" style="border-top:1px solid var(--border);padding-top:5px"><b>รวม</b><b>3,940.00</b></div>
+        </div>
+      </div>
+    </div>
+    <div class="m-step-text"><h3>ในบิลค่าคอมมีอะไรบ้าง</h3><p>ทางเราทำบิลค่าคอมให้เป็นครั้ง ๆ โดยเลือกรายการจากบิลร้านที่ขายสินค้าที่คุณถือดีล — แต่ละรายการบอกบิลร้าน ร้าน รอบ สินค้า และวิธีคิด</p>
+      <ul class="m-legend">
+        <li><span class="s-mark">1</span><span><b>% ของยอดเต็ม</b> — % จากยอดขายเต็มของสินค้านั้นในบิลร้าน (ตั้งต้นตามดีล)</span></li>
+        <li><span class="s-mark">2</span><span><b>กรอกเอง</b> — ทางเรากำหนดเป็นจำนวนเงินของรายการนั้น</span></li>
+        <li><span class="s-mark">3</span><span><b>เหมาต่อรอบ</b> — ตามดีล ครั้งเดียวต่อร้านต่อรอบ</span></li>
+        <li><span class="s-mark">4</span><span><b>ค่าคอมอื่น ๆ</b> — รายการที่ทางเราพิมพ์เพิ่ม เช่น โบนัส (ติดลบ = หักคืน)</span></li>
       </ul>
-      <p>กด <span class="m-ui is-primary">ดูใบสรุป</span> เพื่อดูว่าคอมรอบนั้นมาจากร้านไหน สินค้าอะไร</p></div>
+      <p>รายการที่ขึ้นว่า "บิลร้านถูกยกเลิก" = ร้านถูกยกเลิกบิลนั้นหลังทางเราจ่ายค่าคอมไปแล้ว (บิลค่าคอมที่จ่ายแล้วไม่ถูกแก้ย้อนหลัง)</p></div>
   </div>
 </section>
 
@@ -51,13 +76,13 @@
             <div class="s-body">
         <div class="s-card">
           <div class="s-row"><b>KF-01</b><span class="s-badge green">ใช้งาน</span></div>
-          <span class="s-muted">ร้าน bkk01</span>
-          <div class="s-row s-hl" style="padding:2px 4px"><span>5% ของส่วนต่าง</span><span>+ เหมา 300 ฿/รอบ</span></div>
+          <span class="s-muted">ร้าน bkk01 · เริ่ม 1 ก.ย. 69</span>
+          <div class="s-row s-hl" style="padding:2px 4px"><span>5% ของยอดขายเต็ม</span><span>+ เหมา 300 ฿/รอบ</span></div>
         </div>
         <div class="s-card s-dim"><div class="s-line" style="width:40%"></div><div class="s-line" style="width:70%"></div></div>
       </div>
     </div>
-    <div class="m-step-text"><h3>เงื่อนไขคอมของแต่ละชิ้น</h3><p>สินค้าที่คุณดูแล ร้านที่ขาย และได้คอมกี่ % หรือเหมาเท่าไรต่อรอบ</p><p>ทางเราเป็นคนผูกดีลให้ ถ้าไม่ตรงกับที่ตกลงไว้ ติดต่อทางเรา</p></div>
+    <div class="m-step-text"><h3>เงื่อนไขคอมของแต่ละชิ้น</h3><p>สินค้าที่คุณดูแล ร้านที่ขาย และได้คอมกี่ % ของยอดขายเต็ม หรือเหมาเท่าไรต่อรอบ — <b>% คิดจากยอดขายเต็มของร้านเสมอ</b> (ก่อนหักส่วนต่าง)</p><p>ทางเราเป็นคนผูกดีลให้ ดีลไม่มีวันหมดอายุ อยู่จนกว่าทางเราจะปิดดีล · ถ้าไม่ตรงกับที่ตกลงไว้ ติดต่อทางเรา</p><p>ทางเรา<b>แก้ % / เหมาต่อรอบของดีลได้</b> — ตัวเลขใหม่ใช้กับบิลค่าคอมที่ทำหลังจากนั้น บิลค่าคอมที่ทำไปแล้วไม่เปลี่ยน</p><p><b>สินค้ากลุ่ม (ชุด)</b> — ถ้าคุณถือดีลสินค้าชุด ค่าคอมคิดจากยอดขายเต็มของทั้งชุดเป็นรายการเดียว · ถือดีลเฉพาะสินค้าชิ้นเดี่ยว ไม่ได้ค่าคอมจากยอดที่ร้านขายเป็นชุด (ยอดของชุดบันทึกที่สินค้าชุด)</p><p>ไม่มีดีลเลยก็ได้ — ทางเราจ่ายเป็น "ค่าคอมอื่น ๆ" ในบิลค่าคอมแทน</p></div>
   </div>
 </section>
 
@@ -65,9 +90,13 @@
   <button class="m-back" data-home>← เลือกเรื่องอื่น</button>
   <div class="m-guide-head"><span class="m-task-ico">{i:circle-help}</span><div><h2>คำถามที่พบบ่อย</h2></div></div>
   <div class="m-faqs">
-    <details class="m-faq"><summary>ค่าคอมเกิดเมื่อไร</summary><div>ทุกครั้งที่ทางเราออกบิลให้ร้านที่ขายสินค้าที่คุณถือดีลอยู่ คอมของรอบนั้นจะขึ้นทันที</div></details>
-    <details class="m-faq"><summary>ทำไมคอมบางรายการหายไป</summary><div>บิลของร้านถูกยกเลิก คอมที่ยังไม่จ่ายของบิลนั้นก็ถูกยกเลิกด้วย ออกบิลใหม่เมื่อไร คอมก็เกิดใหม่ตามยอดที่ถูกต้อง</div></details>
-    <details class="m-faq"><summary>เห็นยอดขายหรือบิลของร้านได้ไหม</summary><div>ไม่ได้ เซลเห็นเฉพาะค่าคอมของตัวเองและเงื่อนไขดีล ข้อมูลร้านเป็นความลับของร้าน</div></details>
+    <details class="m-faq"><summary>ค่าคอมเกิดเมื่อไร</summary><div>เมื่อทางเราทำบิลค่าคอมให้ — ทางเราเลือกรายการจากบิลร้านที่ออกแล้วของสินค้าที่คุณถือดีล (ไม่ต้องรอร้านจ่าย) รอบไหนจะจ่ายรายการไหนทางเราเป็นคนเลือก รายการที่ยังไม่ถูกเลือกรอเข้าบิลค่าคอมครั้งถัดไป · ออกบิลร้านเฉย ๆ ยังไม่เกิดค่าคอม</div></details>
+    <details class="m-faq"><summary>ทำไมบางรายการไม่ได้คิดตาม % ในดีล</summary><div>ทางเราเลือกวิธีคิดได้ทีละรายการในบิลค่าคอม — % ของยอดเต็ม (ตั้งต้นตามดีล แก้ได้) หรือกำหนดเป็นจำนวนเงิน ดูได้ในบิลค่าคอมใบนั้น ถ้าไม่ตรงกับที่ตกลงไว้ ติดต่อทางเรา</div></details>
+    <details class="m-faq"><summary>% ในดีลเปลี่ยน แล้วบิลค่าคอมเก่าเปลี่ยนไหม</summary><div>ไม่เปลี่ยน — ทางเราแก้ดีลได้เมื่อตกลงเงื่อนไขใหม่ ตัวเลขใหม่ใช้กับบิลค่าคอมที่ทำหลังจากนั้น บิลที่ทำไปแล้ว (รวมที่ยังรอรับ) ยังเป็นตัวเลขเดิม · ดูเงื่อนไขล่าสุดได้ที่ {nav:deals}</div></details>
+    <details class="m-faq"><summary>เหมาต่อรอบได้กี่ครั้ง</summary><div>ครั้งเดียวต่อร้านต่อรอบบิล แม้ร้านนั้นขายสินค้าของคุณหลายชิ้นในรอบเดียวกัน</div></details>
+    <details class="m-faq"><summary>ทำไมบิลค่าคอมบางใบถูกยกเลิก หรือยอดลดลง</summary><div>บิลร้านที่อยู่ในบิลค่าคอมถูกยกเลิก รายการของบิลร้านนั้นจะถูกถอดออกจากบิลค่าคอมที่ยังไม่จ่าย (ไม่เหลือรายการ = บิลค่าคอมถูกยกเลิกทั้งใบ) — ทางเราทำบิลค่าคอมให้ใหม่เมื่อออกบิลร้านที่ถูกต้องแล้ว · บิลค่าคอมที่จ่ายแล้วไม่ถูกแตะ</div></details>
+    <details class="m-faq"><summary>เห็นยอดขายหรือบิลของร้านได้ไหม</summary><div>ไม่ได้ เซลเห็นเฉพาะบิลค่าคอมของตัวเอง ยอดขายเต็มของรายการที่อยู่ในบิลค่าคอม และเงื่อนไขดีล ข้อมูลอื่นของร้านเป็นความลับของร้าน</div></details>
+    <details class="m-faq"><summary>ลืมรหัสผ่าน</summary><div>ติดต่อทางเรา ทางเราจะส่งข้อมูลเข้าระบบชุดใหม่ (ลิงก์ + ชื่อผู้ใช้ + รหัสผ่านใหม่) ให้ — ไม่มีใครดูรหัสเดิมได้ · เข้าครั้งแรกด้วยรหัสใหม่ ระบบจะให้ตั้งรหัสของตัวเอง · เซลเข้าที่หน้าเข้าสู่ระบบปกติ ไม่ต้องใช้ลิงก์ร้าน</div></details>
   </div>
 </section>
 

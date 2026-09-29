@@ -119,12 +119,17 @@ final class UserService
         return self::getById($id);
     }
 
-    /** ตั้งรหัสใหม่ + ทำให้ token ที่ออกไปก่อนหน้าทั้งหมดใช้ไม่ได้ (token_version) */
-    public static function setPassword(int $id, string $password): void
+    /**
+     * ตั้งรหัสใหม่ + ทำให้ token ที่ออกไปก่อนหน้าทั้งหมดใช้ไม่ได้ (token_version)
+     * $mustChange = true: คนอื่นตั้งรหัสให้แล้วคัดลอกส่งทางแชต — รหัสนี้มีคนอื่นเห็นแล้ว เจ้าของบัญชีต้องเปลี่ยนเองตอนเข้าครั้งแรก
+     * false ไม่ล้างค่าที่ค้างอยู่ — ล้างเฉพาะตอนเจ้าของบัญชีเปลี่ยนรหัสเอง (Auth::changePassword)
+     */
+    public static function setPassword(int $id, string $password, bool $mustChange = false): void
     {
         self::getById($id);
         Db::exec(
-            'UPDATE users SET password_hash = ?, token_version = token_version + 1, updated_at = UTC_TIMESTAMP() WHERE id = ?',
+            'UPDATE users SET password_hash = ?, token_version = token_version + 1,'
+            . ($mustChange ? ' must_change_password = 1,' : '') . ' updated_at = UTC_TIMESTAMP() WHERE id = ?',
             [self::hashPassword($password), $id],
         );
     }

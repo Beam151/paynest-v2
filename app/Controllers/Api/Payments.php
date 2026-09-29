@@ -56,6 +56,12 @@ class Payments extends BaseApiController
              */
             'slipUrl' => V::string()->regex('/^\/api\/uploads\/[0-9a-f]{32}\.(jpg|png|gif|webp|pdf)$/', 'ต้องแนบไฟล์สลิปที่อัปโหลดผ่านระบบ (ไม่รับลิงก์ภายนอก)'),
             'note'    => V::string()->optional(),
+            /*
+             * ร้านติ๊กยืนยันว่าตรวจเลขบัญชีกับข้อความ Telegram แล้ว + บัญชีที่หน้าจอแสดงตอนนั้น (null = บิลไม่มีบัญชี)
+             * ไม่บังคับที่ API (ไคลเอนต์เดิมยังใช้ได้) — หน้าเว็บบังคับติ๊กเอง ส่วนนี้เก็บเป็นหลักฐาน
+             */
+            'accountConfirmed' => V::boolean()->optional(),
+            'bankAccountId'    => V::id()->nullable()->optional(),
         ]), $this->body());
 
         return $this->json(PaymentSubmissionService::submit($body, $this->user()), 201);

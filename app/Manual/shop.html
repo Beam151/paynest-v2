@@ -15,21 +15,24 @@
     <button class="m-task" data-guide="pay"><span class="m-task-ico">{i:credit-card}</span><strong>จ่ายบิล</strong><small>โอนเงิน แล้วแนบสลิป</small></button>
     <button class="m-task" data-guide="earn"><span class="m-task-ico">{i:trending-up}</span><strong>ดูยอดของร้าน</strong><small>รอบนี้ร้านได้เท่าไร</small></button>
     <button class="m-task is-warn" data-guide="rejected"><span class="m-task-ico">{i:file-pen-line}</span><strong>สลิปถูกตีกลับ</strong><small>แก้แล้วแจ้งใหม่</small></button>
-    <button class="m-task" data-guide="telegram"><span class="m-task-ico">{i:send}</span><strong>รับแจ้งเตือน Telegram</strong><small>รู้ทันทีเมื่อบิลออก / ได้รับเงิน</small></button>
-    <button class="m-task" data-guide="staff"><span class="m-task-ico">{i:users}</span><strong>เพิ่มผู้ช่วย</strong><small>ให้พนักงานช่วยดูบิล</small></button>
+    <button class="m-task" data-guide="telegram"><span class="m-task-ico">{i:send}</span><strong>รับแจ้งเตือน Telegram</strong><small>บิลออก · เลขบัญชีสำหรับโอน · ได้รับเงิน</small></button>
+    <button class="m-task" data-guide="staff"><span class="m-task-ico">{i:users}</span><strong>เพิ่มผู้ช่วย</strong><small>ให้พนักงานช่วยดูบิล · ส่งข้อมูลเข้าระบบ</small></button>
+    <button class="m-task" data-guide="login"><span class="m-task-ico">{i:key-round}</span><strong>เข้าระบบ</strong><small>ลิงก์ของร้าน · เครื่องใหม่ · ลืมรหัส</small></button>
     <button class="m-task is-ok" data-guide="faq"><span class="m-task-ico">{i:circle-help}</span><strong>คำถามที่พบบ่อย</strong><small>ยอดยังค้าง · ลืมรหัส ฯลฯ</small></button>
   </div>
   <div class="m-know">
     <span>{i:calendar} บิลออกเดือนละ 2 รอบ (วันที่ 1–15 และ 16–สิ้นเดือน)</span>
     <span>{i:alarm-clock} จ่ายภายใน 7 วันหลังจบรอบ</span>
     <span>{i:smartphone} ใช้บนมือถือได้ ไม่ต้องลงแอป</span>
+    <span>{i:shield-check} ก่อนโอนทุกครั้ง ตรวจเลขบัญชีให้ตรงกับที่ทางเราแจ้งทาง Telegram</span>
+    <span>{i:key-round} เข้าระบบผ่านลิงก์ของร้านที่ทางเราส่งให้เท่านั้น</span>
   </div>
 </div>
 
 <!-- ── จ่ายบิล ── -->
 <section class="m-guide" id="pay" hidden>
   <button class="m-back" data-home>← เลือกเรื่องอื่น</button>
-  <div class="m-guide-head"><span class="m-task-ico">{i:credit-card}</span><div><h2>จ่ายบิล</h2><p>4 ขั้น ใช้เวลาไม่ถึง 2 นาที</p></div></div>
+  <div class="m-guide-head"><span class="m-task-ico">{i:credit-card}</span><div><h2>จ่ายบิล</h2><p>5 ขั้น ใช้เวลาไม่ถึง 2 นาที</p></div></div>
 
   <div class="m-step">
     <div class="m-shot" data-nav="bills" data-tap-nav data-title="บิลของฉัน">
@@ -47,18 +50,46 @@
   </div>
 
   <div class="m-step">
+    <div class="m-shot" data-app="telegram" data-title="Telegram">
+            <div class="s-tg">
+        <div class="s-bubble"><b>🧾 บิลรอบใหม่ออกแล้ว</b>บิล INV-2609-014 · ยอดชำระ 15,614.00 บาท
+          <div class="s-hl" style="margin:5px 0;padding:3px 5px"><b>🏦 บัญชีสำหรับโอน</b>ธนาคาร: กสิกรไทย<br>เลขที่บัญชี: 123-4-56789-0<br>ชื่อบัญชี: บจก. เซ็นทรัลซัพพลาย</div>
+          ⚠️ ก่อนโอนทุกครั้ง โปรดตรวจให้ตรงกับข้อความนี้</div>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">2</span><h3>ตรวจเลขบัญชีกับ Telegram</h3><p>ทุกบิลทางเราส่ง <b>ธนาคาร เลขที่บัญชี และชื่อบัญชี</b> ทาง Telegram — เทียบกับที่เห็นในหน้าชำระเงินให้ตรงกันทุกตัว</p><p><b>ไม่ตรงกัน ห้ามโอนเด็ดขาด</b> และติดต่อทางเราทันที · ยังไม่ได้เชื่อม Telegram ดูเรื่อง "รับแจ้งเตือน Telegram" หรือโทรยืนยันเลขบัญชีกับทางเราก่อนโอน</p></div>
+  </div>
+
+  <div class="m-step">
     <div class="m-shot" data-modal="ชำระเงิน — INV-2609-014" data-nav="bills" data-title="ชำระเงิน — INV-2609-014">
             <div class="s-body">
         <div class="s-card" style="text-align:center">
           <span class="s-muted">โอนเข้าบัญชี กสิกรไทย</span>
           <div class="s-row" style="justify-content:center"><b style="font-size:15px">123-4-56789-0</b><span class="s-copy s-hl">{i:clipboard-copy}</span></div>
+          <div class="s-alert" style="text-align:left">⚠️ ก่อนโอนทุกครั้ง ตรวจให้ตรงกับที่ทางเราแจ้งทาง Telegram · ไม่ตรง ห้ามโอน</div>
           <div class="s-qr s-hl"></div>
           <span class="s-muted">ยอดที่ต้องโอน</span>
           <div class="s-row" style="justify-content:center"><b style="font-size:15px">15,614.00 ฿</b><span class="s-copy s-hl">{i:clipboard-copy}</span></div>
         </div>
       </div>
     </div>
-    <div class="m-step-text"><span class="m-num">2</span><h3>โอนเงิน</h3><p>สแกน QR ด้วยแอปธนาคาร หรือกดไอคอนคัดลอก {i:clipboard-copy} ข้างเลขบัญชีและข้างยอดเงิน ไปวางในแอปธนาคาร</p></div>
+    <div class="m-step-text"><span class="m-num">3</span><h3>โอนเงิน</h3><p>สแกน QR ด้วยแอปธนาคาร หรือกดไอคอนคัดลอก {i:clipboard-copy} ข้างเลขบัญชีและข้างยอดเงิน ไปวางในแอปธนาคาร</p><p><b>ก่อนกดยืนยันในแอปธนาคาร</b> ดูชื่อบัญชีและเลขบัญชีที่แอปแสดง ให้ตรงกับข้อความ Telegram อีกครั้ง (สแกน QR ก็ต้องดู)</p></div>
+  </div>
+
+  <div class="m-step">
+    <div class="m-shot" data-modal="ชำระเงิน — INV-2609-015" data-nav="bills" data-title="ชำระเงิน — INV-2609-015">
+            <div class="s-body">
+        <div class="s-card" style="text-align:center">
+          <b>💵 รับเงิน USD</b>
+          <span>เครือข่าย (Chain): <b style="font-size:15px">TRC20</b></span>
+          <div class="s-row" style="justify-content:center"><b style="font-family:ui-monospace,monospace;font-size:11px;word-break:break-all">TXk2m8QaP4vR7wLs…9fQa</b><span class="s-copy s-hl">{i:clipboard-copy}</span></div>
+          <div class="s-alert" style="text-align:left">⚠️ โอนผิดเครือข่าย (chain) เงินจะสูญหายและกู้คืนไม่ได้</div>
+          <span class="s-muted">ยอดที่ต้องโอน</span>
+          <b style="font-size:15px">$224.44</b>
+        </div>
+      </div>
+    </div>
+    <div class="m-step-text"><h3>บิล USD — โอนเข้ากระเป๋าคริปโต</h3><p>บิลสกุล USD ไม่มีเลขบัญชีธนาคาร มีแค่ <b>เครือข่าย (chain)</b> กับ <b>ที่อยู่กระเป๋า</b> (และรูป QR ถ้ามี)</p><p>กดไอคอนคัดลอก {i:clipboard-copy} ไปวางในแอปกระเป๋า <b>ห้ามพิมพ์เอง</b> · เลือกเครือข่ายในแอปให้ตรงกับที่เขียนไว้ · ก่อนกดยืนยัน ตรวจเครือข่ายและที่อยู่ให้ตรงกับข้อความ Telegram <b>ทุกตัวอักษร</b> — โอนผิดเครือข่าย เงินหายและกู้คืนไม่ได้</p><p>ตอนแจ้งชำระ ใส่ยอดเป็นดอลลาร์ และใส่เลขรายการโอน (TxID) ในหมายเหตุ ทางเราจะตรวจได้เร็วขึ้น</p></div>
   </div>
 
   <div class="m-step">
@@ -68,10 +99,11 @@
         <div class="s-slip">✓ สลิป-กสิกร.jpg</div>
         <span class="s-muted">วันที่โอน</span>
         <div class="s-input">25/09/2569</div>
-        <span class="s-btn wide s-hl">ยืนยันแจ้งชำระ<span class="s-tap">{i:hand}</span></span>
+        <div class="s-card s-hl"><div class="s-row" style="justify-content:flex-start;gap:6px"><span class="s-check on"></span><span>ตรวจแล้ว — ชื่อบัญชีและเลขบัญชีที่แอปธนาคารแสดงตรงกับที่ทางเราแจ้งทาง Telegram</span></div></div>
+        <span class="s-btn wide">ยืนยันแจ้งชำระ<span class="s-tap">{i:hand}</span></span>
       </div>
     </div>
-    <div class="m-step-text"><span class="m-num">3</span><h3>แนบสลิป แล้วยืนยัน</h3><p>เลือกรูปสลิปจากมือถือ ใส่วันที่โอน แล้วกด <span class="m-ui is-primary">ยืนยันแจ้งชำระ</span></p></div>
+    <div class="m-step-text"><span class="m-num">4</span><h3>แนบสลิป ติ๊กยืนยัน แล้วกดยืนยัน</h3><p>เลือกรูปสลิปจากมือถือ ใส่วันที่โอน <b>ติ๊กช่องยืนยันเลขบัญชี</b> (ไม่ติ๊กกดยืนยันไม่ได้) แล้วกด <span class="m-ui is-primary">ยืนยันแจ้งชำระ</span></p><p>บิลที่ยังไม่เคยได้เลขบัญชีทาง Telegram หรือบัญชีเปลี่ยนหลังจากนั้น ช่องนี้จะเป็น "ยืนยันเลขบัญชีกับทางเราโดยตรงแล้ว" — โทรหรือทักทางเราให้แน่ใจก่อนโอน</p><p>บิล USD ติ๊กยืนยัน<b>เครือข่าย (chain) และที่อยู่กระเป๋า</b>แทนชื่อบัญชี/เลขบัญชี</p></div>
   </div>
 
   <div class="m-step">
@@ -80,11 +112,15 @@
         <div class="s-bubble"><b>🎉 ขอบคุณครับ ทางเราได้รับเงินแล้ว</b>15,614.00 บาท · บิล INV-2609-014<br>บิลนี้ชำระครบแล้ว ✓</div>
       </div>
     </div>
-    <div class="m-step-text"><span class="m-num">4</span><h3>รอทางเราตรวจ</h3><p>ระหว่างนี้สถานะเป็น <span class="s-badge amber">รอตรวจสอบ</span> ตรวจเสร็จยอดถูกตัดทันที และได้ข้อความขอบคุณ</p></div>
+    <div class="m-step-text"><span class="m-num">5</span><h3>รอทางเราตรวจ</h3><p>ระหว่างนี้สถานะเป็น <span class="s-badge amber">รอตรวจสอบ</span> ตรวจเสร็จยอดถูกตัดทันที และได้ข้อความขอบคุณ</p></div>
   </div>
 
+  <div class="m-tip is-warn">{i:triangle-alert}<span><b>หากโอนผิดบัญชี หรือโอนเข้าบัญชีที่ไม่ตรงกับที่แจ้งทาง Telegram ทางเราขอสงวนสิทธิ์ไม่รับผิดชอบทุกกรณี</b></span></div>
+  <div class="m-tip is-warn">{i:triangle-alert}<span><b>เห็นกล่องแดง "บัญชีของบิลนี้ไม่ตรงกับที่ทางเราแจ้งทาง Telegram ล่าสุด"</b> ห้ามโอน รอเลขบัญชีใหม่ทาง Telegram หรือยืนยันกับทางเราโดยตรงก่อน · ถ้ากดยืนยันแล้วระบบบอกว่า "บัญชีรับเงินของบิลนี้เพิ่งเปลี่ยน" ให้ตรวจเลขบัญชีใหม่ แล้วแนบสลิปอีกครั้ง</span></div>
   <div class="m-tip">{i:info}<span><b>โอนจากมือถือเครื่องเดียวกัน</b> กด <span class="m-ui">💾 บันทึกรูป QR</span> แล้วในแอปธนาคารเลือก "สแกนจากรูปภาพ"</span></div>
   <div class="m-tip">{i:info}<span><b>จ่ายไม่ครบในครั้งเดียว</b> แก้ยอดเป็นยอดที่โอนจริง แล้วพิมพ์ยอดซ้ำเพื่อยืนยัน ที่เหลือจ่ายทีหลังได้</span></div>
+  <div class="m-tip">{i:info}<span><b>บิลที่มี 📎</b> = ทางเราแนบรูปประกอบบิลไว้ กด <span class="m-ui">ดูบิล</span> เพื่อดู (กดรูปเพื่อดูขนาดเต็ม)</span></div>
+  <div class="m-tip">{i:package}<span><b>บรรทัดที่มีป้าย <span class="s-badge">กลุ่ม</span></b> = สินค้าชุด คิดเป็นบรรทัดเดียวจากยอดขายรวมของทั้งชุด ตาม % ของชุด · ใต้ชื่อเขียน "ประกอบด้วย: …" บอกว่าในชุดมีสินค้าอะไร — สินค้าในรายการนั้น<b>ไม่ได้คิดเงินแยกอีก</b> (ไม่ซ้ำ)</span></div>
 </section>
 
 <!-- ── ดูยอดของร้าน ── -->
@@ -129,7 +165,7 @@
         </div>
       </div>
     </div>
-    <div class="m-step-text"><h3>บิลแบบอ่านง่าย</h3><p>เลื่อนลงล่างสุดของหน้าแรก บอกที่มาของยอดทีละบรรทัด กด <span class="m-ui">ดูรายการสินค้า</span> เพื่อดูแยกทีละสินค้า</p></div>
+    <div class="m-step-text"><h3>บิลแบบอ่านง่าย</h3><p>เลื่อนลงล่างสุดของหน้าแรก บอกที่มาของยอดทีละบรรทัด กด <span class="m-ui">ดูรายการสินค้า</span> เพื่อดูแยกทีละสินค้า</p><p>สินค้าชุด (ป้าย <span class="s-badge">กลุ่ม</span>) เป็นบรรทัดเดียว ใต้ชื่อบอกว่า "ประกอบด้วย" สินค้าอะไรบ้าง</p></div>
   </div>
 
   <div class="m-tip">{i:info}<span>ดูรอบอื่นได้ที่แถบ <span class="m-ui">รอบบิล</span> ด้านบนของหน้าแรก · ดูเทียบรายเดือน/รายปีที่ {nav:reports}</span></div>
@@ -195,8 +231,9 @@
     <div class="m-shot" data-nav="account" data-title="บัญชีของฉัน">
             <div class="s-body">
         <div class="s-card">
-          <b>เชื่อมแล้ว · รับ 5 จาก 6 เรื่อง</b>
-          <div class="s-row"><span>บิลรอบใหม่ออกแล้ว</span><span class="s-switch on"></span></div>
+          <b>เชื่อมแล้ว · รับ 6 จาก 7 เรื่อง</b>
+          <div class="s-row"><span>บิลรอบใหม่ออกแล้ว <span class="s-badge">🔒 ปิดไม่ได้</span></span><span class="s-switch on s-dim"></span></div>
+          <div class="s-row"><span>แจ้ง/เปลี่ยนบัญชีสำหรับโอนของบิล <span class="s-badge">🔒 ปิดไม่ได้</span></span><span class="s-switch on s-dim"></span></div>
           <div class="s-row"><span>เตือนก่อนครบกำหนด 2 วัน</span><span class="s-switch on"></span></div>
           <div class="s-row"><span>ทักเมื่อเลยกำหนด</span><span class="s-switch on"></span></div>
           <div class="s-row"><span>ทางเราได้รับเงินแล้ว</span><span class="s-switch on"></span></div>
@@ -205,7 +242,7 @@
         </div>
       </div>
     </div>
-    <div class="m-step-text"><span class="m-num">3</span><h3>เลือกเรื่องที่อยากได้</h3><p>กดสวิตช์เปิด/ปิดได้ทีละเรื่อง บันทึกทันที ตั้งของใครของมัน</p></div>
+    <div class="m-step-text"><span class="m-num">3</span><h3>เลือกเรื่องที่อยากได้</h3><p>กดสวิตช์เปิด/ปิดได้ทีละเรื่อง บันทึกทันที ตั้งของใครของมัน</p><p>ยกเว้น 2 เรื่องที่มีเลขบัญชีสำหรับโอน (<b>บิลรอบใหม่ออกแล้ว</b> และ <b>แจ้ง/เปลี่ยนบัญชีสำหรับโอนของบิล</b>) ปิดไม่ได้ เพราะร้านต้องใช้ข้อความนี้ตรวจเลขบัญชีก่อนโอนทุกครั้ง</p></div>
   </div>
 </section>
 
@@ -240,10 +277,52 @@
         <span class="s-btn wide">บันทึก</span>
       </div>
     </div>
-    <div class="m-step-text"><span class="m-num">2</span><h3>เลือกว่าให้ทำอะไรได้</h3><p>ตั้งชื่อผู้ใช้กับรหัสผ่าน ติ๊กสิทธิ์ที่ให้ แล้วส่งชื่อผู้ใช้/รหัสให้พนักงาน</p></div>
+    <div class="m-step-text"><span class="m-num">2</span><h3>เลือกว่าให้ทำอะไรได้</h3><p>ตั้งชื่อผู้ใช้กับรหัสผ่าน ติ๊กสิทธิ์ที่ให้ แล้วบันทึก</p></div>
   </div>
 
-  <div class="m-tip">{i:info}<span>ผู้ช่วยลืมรหัส: กด <span class="m-ui">ตั้งรหัสใหม่</span> ให้ได้เอง · ผู้ช่วยลาออก: กด <span class="m-ui">ปิดใช้งาน</span></span></div>
+  <div class="m-step">
+    <div class="m-shot" data-modal="ข้อมูลเข้าระบบของ somsri" data-nav="account" data-title="ข้อมูลเข้าระบบของ somsri">
+            <div class="s-body">
+        <div class="s-card" style="font-family:ui-monospace,monospace;font-size:11px;line-height:1.5">ข้อมูลเข้าสู่ระบบ ระบบจัดการร้าน — ร้าน bkk01<br>ลิงก์: https://…/#/s/k3XrT9…<br>ชื่อผู้ใช้: somsri<br>รหัสผ่าน: ••••••••</div>
+        <span class="s-btn wide s-hl">📋 คัดลอกทั้งชุด<span class="s-tap">{i:hand}</span></span>
+        <span class="s-muted">⚠ รหัสผ่านนี้แสดงครั้งเดียว</span>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">3</span><h3>คัดลอกทั้งชุด ส่งให้พนักงาน</h3><p>บันทึกแล้วระบบโชว์ <b>ลิงก์ของร้าน + ชื่อผู้ใช้ + รหัสผ่าน</b> เป็นข้อความก้อนเดียว กด <span class="m-ui is-primary">📋 คัดลอกทั้งชุด</span> แล้ววางในแชตส่วนตัวของพนักงาน</p><p>รหัสผ่านแสดงครั้งเดียว — ระบบเก็บแบบเข้ารหัส ดูย้อนหลังไม่ได้ · ลิงก์ของร้านอยู่ที่การ์ด <b>ลิงก์เข้าระบบของร้าน</b> ในหน้าเดียวกัน (ทุกคนในร้านใช้ลิงก์เดียวกัน)</p></div>
+  </div>
+
+  <div class="m-tip">{i:info}<span>ส่งข้อมูลเข้าระบบซ้ำ: <span class="m-ui">📋 คัดลอกข้อมูลเข้าระบบ</span> ที่ผู้ช่วยคนนั้น (ได้ลิงก์ + ชื่อผู้ใช้ ไม่มีรหัส) · ผู้ช่วยลืมรหัส: <span class="m-ui">🔑 ตั้งรหัสใหม่ + คัดลอก</span> ได้ชุดพร้อมรหัสใหม่ (เข้าครั้งแรกผู้ช่วยต้องตั้งรหัสของตัวเอง) · ผู้ช่วยลาออก: กด <span class="m-ui">ปิดใช้งาน</span></span></div>
+  <div class="m-tip is-warn">{i:triangle-alert}<span>ลิงก์ของร้านเป็นกุญแจของร้าน — ส่งเฉพาะคนในร้าน อย่าโพสต์ในกลุ่มหรือที่สาธารณะ · สงสัยว่าหลุด แจ้งทางเราให้สร้างลิงก์ใหม่ (ทุกคนในร้านจะถูกออกจากระบบ แล้วใช้ลิงก์ใหม่แทน)</span></div>
+</section>
+
+<!-- ── เข้าระบบ: ลิงก์ของร้าน ── -->
+<section class="m-guide" id="login" hidden>
+  <button class="m-back" data-home>← เลือกเรื่องอื่น</button>
+  <div class="m-guide-head"><span class="m-task-ico">{i:key-round}</span><div><h2>เข้าระบบ</h2><p>ใช้ลิงก์ของร้านที่ทางเราส่งให้เท่านั้น</p></div></div>
+
+  <div class="m-step">
+    <div class="m-shot" data-app="telegram" data-title="แชตกับทางเรา">
+            <div class="s-tg">
+        <div class="s-bubble"><b>ข้อมูลเข้าสู่ระบบ ระบบจัดการร้าน — ร้าน bkk01</b>ลิงก์: <span class="s-hl" style="padding:0 3px">https://…/#/s/k3XrT9…</span><br>ชื่อผู้ใช้: bkk01<br>รหัสผ่าน: Hq7mT3xKp2<br>เข้าครั้งแรกระบบจะให้ตั้งรหัสผ่านใหม่</div>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">1</span><h3>กดลิงก์ของร้าน</h3><p>ทางเราส่งข้อมูลเข้าระบบให้เป็นชุด (ลิงก์ + ชื่อผู้ใช้ + รหัสผ่าน) — กด<b>ลิงก์ในชุดนั้น</b>เพื่อเปิดหน้าเข้าสู่ระบบของร้าน</p><p>ทุกร้านมีลิงก์ของตัวเอง ใช้ได้กับทุกคนในร้าน · ไม่เปิดลิงก์ของร้าน ใส่รหัสถูกก็เข้าไม่ได้</p></div>
+  </div>
+
+  <div class="m-step">
+    <div class="m-shot" data-modal="เข้าสู่ระบบ" data-nav="" data-title="เข้าสู่ระบบ">
+            <div class="s-body">
+        <div class="s-input" style="color:var(--text)">ชื่อผู้ใช้: bkk01</div>
+        <div class="s-input">รหัสผ่าน: ••••••••</div>
+        <span class="s-btn wide">เข้าสู่ระบบ</span>
+        <span class="s-muted s-hl" style="padding:2px 4px">🔗 ลิงก์เข้าระบบของร้านถูกจำไว้ในเครื่องนี้แล้ว · ล้าง</span>
+      </div>
+    </div>
+    <div class="m-step-text"><span class="m-num">2</span><h3>ใส่ชื่อผู้ใช้และรหัสผ่าน</h3><p>ใต้ปุ่มขึ้นว่า "ลิงก์เข้าระบบของร้านถูกจำไว้ในเครื่องนี้แล้ว" = พร้อมเข้า</p><p>ครั้งต่อไปในเครื่องและเบราว์เซอร์เดิม เปิดหน้าเว็บแล้วเข้าได้เลย · <b>เครื่องใหม่หรือเบราว์เซอร์อื่น</b> ต้องกดลิงก์ของร้านอีกครั้ง · เครื่องที่ใช้ร่วมกับคนนอก กด <span class="m-ui">ล้าง</span> หลังใช้</p></div>
+  </div>
+
+  <div class="m-tip">{i:info}<span><b>เข้าครั้งแรก</b>ด้วยรหัสที่ทางเราหรือเจ้าของร้านตั้งให้ ระบบจะให้ตั้งรหัสผ่านใหม่ของตัวเองก่อนใช้งาน</span></div>
+  <div class="m-tip is-warn">{i:triangle-alert}<span>ขึ้น <b>"ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง"</b> ทั้งที่รหัสถูก → กดลิงก์ของร้านอีกครั้งแล้วเข้าใหม่ · ถ้ายังไม่ได้ ทางเราอาจสร้างลิงก์ใหม่ให้ร้านแล้ว (ลิงก์เก่าใช้ไม่ได้) — ขอลิงก์ใหม่จากทางเรา หรือจากเจ้าของบัญชีร้าน</span></div>
 </section>
 
 <!-- ── คำถามที่พบบ่อย ── -->
@@ -253,7 +332,13 @@
   <div class="m-faqs">
     <details class="m-faq"><summary>แจ้งชำระแล้ว ทำไมยอดยังค้าง</summary><div>ยอดจะถูกตัดหลังทางเราตรวจสลิปแล้ว ระหว่างนั้นสถานะเป็น "รอตรวจสอบ" ตรวจเสร็จจะได้ข้อความทาง Telegram</div></details>
     <details class="m-faq"><summary>ยอดขายในบิลไม่ตรงกับที่ร้านนับ</summary><div>ทางเราเป็นคนบันทึกยอดขาย ติดต่อทางเราพร้อมเลขบิล ถ้าบิลยังไม่มีการจ่าย ทางเราแก้และออกบิลใหม่ให้ได้</div></details>
-    <details class="m-faq"><summary>ลืมรหัสผ่าน</summary><div>เจ้าของร้าน: ติดต่อทางเราให้ตั้งรหัสใหม่ · ผู้ช่วย: ให้เจ้าของบัญชีร้านตั้งให้ที่เมนูบัญชี</div></details>
+    <details class="m-faq"><summary>ลืมรหัสผ่าน</summary><div>ไม่มีใครดูรหัสเดิมได้ (ระบบเก็บแบบเข้ารหัส) · เจ้าของร้าน: ติดต่อทางเรา ทางเราจะส่งชุดข้อมูลเข้าระบบพร้อมรหัสใหม่ให้ · ผู้ช่วย: ให้เจ้าของบัญชีร้านกด "🔑 ตั้งรหัสใหม่ + คัดลอก" ที่เมนูบัญชี · เข้าครั้งแรกด้วยรหัสใหม่ ระบบจะให้ตั้งรหัสของตัวเอง</div></details>
+    <details class="m-faq"><summary>รหัสถูกแต่เข้าระบบไม่ได้</summary><div>ต้องกดลิงก์ของร้านก่อน (ลิงก์ในชุดข้อมูลเข้าระบบที่ได้รับ) โดยเฉพาะตอนใช้เครื่องใหม่หรือเบราว์เซอร์อื่น — ถ้ายังไม่ได้ ลิงก์อาจถูกเปลี่ยนแล้ว ขอลิงก์ใหม่จากทางเรา (ดูเรื่อง "เข้าระบบ")</div></details>
+    <details class="m-faq"><summary>บิล USD โอนเข้าที่ไหน</summary><div>เข้ากระเป๋าคริปโตตามเครือข่าย (chain) และที่อยู่กระเป๋าที่ขึ้นในหน้าชำระเงินและในข้อความ Telegram — คัดลอกที่อยู่ไปวาง ห้ามพิมพ์เอง และเลือกเครือข่ายให้ตรง โอนผิดเครือข่ายเงินหายและกู้คืนไม่ได้ · ไม่ตรงกับ Telegram ห้ามโอน</div></details>
+    <details class="m-faq"><summary>เลขบัญชีบนเว็บไม่ตรงกับใน Telegram</summary><div>ห้ามโอนเด็ดขาด ติดต่อทางเราทันที · ทางเราเปลี่ยนบัญชีเมื่อไร จะส่งเลขบัญชีใหม่ให้ทาง Telegram ก่อนให้ร้านโอน ถ้ายังไม่ได้ข้อความใหม่ แปลว่ายังโอนไม่ได้</div></details>
+    <details class="m-faq"><summary>ยังไม่ได้เชื่อม Telegram จะรู้เลขบัญชีที่ถูกต้องได้อย่างไร</summary><div>เชื่อมได้ที่หน้า "บัญชีของฉัน" (ดูเรื่อง "รับแจ้งเตือน Telegram") ระหว่างนี้โทรหรือทักทางเราเพื่อยืนยันเลขบัญชีก่อนโอนทุกครั้ง</div></details>
+    <details class="m-faq"><summary>ในบิลเขียนว่า "กำหนดยอด" แทน %</summary><div>สินค้านั้นทางเรากำหนดยอดที่เรียกเก็บเป็นจำนวนเงิน ไม่ได้คิดจาก % ของยอดขาย สงสัยตัวเลขติดต่อทางเราพร้อมเลขบิล</div></details>
+    <details class="m-faq"><summary>ในบิลมีสินค้าป้าย "กลุ่ม" และคำว่า "ประกอบด้วย: …"</summary><div>เป็นสินค้าชุดที่ทางเรากำหนดไว้ — ยอดขายของทั้งชุดคิดเป็นบรรทัดเดียวตาม % ของชุด รายการ "ประกอบด้วย" บอกแค่ว่าในชุดมีสินค้าอะไร ไม่ได้คิดเงินแยกหรือซ้ำ · บิลเก่าโชว์รายการในชุด ณ วันที่ออกบิลนั้น · สงสัยตัวเลขติดต่อทางเราพร้อมเลขบิล</div></details>
     <details class="m-faq"><summary>บิลรอบนี้ยอดติดลบ ต้องทำอะไรไหม</summary><div>ไม่ต้องโอนอะไร ยอดนั้นถูกหักจากบิลรอบถัดไปให้อัตโนมัติ (บรรทัด "หักยอดยกมาจากรอบก่อน")</div></details>
     <details class="m-faq"><summary>ระบบให้ล็อกอินใหม่บ่อย</summary><div>ล็อกอินอยู่ได้ 24 ชั่วโมงแล้วต้องเข้าใหม่ เพื่อความปลอดภัยของข้อมูลร้าน</div></details>
   </div>

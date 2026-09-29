@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Libraries\ApiException;
 use App\Libraries\Clock;
 use App\Libraries\Db;
 use App\Libraries\Js;
@@ -25,10 +26,14 @@ final class NotificationService
 {
     public const EVENTS = [
         ['key' => 'bank_account.change', 'group' => 'security', 'label' => 'บัญชีรับเงินถูกเพิ่ม / แก้ / ลบ', 'locked' => true],
+        // เปลี่ยนบัญชีปลายทางของบิลใบเดียวก็คือเปลี่ยนที่เงินไปลง — ร้ายแรงเท่าแก้เลขบัญชี จึงปิดไม่ได้เหมือนกัน
+        ['key' => 'invoice.bank_account', 'group' => 'security', 'label' => 'เปลี่ยนบัญชีรับเงินของบิล', 'locked' => true],
         ['key' => 'security.code_lockout', 'group' => 'security', 'label' => 'ใส่รหัส 6 หลักผิดจนถูกล็อก', 'locked' => true],
         ['key' => 'security.backup_code', 'group' => 'security', 'label' => 'ส่วนกลางล็อกอินด้วยรหัสสำรอง', 'locked' => true],
         ['key' => 'security.2fa_reset', 'group' => 'security', 'label' => 'ปลด Google Authenticator ของผู้ใช้', 'locked' => true],
         ['key' => 'security.captcha', 'group' => 'security', 'label' => 'เปิด / ปิด captcha หน้าเข้าสู่ระบบ', 'locked' => true],
+        // ลิงก์เข้าระบบของร้านคือ "ของที่ต้องมี" คู่กับรหัสผ่าน — สร้างใหม่ = ทุกคนในร้านถูกออกจากระบบ ใครทำต้องเห็นทันที
+        ['key' => 'security.shop_login_link', 'group' => 'security', 'label' => 'สร้างลิงก์เข้าระบบใหม่ให้ร้าน', 'locked' => true],
 
         ['key' => 'security.login_lockout', 'group' => 'login', 'label' => 'มีคนเดารหัสผ่านจนถูกล็อก', 'default' => 'instant'],
         ['key' => 'security.login_captcha', 'group' => 'login', 'label' => 'บัญชีถูกใส่รหัสผิดหลายครั้ง จนต้องผ่าน captcha', 'default' => 'instant'],
@@ -272,9 +277,12 @@ final class NotificationService
     /*
      * เรื่องที่ร้านเลือกรับได้เอง (หน้าบัญชีของฉัน) — ค่าตั้งต้นรับทุกเรื่อง
      * requires = ต้องมีสิทธิ์นี้ถึงจะได้ (ผู้ช่วยที่ดูบิลไม่ได้ ไม่ควรรู้ยอดบิลทาง Telegram)
+     * locked = ปิดไม่ได้ — ข้อความที่มีเลขบัญชีสำหรับโอนคือ "ของจริง" ที่ร้านใช้เทียบกับหน้าเว็บก่อนโอนทุกครั้ง
+     *          ถ้าปิดได้ ร้านจะไม่มีอะไรให้เทียบ แล้วกติกา "ไม่ตรงห้ามโอน" ก็ใช้ไม่ได้
      */
     public const SHOP_EVENTS = [
-        ['key' => 'bill.issued', 'label' => 'บิลรอบใหม่ออกแล้ว', 'hint' => 'ยอดที่ต้องชำระและวันครบกำหนด', 'requires' => 'bills'],
+        ['key' => 'bill.issued', 'label' => 'บิลรอบใหม่ออกแล้ว', 'hint' => 'ยอดที่ต้องชำระ วันครบกำหนด และบัญชีสำหรับโอน — ปิดไม่ได้ เพราะใช้ตรวจเลขบัญชีก่อนโอนทุกครั้ง', 'requires' => 'bills', 'locked' => true],
+        ['key' => 'bill.account', 'label' => 'แจ้ง/เปลี่ยนบัญชีสำหรับโอนของบิล', 'hint' => 'เมื่อทางเราเปลี่ยนบัญชีรับเงินของบิลที่ยังค้าง — ปิดไม่ได้', 'requires' => 'bills', 'locked' => true],
         ['key' => 'bill.due', 'label' => 'เตือนก่อนครบกำหนด 2 วัน', 'hint' => 'ส่งหลัง 09:00 น. ครั้งเดียวต่อบิล', 'requires' => 'bills'],
         ['key' => 'bill.overdue', 'label' => 'ทักเมื่อเลยกำหนด', 'hint' => 'หลังเลยกำหนด 3 วัน และ 7 วัน (ครั้งละข้อความเดียว)', 'requires' => 'bills'],
         ['key' => 'payment.received', 'label' => 'ทางเราได้รับเงินแล้ว', 'hint' => 'ยืนยันทุกครั้งที่ตรวจสลิปผ่าน พร้อมยอดคงเหลือ', 'requires' => 'bills'],
@@ -315,8 +323,9 @@ final class NotificationService
                   WHERE franchise_id = ? AND status = 'ACTIVE' AND telegram_chat_id IS NOT NULL",
                 [$franchiseId],
             ),
+            // เรื่องที่ล็อกไว้ไม่ดูค่าที่ร้านเลือก แต่ยังต้องมีสิทธิ์ดูบิล (ผู้ช่วยที่ไม่เห็นบิลไม่ต้องรู้เลขบัญชี/ยอด)
             static fn ($u) => (empty($event['requires']) || Permissions::has($u, $event['requires']))
-                && (self::shopPrefsOf($u)[$eventKey] ?? null) !== false,
+                && (! empty($event['locked']) || (self::shopPrefsOf($u)[$eventKey] ?? null) !== false),
         );
         foreach ($users as $u) {
             TelegramService::queue($text, chatId: (string) $u['telegram_chat_id']);
@@ -325,14 +334,14 @@ final class NotificationService
         return count($users);
     }
 
-    /** ค่าที่ผู้ใช้เลือกไว้ — ไม่มีคีย์ = เปิด */
+    /** ค่าที่ผู้ใช้เลือกไว้ — ไม่มีคีย์ = เปิด · เรื่องที่ล็อกเปิดเสมอ (ค่าเก่าที่เคยปิดไว้ก่อนล็อกไม่มีผล) */
     public static function shopPrefsOf(?array $user): array
     {
         $saved = json_decode((string) ($user['notify_prefs'] ?? '{}'), true);
         $saved = is_array($saved) ? $saved : [];
         $out   = [];
         foreach (self::SHOP_EVENTS as $e) {
-            $out[$e['key']] = ($saved[$e['key']] ?? null) !== false;
+            $out[$e['key']] = ! empty($e['locked']) || ($saved[$e['key']] ?? null) !== false;
         }
 
         return $out;
@@ -347,19 +356,404 @@ final class NotificationService
             if (! empty($e['requires']) && ! Permissions::has($user, $e['requires'])) {
                 continue;
             }
-            $out[] = ['key' => $e['key'], 'label' => $e['label'], 'hint' => $e['hint'], 'enabled' => $prefs[$e['key']]];
+            $out[] = ['key' => $e['key'], 'label' => $e['label'], 'hint' => $e['hint'], 'enabled' => $prefs[$e['key']], 'locked' => ! empty($e['locked'])];
         }
 
         return $out;
     }
 
+    /** เรื่องที่ล็อกไว้ส่งมาปิดก็ไม่ error (หน้าเว็บรุ่นเก่ายังส่งมาได้) แต่ไม่มีผล */
     public static function saveShopPrefs(int $userId, array $patch): array
     {
+        foreach (self::SHOP_EVENTS as $e) {
+            if (! empty($e['locked'])) {
+                unset($patch[$e['key']]);
+            }
+        }
         $user = Db::one('SELECT * FROM users WHERE id = ?', [$userId]);
         $next = [...self::shopPrefsOf($user), ...$patch];
         Db::exec('UPDATE users SET notify_prefs = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?', [Json::encode($next), $userId]);
 
         return self::shopNotifyOptions([...$user, 'notify_prefs' => Json::encode($next)]);
+    }
+
+    /* ── บัญชีสำหรับโอนในข้อความถึงร้าน ─────────────────────────────
+     *
+     * ข้อความ Telegram ที่มีเลขบัญชีคือ "ของอ้างอิงนอกระบบ" ของร้าน: ก่อนโอนทุกครั้งร้านเทียบหน้าเว็บกับข้อความนี้ ไม่ตรง = ห้ามโอน
+     * ใช้กันได้ทั้งหน้าเว็บปลอม และบัญชีที่ถูกแก้ตรง ๆ ในฐานข้อมูล
+     *
+     * ระบบจึงไม่ส่งเลขบัญชีใหม่ให้ร้านเองอัตโนมัติตอนบัญชีถูกเปลี่ยน — ถ้าส่งเอง คนที่ได้บัญชีแอดมินไป (ผ่านรหัส 6 หลักได้)
+     * จะให้ระบบบอกร้านเองว่าให้โอนเข้าบัญชีโจร แล้วการตรวจนี้ไม่มีวันเตือนได้เลย
+     * ต้องมีคนในส่วนกลางตรวจแล้วกด "ส่งเลขบัญชีให้ร้าน" เอง (ยืนยันรหัส 6 หลัก + แจ้งกลุ่มทุกครั้ง)
+     *
+     * invoices.notified_bank = บัญชีที่บอกร้านไปล่าสุด (snapshot) — จดเมื่อเข้าคิวถึงร้านอย่างน้อย 1 คน (เข้าคิว ≠ ส่งถึงแล้ว)
+     * รูปแบบ: {id, bankName, accountNumber, accountName, currency, qr} · บิลไม่มีบัญชี = {id: null}
+     */
+
+    /** แถวดิบของ bank_accounts (หรือ null) → snapshot — qr เก็บแค่ชื่อไฟล์ (ลิงก์เต็มเซ็นใหม่ทุกครั้ง เทียบกันไม่ได้) */
+    public static function bankSnapshotFromRow(?array $bankAccountsRow): array
+    {
+        if ($bankAccountsRow === null || empty($bankAccountsRow['id'])) {
+            return ['id' => null];
+        }
+
+        return [
+            'id'            => (int) $bankAccountsRow['id'],
+            'bankName'      => $bankAccountsRow['bank_name'],
+            'accountNumber' => $bankAccountsRow['account_number'],
+            'accountName'   => $bankAccountsRow['account_name'],
+            'currency'      => $bankAccountsRow['currency'] ?? 'THB',
+            'qr'            => empty($bankAccountsRow['qr_url']) ? null : basename((string) $bankAccountsRow['qr_url']),
+        ];
+    }
+
+    /** บัญชีที่บิลชี้อยู่ตอนนี้ — รับแถวจาก SELECT_INVOICE ของ InvoiceService (หรือแถวดิบของ invoices ก็ได้ จะอ่านบัญชีให้เอง) */
+    public static function liveSnapshotOfInvoice(array $invoiceRow): array
+    {
+        $id = $invoiceRow['bank_account_id'] ?? null;
+        if (! $id) {
+            return ['id' => null];
+        }
+        if (! array_key_exists('bank_name', $invoiceRow)) {
+            return self::bankSnapshotFromRow(Db::one('SELECT * FROM bank_accounts WHERE id = ?', [$id]));
+        }
+
+        return self::bankSnapshotFromRow([
+            'id'             => $id,
+            'bank_name'      => $invoiceRow['bank_name'],
+            'account_number' => $invoiceRow['account_number'],
+            'account_name'   => $invoiceRow['account_name'],
+            'currency'       => $invoiceRow['bank_currency'] ?? 'THB',
+            'qr_url'         => $invoiceRow['bank_qr_url'] ?? null,
+        ]);
+    }
+
+    /**
+     * ป้ายเดียวกับทุกที่ในระบบ (BankAccountService::labelOf) — "ธนาคาร · เลขที่ (ชื่อบัญชี)" หรือ "USD · เครือข่าย · ที่อยู่กระเป๋า"
+     * snapshot ของกระเป๋าเก็บเครือข่ายไว้ในช่อง bankName (แบบเดียวกับ bank_name) รูปแบบ snapshot จึงไม่ต้องเปลี่ยน · ไม่มีบัญชี = '—'
+     */
+    public static function snapshotLabel(?array $snapshot): string
+    {
+        if ($snapshot === null || empty($snapshot['id'])) {
+            return '—';
+        }
+
+        return BankAccountService::labelOf([
+            'bank_name'      => (string) ($snapshot['bankName'] ?? ''),
+            'account_number' => (string) ($snapshot['accountNumber'] ?? ''),
+            'account_name'   => (string) ($snapshot['accountName'] ?? ''),
+            'currency'       => $snapshot['currency'] ?? 'THB',
+        ]);
+    }
+
+    /** บัญชีที่บอกร้านทาง Telegram ล่าสุด · ยังไม่เคยบอก = null */
+    public static function notifiedSnapshot(array $invoiceRow): ?array
+    {
+        $raw = $invoiceRow['notified_bank'] ?? null;
+        if (! is_string($raw) || $raw === '') {
+            return null;
+        }
+        $decoded = json_decode($raw, true);
+
+        return is_array($decoded) && array_key_exists('id', $decoded) ? $decoded : null;
+    }
+
+    /** เทียบสิ่งที่ร้านใช้โอนจริง: ธนาคาร เลขที่ ชื่อ สกุล และรูป QR (เปลี่ยน QR อย่างเดียวก็พาเงินไปที่อื่นได้) */
+    public static function snapshotsMatch(array $a, array $b): bool
+    {
+        $noA = empty($a['id']);
+        $noB = empty($b['id']);
+        if ($noA || $noB) {
+            return $noA && $noB;
+        }
+        foreach (['bankName', 'accountNumber', 'accountName', 'currency', 'qr'] as $k) {
+            if ((string) ($a[$k] ?? '') !== (string) ($b[$k] ?? '')) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * สถานะที่ร้านเห็น (ไม่มีเลขบัญชีในคำตอบ):
+     *   NOT_SENT  ยังไม่เคยส่งเลขบัญชีของบิลนี้ทาง Telegram — ต้องยืนยันกับทางเราโดยตรง
+     *   CHANGED   บัญชีของบิลตอนนี้ไม่ตรงกับที่บอกร้านไว้ — ห้ามโอน
+     *   MATCH     ตรงกัน
+     */
+    public static function accountCheck(array $invoiceRow): string
+    {
+        $told = self::notifiedSnapshot($invoiceRow);
+        if ($told === null) {
+            return 'NOT_SENT';
+        }
+
+        return self::snapshotsMatch($told, self::liveSnapshotOfInvoice($invoiceRow)) ? 'MATCH' : 'CHANGED';
+    }
+
+    /** snapshot นี้เป็นกระเป๋าคริปโต (บัญชี USD) — ข้อความถึงร้านต้องบอกเครือข่าย + ที่อยู่ ไม่ใช่ธนาคาร/ชื่อบัญชี */
+    private static function isWallet(?array $bank): bool
+    {
+        return $bank !== null && ! empty($bank['id']) && ($bank['currency'] ?? 'THB') === 'USD';
+    }
+
+    /**
+     * บรรทัดบัญชีสำหรับโอน (HTML ของ Telegram) — รับ snapshot · เฉพาะข้อความ ไม่แนบรูป QR
+     * (ให้ร้านเทียบตัวอักษรกับที่แอปธนาคาร/แอปกระเป๋าแสดงตอนสแกน)
+     * ที่อยู่อยู่ใน <code> — กดคัดลอกได้ทั้งชุดในแอป Telegram ลดโอกาสพิมพ์เอง/คัดลอกไม่ครบ
+     */
+    public static function shopAccountLines(?array $bank): array
+    {
+        if ($bank === null || empty($bank['id'])) {
+            return ['🏦 บิลนี้ยังไม่ได้ระบุบัญชีปลายทาง — โปรดสอบถามทางเราก่อนโอนครับ'];
+        }
+        if (self::isWallet($bank)) {
+            // กระเป๋าไม่มีธนาคารกลางคอยตีกลับ: ที่อยู่ถูกแต่ผิดเครือข่าย = เงินหายถาวร จึงเตือนเรื่องเครือข่ายติดกับที่อยู่เลย
+            return [
+                '💵 <b>บัญชีรับเงิน USD</b>',
+                'เครือข่าย (Chain): <b>' . TelegramService::escapeHtml((string) $bank['bankName']) . '</b>',
+                'ที่อยู่กระเป๋า: <code>' . TelegramService::escapeHtml((string) $bank['accountNumber']) . '</code>',
+                '⚠️ โอนผิดเครือข่าย (chain) เงินจะสูญหายและกู้คืนไม่ได้ — ตรวจที่อยู่กระเป๋าทุกตัวอักษรให้ตรงกับข้อความนี้',
+            ];
+        }
+
+        return [
+            '🏦 <b>บัญชีสำหรับโอน</b>',
+            'ธนาคาร: <b>' . TelegramService::escapeHtml((string) $bank['bankName']) . '</b>',
+            'เลขที่บัญชี: <code>' . TelegramService::escapeHtml((string) $bank['accountNumber']) . '</code>',
+            'ชื่อบัญชี: <b>' . TelegramService::escapeHtml((string) $bank['accountName']) . '</b>',
+        ];
+    }
+
+    /**
+     * คำเตือนท้ายทุกข้อความที่มีเลขบัญชี — ร้านต้องอ่านเจอทุกครั้งก่อนโอน
+     * ส่ง snapshot มาด้วย: กระเป๋า USD ใช้คำของกระเป๋า (ไม่มี "ธนาคาร/ชื่อบัญชี" ให้ตรวจ) แต่กติกา "ไม่ตรงห้ามโอน + ไม่รับผิดชอบ" เหมือนกัน
+     */
+    public static function accountWarningLines(?array $bank = null): array
+    {
+        if (self::isWallet($bank)) {
+            return [
+                '⚠️ ก่อนโอนทุกครั้ง โปรดตรวจเครือข่าย (chain) และที่อยู่กระเป๋าในระบบให้ตรงกับข้อความนี้',
+                'สแกน QR หรือวางที่อยู่เองก็ตาม — ก่อนกดยืนยันในแอปกระเป๋า ให้ตรวจเครือข่ายและที่อยู่ที่แอปแสดงให้ตรงกับข้อความนี้ทุกตัวอักษร',
+                'หากไม่ตรงกัน <b>ห้ามโอนเด็ดขาด</b> และติดต่อทางเราทันที',
+                'หากโอนผิดเครือข่าย ผิดที่อยู่กระเป๋า หรือโอนเข้าบัญชีที่ไม่ตรงกับที่แจ้งทาง Telegram ทางเราขอสงวนสิทธิ์ไม่รับผิดชอบทุกกรณีครับ',
+            ];
+        }
+
+        return [
+            '⚠️ ก่อนโอนทุกครั้ง โปรดตรวจธนาคาร เลขที่บัญชี และชื่อบัญชีในระบบให้ตรงกับข้อความนี้',
+            'สแกน QR หรือพิมพ์เลขเองก็ตาม — ก่อนกดยืนยันในแอปธนาคาร ให้ตรวจชื่อบัญชีและเลขบัญชีที่แอปแสดงให้ตรงกับข้อความนี้',
+            'หากไม่ตรงกัน <b>ห้ามโอนเด็ดขาด</b> และติดต่อทางเราทันที',
+            'หากโอนผิดบัญชี หรือโอนเข้าบัญชีที่ไม่ตรงกับที่แจ้งทาง Telegram ทางเราขอสงวนสิทธิ์ไม่รับผิดชอบทุกกรณีครับ',
+        ];
+    }
+
+    /** บิลพร้อมบัญชีที่ชี้อยู่ตอนนี้ (join สด) — บิลที่ออกแบบหลายร้านพร้อมกันไม่มีข้อมูลบัญชีติดมา จึงอ่านเองทุกครั้ง */
+    private static function billRow(int $invoiceId): ?array
+    {
+        return Db::one(
+            'SELECT i.*, f.username AS franchise_username, bp.code AS period_code,
+                    ba.bank_name, ba.account_name, ba.account_number, ba.currency AS bank_currency, ba.qr_url AS bank_qr_url,
+                    (SELECT COUNT(*) FROM invoice_attachments ia WHERE ia.invoice_id = i.id AND ia.removed_at IS NULL) AS attachment_count
+               FROM invoices i
+               JOIN franchises f       ON f.id = i.franchise_id
+               JOIN billing_periods bp ON bp.id = i.period_id
+               LEFT JOIN bank_accounts ba ON ba.id = i.bank_account_id
+              WHERE i.id = ?',
+            [$invoiceId],
+        );
+    }
+
+    /** "1,234.50 บาท" หรือ "35.12 USD (≈ 1,234.50 บาท)" — บิลดอลลาร์ต้องบอกตัวเลขที่ต้องโอนจริง ไม่ใช่ยอดบาท */
+    private static function billAmountText(array $inv, int $satang): string
+    {
+        $rate = (int) ($inv['usd_rate_satang'] ?? 0);
+        if (($inv['currency'] ?? 'THB') === 'USD' && $rate > 0) {
+            return Money::fmt(Money::round2($satang / $rate)) . ' USD (≈ ' . Money::fmtSatang($satang) . ' บาท)';
+        }
+
+        return Money::fmtSatang($satang) . ' บาท';
+    }
+
+    /**
+     * ส่งข้อความถึงร้านพร้อมบัญชีสำหรับโอน + คำเตือน — ทุกข้อความที่มีเลขบัญชีออกทางนี้ทางเดียว
+     * $store = จดว่าบอกร้านด้วยบัญชีนี้แล้ว (เตือนซ้ำด้วย snapshot เดิมไม่ต้องจดใหม่)
+     * จดประวัติทุกครั้งที่เลขบัญชีออกไปถึงร้าน — เกิดเรื่องโอนผิด จะได้ย้อนดูได้ว่าบอกร้านว่าอะไร เมื่อไร
+     */
+    private static function sendWithAccount(array $inv, string $eventKey, array $head, array $tail, array $account, bool $store, ?int $actorUserId, string $source): int
+    {
+        $text = implode("\n", [
+            ...$head,
+            '',
+            ...self::shopAccountLines($account),
+            '',
+            ...self::accountWarningLines($account),
+            ...($tail === [] ? [] : ['', ...$tail]),
+        ]);
+        $sent = self::notifyShop((int) $inv['franchise_id'], $text, $eventKey);
+        if ($sent > 0) {
+            if ($store) {
+                Db::exec('UPDATE invoices SET notified_bank = ?, notified_bank_at = UTC_TIMESTAMP() WHERE id = ?', [Json::encode($account), $inv['id']]);
+            }
+            Audit::write($actorUserId, 'invoice.account_sent', 'invoice', (int) $inv['id'], [
+                'event'      => $eventKey,
+                'source'     => $source,
+                'recipients' => $sent,
+                'account'    => self::snapshotLabel($account),
+            ]);
+        }
+
+        return $sent;
+    }
+
+    /**
+     * บิลรอบใหม่ออกแล้ว → แชตของร้าน พร้อมบัญชีที่บิลชี้อยู่ตอนนี้ (ครั้งแรกที่ร้านรู้เลขบัญชีของบิลนี้)
+     * ใช้ทั้งออกทีละร้านและออกหลายร้านพร้อมกัน — คืนจำนวนคนในร้านที่เข้าคิวส่ง
+     */
+    public static function notifyBillIssued(int $invoiceId, ?int $actorUserId): int
+    {
+        $inv = self::billRow($invoiceId);
+        if ($inv === null || $inv['status'] === 'VOID' || (int) $inv['net_total_satang'] <= 0) {
+            return 0; // บิล 0 บาท (หักยอดยกมาหมด) ไม่ต้องให้ร้านจ่าย
+        }
+        $head = [
+            '🧾 <b>บิลรอบใหม่ออกแล้ว</b>',
+            'รอบ ' . Period::text($inv['period_code']) . ' · บิล ' . TelegramService::escapeHtml($inv['invoice_no']),
+            'ยอดชำระ <b>' . self::billAmountText($inv, (int) $inv['net_total_satang']) . '</b> · ครบกำหนด ' . Period::thDate($inv['due_date']),
+        ];
+        if ((int) $inv['attachment_count'] > 0) {
+            $head[] = '📎 มีรูปประกอบ ' . (int) $inv['attachment_count'] . ' รูป — ดูได้ในระบบ';
+        }
+
+        return self::sendWithAccount($inv, 'bill.issued', $head, ['ดูรายละเอียดและแจ้งชำระได้ในระบบครับ'], self::liveSnapshotOfInvoice($inv), true, $actorUserId, 'issued');
+    }
+
+    /**
+     * ส่วนกลางกด "ส่งเลขบัญชีให้ร้าน" — ส่งบัญชีที่บิลชี้อยู่ตอนนี้ แล้วจดเป็นของอ้างอิงใหม่ของร้าน
+     * ถ้าต่างจากที่เคยบอกร้านไว้ = ร้านถูกบอกให้โอนเข้าบัญชีใหม่ → แจ้งกลุ่มส่วนกลางด้วยทุกครั้ง (ปิดไม่ได้)
+     * คนที่ได้บัญชีแอดมินไปจะใช้ปุ่มนี้พาเงินร้านไปบัญชีอื่น — กลุ่มต้องเห็นทันที
+     *
+     * @return array{sent: int, changed: bool, previous: ?string, current: string}
+     */
+    public static function notifyBillAccount(int $invoiceId, array $actor): array
+    {
+        $inv = self::billRow($invoiceId) ?? throw ApiException::notFound('ไม่พบใบเรียกเก็บ');
+        $owed = (int) $inv['net_total_satang'] - (int) $inv['paid_satang'];
+        if ($inv['status'] === 'VOID') {
+            throw ApiException::conflict("บิล {$inv['invoice_no']} ถูกยกเลิกแล้ว — ไม่ต้องส่งเลขบัญชีให้ร้าน");
+        }
+        if ($owed <= 0) {
+            throw ApiException::conflict("บิล {$inv['invoice_no']} ไม่มียอดค้างแล้ว — ไม่ต้องส่งเลขบัญชีให้ร้าน");
+        }
+        if (! TelegramService::isConfigured()) {
+            throw ApiException::badRequest('ยังไม่ได้ตั้งค่า Telegram ของระบบ — ตั้งค่าที่หน้าตั้งค่าแจ้งเตือนก่อน จึงจะส่งเลขบัญชีให้ร้านได้');
+        }
+        $live     = self::liveSnapshotOfInvoice($inv);
+        $previous = self::notifiedSnapshot($inv);
+        $changed  = $previous !== null && ! self::snapshotsMatch($previous, $live);
+        $no       = TelegramService::escapeHtml($inv['invoice_no']);
+        $owedLine = 'ยอดคงเหลือ <b>' . self::billAmountText($inv, $owed) . '</b> · ครบกำหนด ' . Period::thDate($inv['due_date']);
+        $head     = $changed
+            ? ["⚠️ <b>ทางเราเปลี่ยนบัญชีรับเงินของบิล {$no}</b>", $owedLine, 'โปรดโอนเข้าบัญชีด้านล่างนี้เท่านั้นครับ']
+            : ["🏦 <b>แจ้งบัญชีสำหรับโอน</b> — บิล {$no}", $owedLine];
+        $sent = self::sendWithAccount($inv, 'bill.account', $head, [], $live, true, isset($actor['id']) ? (int) $actor['id'] : null, 'manual');
+
+        if ($changed && $sent > 0) {
+            $lines = [
+                '📨 <b>ส่งเลขบัญชีใหม่ให้ร้านแล้ว</b>',
+                "บิล {$no} · ร้าน " . TelegramService::escapeHtml($inv['franchise_username']) . ' · ค้าง ' . Money::fmtSatang($owed) . ' บาท',
+                'จาก: ' . TelegramService::escapeHtml(self::snapshotLabel($previous)),
+                'เป็น: <b>' . TelegramService::escapeHtml(self::snapshotLabel($live)) . '</b>',
+            ];
+            if (! empty($previous['id']) && ! empty($live['id']) && (string) ($previous['qr'] ?? '') !== (string) ($live['qr'] ?? '')) {
+                $lines[] = 'รูป QR ของบัญชีก็ไม่ใช่รูปเดียวกับตอนที่แจ้งร้านครั้งก่อน';
+            }
+            array_push(
+                $lines,
+                "ส่งถึง: {$sent} คนในร้าน",
+                'โดย: <b>' . self::actorText($actor) . '</b>',
+                'เวลา: ' . BankAccountService::thaiTime(),
+                '',
+                'ถ้าไม่ได้เป็นคนสั่งส่ง ให้แจ้งร้านทันทีว่าอย่าโอน แล้วเปลี่ยนรหัสผ่าน',
+            );
+            self::notify('invoice.bank_account', implode("\n", $lines));
+        }
+
+        return [
+            'sent'     => $sent,
+            'changed'  => $changed,
+            'previous' => $previous === null ? null : self::snapshotLabel($previous),
+            'current'  => self::snapshotLabel($live),
+        ];
+    }
+
+    /** "ชื่อที่แสดง (username)" escape แล้ว */
+    private static function actorText(array $actor): string
+    {
+        $username = (string) ($actor['username'] ?? '');
+
+        return TelegramService::escapeHtml((($actor['display_name'] ?? '') ?: $username) . " ({$username})");
+    }
+
+    /**
+     * บิลถูกเปลี่ยนบัญชีปลายทางในระบบ — แจ้งเฉพาะฝั่งส่วนกลาง ไม่ส่งอะไรให้ร้าน (เหตุผลอยู่หัวหมวดนี้)
+     * ระหว่างที่ยังไม่มีใครกดส่งเลขบัญชีใหม่ ร้านจะเห็นว่าบัญชีบนเว็บไม่ตรงกับ Telegram แล้วไม่โอน — ตั้งใจให้เป็นแบบนั้น
+     *
+     * จดลง bank_account_changes ด้วย → ขึ้นแถบเตือนของแอดมินทุกคนจนกว่าจะกดรับทราบ (ใช้ได้แม้ยังไม่ตั้ง Telegram)
+     * $invoiceBefore = แถวดิบของ invoices ก่อนแก้ · $oldBankRow/$newBankRow = แถวดิบของ bank_accounts (null = ไม่มีบัญชี)
+     */
+    public static function invoiceAccountChanged(array $invoiceBefore, ?array $oldBankRow, ?array $newBankRow, array $actor): void
+    {
+        $old      = self::bankSnapshotFromRow($oldBankRow);
+        $new      = self::bankSnapshotFromRow($newBankRow);
+        $oldLabel = empty($old['id']) ? null : self::snapshotLabel($old);
+        $newLabel = empty($new['id']) ? null : self::snapshotLabel($new);
+        $shop     = (string) (Db::val('SELECT username FROM franchises WHERE id = ?', [$invoiceBefore['franchise_id']]) ?? '');
+        $owed     = (int) $invoiceBefore['net_total_satang'] - (int) $invoiceBefore['paid_satang'];
+        $changeId = BankAccountService::logChange(
+            $new['id'],
+            "บิล {$invoiceBefore['invoice_no']} ({$shop})",
+            'UPDATE',
+            [['field' => 'invoiceAccount', 'from' => $oldLabel, 'to' => $newLabel]],
+            1,
+            isset($actor['id']) ? (int) $actor['id'] : null,
+        );
+
+        // ร้านเทียบกับข้อความล่าสุดที่ได้รับ — ถ้าเปลี่ยนกลับมาเป็นบัญชีที่เคยแจ้งแล้ว ร้านไม่ต้องได้อะไรใหม่
+        $told     = self::notifiedSnapshot($invoiceBefore);
+        $guidance = match (true) {
+            $told !== null && self::snapshotsMatch($told, $new) => 'บัญชีใหม่ตรงกับที่เคยแจ้งร้านทาง Telegram ไว้แล้ว — ร้านเทียบแล้วจะตรงกัน ไม่ต้องส่งซ้ำ',
+            $told === null => '⚠ ร้านยังไม่เคยได้รับเลขบัญชีของบิลนี้ทาง Telegram — ตรวจว่าถูกต้องแล้วกด "📨 ส่งเลขบัญชีให้ร้าน" ที่บิล',
+            default        => '⚠ ร้านยังไม่ได้รับเลขบัญชีใหม่ทาง Telegram — ตรวจว่าถูกต้องแล้วกด "📨 ส่งเลขบัญชีให้ร้าน" ที่บิล (ระหว่างนี้ร้านจะเห็นว่าบัญชีไม่ตรงกับ Telegram และจะไม่โอน)',
+        };
+        self::notify('invoice.bank_account', implode("\n", [
+            '🚨 <b>เปลี่ยนบัญชีรับเงินของบิล</b>',
+            'บิล ' . TelegramService::escapeHtml($invoiceBefore['invoice_no']) . ' · ร้าน ' . TelegramService::escapeHtml($shop) . ' · ค้าง ' . Money::fmtSatang($owed) . ' บาท',
+            'จาก: ' . TelegramService::escapeHtml($oldLabel ?? '—'),
+            'เป็น: <b>' . TelegramService::escapeHtml($newLabel ?? '—') . '</b>',
+            'โดย: <b>' . self::actorText($actor) . '</b>',
+            'เวลา: ' . BankAccountService::thaiTime(),
+            '',
+            $guidance,
+            'ถ้าไม่ได้เป็นคนแก้ ให้แก้กลับและเปลี่ยนรหัสผ่านทันที',
+        ]), ['changeId' => $changeId]);
+    }
+
+    /**
+     * เตือน/ทวงร้านซ้ำ: บอกบัญชีเดิมที่เคยแจ้งไว้ (snapshot) ไม่ใช่บัญชีสดในฐานข้อมูล
+     * ถ้าบัญชีถูกแก้นอกระบบ ร้านจะเห็นว่าไม่ตรงกับหน้าเว็บ แทนที่ Telegram จะ "รับรอง" บัญชีที่ถูกแก้ไปให้
+     * ยังไม่เคยบอก = ใช้บัญชีสด แล้วจดเป็น snapshot ถ้าส่งถึงร้าน
+     */
+    private static function sendReminder(array $inv, string $eventKey, array $head, array $tail): int
+    {
+        $told    = self::notifiedSnapshot($inv);
+        $account = $told ?? self::liveSnapshotOfInvoice($inv);
+        if ($told !== null && ! self::snapshotsMatch($told, self::liveSnapshotOfInvoice($inv))) {
+            // ไม่บอกเลขใหม่ (ต้องให้คนตรวจแล้วกดส่งเอง) แต่บอกให้ร้านหยุดก่อน
+            $head[] = '⚠️ บัญชีของบิลนี้ในระบบไม่ตรงกับที่เคยแจ้งทาง Telegram — โปรดติดต่อทางเราก่อนโอนครับ';
+        }
+
+        return self::sendWithAccount($inv, $eventKey, $head, $tail, $account, $told === null, null, 'reminder');
     }
 
     private const ANNOUNCE_ICON = ['NEWS' => '📣', 'PROMO' => '🏷️', 'PRODUCT' => '📦', 'HOLIDAY' => '📅'];
@@ -422,20 +816,21 @@ final class NotificationService
         $todayIso = self::thaiDate($now);
         $limit    = self::thaiDate($now->modify('+2 days'));
         $due      = Db::all(
-            "SELECT i.id, i.invoice_no, i.franchise_id, i.due_date, i.net_total_satang - i.paid_satang AS owed, bp.code AS period_code
+            "SELECT i.id, i.invoice_no, i.franchise_id, i.due_date, i.bank_account_id, i.notified_bank, i.currency, i.usd_rate_satang,
+                    i.net_total_satang - i.paid_satang AS owed, bp.code AS period_code,
+                    ba.bank_name, ba.account_name, ba.account_number, ba.currency AS bank_currency, ba.qr_url AS bank_qr_url
                FROM invoices i JOIN billing_periods bp ON bp.id = i.period_id
+               LEFT JOIN bank_accounts ba ON ba.id = i.bank_account_id
               WHERE i.status IN ('OPEN', 'PARTIAL') AND i.reminded_at IS NULL AND i.due_date BETWEEN ? AND ?",
             [$todayIso, $limit],
         );
         foreach ($due as $inv) {
             $days = Period::daysBetween($todayIso, $inv['due_date']);
-            self::notifyShop((int) $inv['franchise_id'], implode("\n", [
+            self::sendReminder($inv, 'bill.due', [
                 '🔔 <b>แจ้งเตือนล่วงหน้า</b>',
-                'บิล ' . TelegramService::escapeHtml($inv['invoice_no']) . ' ยอดคงเหลือ <b>' . self::baht(Money::toBaht($inv['owed'])) . ' บาท</b>',
+                'บิล ' . TelegramService::escapeHtml($inv['invoice_no']) . ' ยอดคงเหลือ <b>' . self::billAmountText($inv, (int) $inv['owed']) . '</b>',
                 'ครบกำหนด ' . Period::thDate($inv['due_date']) . ($days === 0 ? ' (วันนี้)' : " (อีก {$days} วัน)"),
-                '',
-                'โอนแล้วแนบสลิปในระบบได้เลย ขอบคุณที่ชำระตรงเวลาครับ 🙏',
-            ]), 'bill.due');
+            ], ['โอนแล้วแนบสลิปในระบบได้เลย ขอบคุณที่ชำระตรงเวลาครับ 🙏']);
             Db::exec('UPDATE invoices SET reminded_at = UTC_TIMESTAMP() WHERE id = ?', [$inv['id']]);
         }
 
@@ -457,9 +852,11 @@ final class NotificationService
         }
         $todayIso = self::thaiDate($now);
         $rows     = Db::all(
-            "SELECT i.id, i.invoice_no, i.franchise_id, i.due_date, i.overdue_nudges,
-                    i.net_total_satang - i.paid_satang AS owed
+            "SELECT i.id, i.invoice_no, i.franchise_id, i.due_date, i.overdue_nudges, i.bank_account_id, i.notified_bank,
+                    i.currency, i.usd_rate_satang, i.net_total_satang - i.paid_satang AS owed,
+                    ba.bank_name, ba.account_name, ba.account_number, ba.currency AS bank_currency, ba.qr_url AS bank_qr_url
                FROM invoices i
+               LEFT JOIN bank_accounts ba ON ba.id = i.bank_account_id
               WHERE i.status IN ('OPEN', 'PARTIAL') AND i.due_date < ? AND i.overdue_nudges < 2
                 AND NOT EXISTS (SELECT 1 FROM payment_submissions ps WHERE ps.invoice_id = i.id AND ps.status = 'PENDING')",
             [$todayIso],
@@ -477,22 +874,25 @@ final class NotificationService
                 continue;
             }
             $no    = TelegramService::escapeHtml($inv['invoice_no']);
-            $owed  = self::baht(Money::toBaht($inv['owed']));
-            $lines = $reached === 1
+            // บิล USD บอกยอดดอลลาร์ที่ต้องโอนเข้ากระเป๋าจริง (พร้อมยอดบาทเทียบ) — แบบเดียวกับตอนออกบิล
+            $owed  = self::billAmountText($inv, (int) $inv['owed']);
+            [$head, $tail] = $reached === 1
                 ? [
-                    '🙏 <b>แจ้งเพื่อทราบครับ</b>',
-                    "บิล {$no} ครบกำหนดเมื่อ " . Period::thDate($inv['due_date']) . " (ผ่านมา {$late} วัน)",
-                    "ยอดคงเหลือ <b>{$owed} บาท</b>",
-                    '',
-                    'ถ้าโอนแล้ว รบกวนแนบสลิปในระบบด้วยนะครับ ทางเราจะตัดยอดให้ทันที',
+                    [
+                        '🙏 <b>แจ้งเพื่อทราบครับ</b>',
+                        "บิล {$no} ครบกำหนดเมื่อ " . Period::thDate($inv['due_date']) . " (ผ่านมา {$late} วัน)",
+                        "ยอดคงเหลือ <b>{$owed}</b>",
+                    ],
+                    ['ถ้าโอนแล้ว รบกวนแนบสลิปในระบบด้วยนะครับ ทางเราจะตัดยอดให้ทันที'],
                 ]
                 : [
-                    '📌 <b>บิลยังค้างอยู่ครับ</b>',
-                    "บิล {$no} เลยกำหนดมา {$late} วัน · คงเหลือ <b>{$owed} บาท</b>",
-                    '',
-                    'ถ้ามีเหตุขัดข้องหรืออยากขอแบ่งจ่าย ทักทางเราได้เลยครับ ยินดีช่วยหาทางออก',
+                    [
+                        '📌 <b>บิลยังค้างอยู่ครับ</b>',
+                        "บิล {$no} เลยกำหนดมา {$late} วัน · คงเหลือ <b>{$owed}</b>",
+                    ],
+                    ['ถ้ามีเหตุขัดข้องหรืออยากขอแบ่งจ่าย ทักทางเราได้เลยครับ ยินดีช่วยหาทางออก'],
                 ];
-            self::notifyShop((int) $inv['franchise_id'], implode("\n", $lines), 'bill.overdue');
+            self::sendReminder($inv, 'bill.overdue', $head, $tail);
             Db::exec('UPDATE invoices SET overdue_nudges = ? WHERE id = ?', [$reached, $inv['id']]);
             $sent++;
         }
