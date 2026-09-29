@@ -858,6 +858,8 @@ input.line-pct.invalid, input.line-amount.invalid { border-color: var(--danger);
 .line-editor [hidden] { display: none !important; }
 /* บรรทัดที่ไม่ได้ติ๊ก — จางลงแต่ยังอ่านออก (ช่องติ๊กไม่จาง จะได้เห็นว่ากดกลับได้) */
 .line-editor tr.line-off > td:not(:first-child) { opacity: .45; }
+/* บิลค่าคอมที่ยกเลิกแล้วในรายละเอียดเซล — จางไว้ท้ายตาราง แต่ปุ่ม "ดู" (คอลัมน์สุดท้าย) ยังชัดให้กดดูเหตุผลได้ */
+tr.row-void > td:not(:last-child) { opacity: .5; }
 
 /* ค่าคอมเซลรายสินค้าในฟอร์มออกบิล — สรุปยอดต่อเซลใต้ตาราง */
 .agent-block .line-editor { margin: 0 0 8px; }
@@ -1238,10 +1240,11 @@ tr.bill-group-head > td, tr.bill-group-head > th {
   .table-scroll table, .table-scroll tbody, .table-scroll tfoot,
   .table-scroll tr, .table-scroll td { display: block; width: 100%; }
   .table-scroll thead { display: none; }
+  /* width:auto — การ์ดมี margin 12px สองข้าง ถ้ากว้าง 100% (กฎบรรทัดบน) จะล้นขวา 24px ขอบขวาของการ์ดถูกตัดทุกตาราง */
   .table-scroll tbody tr {
     border: 1px solid var(--border); border-radius: 12px;
     margin: 12px; padding: 4px 0; background: var(--surface);
-    box-shadow: 0 1px 2px rgba(20, 35, 70, .05);
+    box-shadow: 0 1px 2px rgba(20, 35, 70, .05); width: auto;
   }
   .table-scroll tbody tr:hover { background: var(--surface); }
   .table-scroll td {
@@ -1260,7 +1263,7 @@ tr.bill-group-head > td, tr.bill-group-head > th {
   .table-scroll td[data-label=""] .btn-row { width: 100%; flex-wrap: wrap; }
   .table-scroll td[data-label=""] .btn { flex: 1; justify-content: center; }
   .table-scroll td.num { font-size: var(--fs-base); }
-  .table-scroll tfoot tr { margin: 12px; border-radius: 12px; overflow: hidden; }
+  .table-scroll tfoot tr { margin: 12px; border-radius: 12px; overflow: hidden; width: auto; }
   .table-scroll tfoot td { background: var(--surface-2); }
 
   /* แถวที่กางรายละเอียด: บนมือถือทุกอย่างเป็นการ์ดอยู่แล้ว

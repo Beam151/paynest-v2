@@ -1,6 +1,6 @@
 import { api, qs, session } from '../api.js';
 import {
-  badge, card, commBadge, confirmAction, copyText, dateTh, dateTimeTh, el, formModal, infoModal, int,
+  badge, card, commBadge, confirmAction, copyText, dateTh, dateTimeTh, el, field, formModal, infoModal, int,
   loginSetModal, loginSetText, loginUrl, money, pct, randomPassword, resetPasswordModal, stat, table, toast,
 } from '../ui.js';
 import { periodLabel, todayIso } from '../period.js';
@@ -172,8 +172,6 @@ export async function salesAgentsView() {
   ]);
   productPctById = new Map(products.map((p) => [Number(p.id), p.commissionPct ?? null]));
 
-  const agentOptions = agents.filter((a) => a.status === 'ACTIVE')
-    .map((a) => ({ value: String(a.id), label: `${a.username} — ${a.name}` }));
   const agentById = (id) => agents.find((a) => String(a.id) === String(id)) ?? null;
 
   /*
@@ -222,7 +220,7 @@ export async function salesAgentsView() {
     // ดีลไม่บังคับ — เซลบางคนได้แค่ค่าคอมอื่น ๆ ก็ได้ อย่าให้เข้าใจว่าต้องผูกดีลก่อนถึงจะจ่ายได้
     preview: () => el('div', { class: 'notice-box m-0' },
       'เซลได้ค่าคอมได้สองทาง (ใช้ทางใดทางหนึ่งหรือทั้งสองก็ได้): % จากยอดขายเต็มของสินค้าที่ผูกดีล '
-      + 'และค่าคอมอื่น ๆ ที่กรอกเป็นจำนวนเงิน — ทั้งสองอย่างจ่ายผ่าน "🧾 ทำบิลค่าคอม"'),
+      + 'และค่าคอมอื่น ๆ ที่กรอกเป็นจำนวนเงิน — ทั้งสองอย่างอยู่ในหน้าต่าง "ตั้งค่าคอม" ของแถวเซล'),
     onSubmit: async (v) => {
       const res = await api.post('/api/sales-agents', v);
       render();
@@ -239,49 +237,135 @@ export async function salesAgentsView() {
   });
 
   /**
-   * ตั้งค่าคอม (ดีล) ของเซล — ดีลเดิมที่ยังเปิดอยู่ขึ้นก่อนเป็นแถวที่แก้ได้ แล้วตามด้วยแถว "+ เพิ่มสินค้า" สำหรับดีลใหม่
+   * ตั้งค่าคอม — หน้าต่างเดียวของเซลหนึ่งคน บนลงล่าง:
+   *   🤝 ดีลที่ถืออยู่ → 📦 เพิ่มสินค้าที่ผูกดีล → 🧾 รายการจากบิลร้านที่รอจ่ายคอม → 💰 ค่าคอมอื่น ๆ → สรุป → หมายเหตุ
    *
-   * เจ้าของระบบ: "ตรงที่ผูกดีลไปแล้ว สามารถแก้ไขได้" — เดิมหน้าต่างนี้เพิ่มได้อย่างเดียว คนเปิดมาเห็นแต่ช่องว่าง
-   * นึกว่าเซลยังไม่มีดีล หรือต้องไปหาปุ่มแก้ในแท็บอื่น
+   * เจ้าของระบบเห็นหน้าต่าง "ตั้งค่าคอม" (ดีลอย่างเดียว) กับ "ทำบิลค่าคอม" แยกกันคนละปุ่มแล้วบอกว่า
+   * "อยู่หน้าเดียวกันแบบเดิมดีแล้ว ไม่แยกปุ่มแบบนี้" — จึงรวมกลับเป็นหน้าต่างเดียว ปุ่ม "บันทึก" ปุ่มเดียว
+   * API ยังเป็นชุดเดิม (ดีลกับบิลค่าคอมเป็นคนละคำขอ) — หน้าต่างนี้แค่ยิงให้ครบตามลำดับ
    *
-   * ไม่มีช่องวันที่ ไม่มีตัวเลือกฐาน และไม่มี "ค่าคอมอื่น ๆ" ในนี้ (เจ้าของระบบสั่ง):
-   *   - % คิดจากยอดขายเต็มของร้านเสมอ
-   *   - ดีลเริ่มวันที่บันทึก จบเมื่อกด "ปิดดีล"
-   *   - ค่าคอมอื่น ๆ ใส่ตอนทำบิลค่าคอม ไม่ต้องเลือกรอบ
-   * ดีลไม่บังคับ — เซลที่ได้แค่ค่าคอมอื่น ๆ ไม่ต้องผูกอะไรเลย จึงไม่มีแถวใหม่ให้ตั้งแต่เปิด
+   * ดีล: ดีลที่ยังเปิดอยู่ขึ้นก่อนเป็นแถวที่แก้ได้ (เจ้าของระบบ: "ตรงที่ผูกดีลไปแล้ว สามารถแก้ไขได้") แล้วตามด้วยแถว "+ เพิ่มสินค้า"
+   *   ไม่มีช่องวันที่ ไม่มีตัวเลือกฐาน (เจ้าของระบบสั่ง) — % คิดจากยอดขายเต็มเสมอ · ดีลเริ่มวันที่บันทึก จบเมื่อกด "ปิดดีล"
+   *   ดีลไม่บังคับ — เซลที่ได้แค่ค่าคอมอื่น ๆ ไม่ต้องผูกอะไรเลย จึงไม่มีแถวใหม่ให้ตั้งแต่เปิด
    *
-   * บันทึกตามลำดับ: แก้ดีลเดิม (เฉพาะที่ตัวเลขเปลี่ยน) → ปิดดีลที่กดปิด (ถามยืนยันก่อน) → ผูกดีลใหม่
-   * ปิดก่อนผูกใหม่ — สินค้าที่เพิ่งปิดจะได้ไม่ชนตอนผูกให้คนใหม่ในรอบเดียวกัน
-   * สามขั้นเป็นคนละคำขอ: พังกลางทาง = บอกว่าอะไรเข้าไปแล้ว และส่วนที่เข้าแล้วไม่ถูกส่งซ้ำเมื่อกดบันทึกอีกครั้ง
+   * บิลค่าคอม (1 ใบ = จ่ายเซล 1 ครั้ง): เจ้าของระบบ "แต่ละรอบจ่ายค่าคอมไม่เหมือนกัน" — จึงไม่คิดอัตโนมัติตอนออกบิลร้าน
+   *   ให้ติ๊กเองว่าจ่ายรายการไหน จากบิลร้านที่ออกแล้ว (ไม่ต้องรอร้านจ่าย) เฉพาะสินค้าที่เซลคนนี้ถือดีล
+   *   แต่ละรายการคิด "% ของยอดเต็ม" (ตั้งต้น = % ของดีล) หรือ "กรอกเอง" + ค่าคอมอื่น ๆ ที่ไม่ต้องเลือกรอบ
+   *   **ตั้งต้นไม่ติ๊กอะไรเลย** — เปิดมาแก้ดีลแล้วกดบันทึก ต้องไม่มีบิลค่าคอมงอกออกมาเอง (เงินออกจากบริษัทต้องตั้งใจเลือก)
+   *   ตัวเลขเป็นพรีวิว เซิร์ฟเวอร์ตรวจและคิดใหม่เองตอนบันทึก · รายการหนึ่งจ่ายได้ครั้งเดียว (ฐานข้อมูลกันไว้)
    *
-   * เปิดจากแถวเซล (preset.salesAgentId) จะล็อกชื่อเซลไว้เลย ไม่ต้องเลือกซ้ำ
-   * เซลที่หยุดใช้งานแล้วก็เปิดได้ — ยังต้องแก้/ปิดดีลเดิมของเขาได้ (เซิร์ฟเวอร์ไม่ให้ผูกดีลใหม่ ปุ่มเพิ่มจึงปิดไว้)
+   * กดบันทึก: ตรวจทุกส่วนให้ผ่านก่อนยิงคำขอแรก (ผิดตรงไหน = ไม่มีอะไรถูกบันทึก) แล้วทำตามลำดับ
+   *   แก้ดีลเดิม (เฉพาะที่ตัวเลขเปลี่ยน) → ปิดดีล (ถามยืนยันก่อน) → ผูกดีลใหม่ → ทำบิลค่าคอม (เฉพาะเมื่อติ๊ก/กรอกไว้)
+   *   ปิดก่อนผูกใหม่ — สินค้าที่เพิ่งปิดจะได้ไม่ชนตอนผูกให้คนใหม่ในรอบเดียวกัน
+   *   เป็นคนละคำขอ: พังกลางทาง = หยุดทันที บอกว่าอะไรเข้าไปแล้ว และส่วนที่เข้าแล้วไม่ถูกส่งซ้ำเมื่อกดบันทึกอีกครั้ง
+   *
+   * preset.salesAgentId + lock: เปิดจากแถวเซล/รายละเอียดเซล = ล็อกชื่อเซล · จากแท็บอื่น = เลือกไว้ให้แต่เปลี่ยนได้ (หรือยังไม่เลือก)
+   * preset.onSaved + preset.links: เปิดจากรายละเอียดเซล — บันทึกแล้ววาดรายละเอียดใหม่ในที่เดิม (ไม่พาไปแท็บบิลค่าคอม)
+   *   และใช้ดีลที่รายละเอียดเพิ่งโหลดมา (allLinks ของหน้าเก่ากว่า ถ้าแก้ดีลจากในรายละเอียดไปแล้ว)
+   * เซลที่หยุดใช้งานก็เปิดได้: แก้/ปิดดีลเดิม และทำบิลค่าคอมที่ค้างจ่ายให้ได้ (เซิร์ฟเวอร์รับ — คนที่ออกไปแล้วยังต้องได้เงินที่ค้าง)
+   * แต่ผูกดีลใหม่ไม่ได้ (เซิร์ฟเวอร์ไม่รับ ปุ่มเพิ่มจึงปิดไว้)
    */
-  const dealModal = (preset = {}) => {
-    const lockedAgent = preset.salesAgentId ? agentById(preset.salesAgentId) : null;
-    const canAdd = !lockedAgent || lockedAgent.status === 'ACTIVE';
-    let agentId = lockedAgent ? String(lockedAgent.id) : '';
+  const commissionModal = (preset = {}) => {
+    const locked = preset.lock ? agentById(preset.salesAgentId) : null;
+    let agentId = locked ? String(locked.id) : (agentById(preset.salesAgentId) ? String(preset.salesAgentId) : '');
+    const agentNow = () => agentById(agentId);
+    const canAdd = () => agentNow()?.status === 'ACTIVE';
+    const skuOf = (productId) => products.find((p) => String(p.id) === String(productId))?.sku ?? `#${productId}`;
+    /*
+     * preset.links: ดีลของเซลคนนี้ที่เพิ่งโหลดมา (เปิดจากรายละเอียดเซล) — ใช้แทน allLinks ของตอนวาดหน้า
+     * รายละเอียดเซลเปิดค้างข้ามการวาดหน้าใหม่ได้ ถ้าใช้ allLinks เดิม: แก้ดีลเป็น 5.5% แล้วเปิด "ตั้งค่าคอม" ซ้ำ
+     * จะขึ้น 5% ดีลที่เพิ่งปิดยังขึ้นว่าถืออยู่ และดีลที่เพิ่งผูกหายไป (กดเพิ่มซ้ำแล้วชน)
+     */
+    const linksOf = (id) => (preset.links && String(id) === String(preset.salesAgentId)
+      ? preset.links
+      : allLinks.filter((l) => String(l.salesAgentId) === String(id)));
+    // ดีลทุกตัวของทุกเซล (รวมที่ปิดแล้ว) — ใช้คิดค่าตั้งต้นของเหมาต่อรอบใหม่เมื่อแก้ดีลในหน้าต่างนี้
+    const linkById = new Map([...allLinks, ...(preset.links ?? [])].map((l) => [Number(l.id), l]));
 
+    /*
+     * สถานะทั้งหมดอยู่นอก DOM และวาดใหม่ทีละส่วน — ช่องกรอกไม่ถูกสร้างใหม่ระหว่างพิมพ์ (เคอร์เซอร์ไม่หลุด)
+     * และติ๊ก/ตัวเลขที่กรอกไว้ส่วนหนึ่งไม่หายเมื่ออีกส่วนวาดใหม่
+     */
     const rows = []; // ดีลใหม่: { productId, commissionPct, fixedAmount }
     let current = []; // ดีลเดิมที่ยังเปิดอยู่: { link, pct, fixed, closing }
-    const rowBox = el('div', {});
-    const usedProducts = () => new Set(rows.map((r) => r.productId).filter(Boolean));
-    const skuOf = (productId) => products.find((p) => String(p.id) === String(productId))?.sku ?? `#${productId}`;
+    let loadSeq = 0;
+    let loaded = false;
+    const items = new Map(); // entryId → { item, on, mode, pct, amount, pctTouched, refs }
+    const fixed = new Map(); // key → { f, on, amount, amountTouched, refs }
+    let others = []; // [{ label, amount }]
+    let groups = []; // บิลร้านละกลุ่ม: { invoiceNo, …, rows: [state], box }
 
-    /** ดีลเดิมของเซลที่เลือก — ข้อมูลชุดเดียวกับแท็บดีล (วาดใหม่ทุกครั้งที่บันทึก จึงไม่เก่ากว่าหน้าจอ) */
+    const toDealState = (l) => ({
+      link: l,
+      pct: l.commissionPct === null || l.commissionPct === undefined ? '' : String(l.commissionPct),
+      fixed: l.fixedAmount === null || l.fixedAmount === undefined ? '' : String(l.fixedAmount),
+      closing: false,
+    });
+    /** ดีลเดิมของเซลที่เลือก — ข้อมูลชุดเดียวกับแท็บดีล (หรือของรายละเอียดเซลที่เพิ่งโหลด) */
     const loadCurrent = () => {
-      current = allLinks
-        .filter((l) => agentId && String(l.salesAgentId) === String(agentId) && dealOpen(l))
-        .map((l) => ({
-          link: l,
-          pct: l.commissionPct === null || l.commissionPct === undefined ? '' : String(l.commissionPct),
-          fixed: l.fixedAmount === null || l.fixedAmount === undefined ? '' : String(l.fixedAmount),
-          closing: false,
-        }));
+      current = agentId ? linksOf(agentId).filter(dealOpen).map(toDealState) : [];
     };
     const isChanged = (s) => typedNumber(s.pct) !== (s.link.commissionPct ?? null)
       || typedNumber(s.fixed) !== (s.link.fixedAmount ?? null);
+    const dealChanges = () => ({
+      edit: current.filter((s) => !s.closing && isChanged(s)).length,
+      end: current.filter((s) => s.closing).length,
+      add: rows.filter((r) => r.productId).length,
+    });
     loadCurrent();
+
+    const main = el('div');
+    const dealsBox = el('div');
+    const candCount = el('span');
+    const candContent = el('div');
+    const othersBox = el('div');
+    const totalBox = el('div', { class: 'notice-box', style: 'margin:12px 0 0' });
+    const toggleAll = el('input', { type: 'checkbox' });
+    const pickedCount = el('span', { class: 'sub-line' });
+    const dealNote = el('input', { type: 'text', maxlength: 500, placeholder: 'เช่น ดีลเปิดตลาดภาคเหนือ' });
+    const billNote = el('input', { type: 'text', maxlength: 500, placeholder: 'เช่น ค่าคอมรอบสิ้นเดือน ก.ย.' });
+
+    /* ── ดีล ─────────────────────────────────────────────── */
+
+    /*
+     * แก้ % / เหมาของดีลในหน้าต่างเดียวกัน = ค่าตั้งต้นของรายการที่รอจ่ายคอมของดีลนั้นต้องเปลี่ยนตาม
+     * ไม่งั้นแก้ดีลเป็น 6% แล้วติ๊กรายการในการบันทึกครั้งเดียวกัน บิลจะออกที่ 5% ตามค่าที่โหลดมาตอนเปิด
+     * เปลี่ยนเฉพาะช่องที่ยังไม่ได้พิมพ์เอง — ตัวเลขที่ตั้งใจแก้ทีละรายการต้องไม่ถูกทับ
+     * ดีลที่กดปิด = ไม่ส่งตัวเลขที่แก้ไว้ จึงกลับไปใช้ค่าเดิมของดีล
+     */
+    function syncDealDefaults(s) {
+      const pctText = s.closing ? String(s.link.commissionPct ?? 0) : (s.pct.trim() === '' ? '0' : s.pct.trim());
+      for (const it of items.values()) {
+        if (it.pctTouched || Number(it.item.deal?.id) !== Number(s.link.id) || it.pct === pctText) continue;
+        it.pct = pctText;
+        if (it.refs) { it.refs.pctIn.value = pctText; paintItem(it); }
+      }
+      // เหมาต่อรอบ = ค่ามากสุดของดีลเซลคนนี้ในร้าน×รอบนั้น (กติกาเดียวกับเซิร์ฟเวอร์) — ดีลที่แก้อยู่ใช้ตัวเลขที่พิมพ์
+      const fixedOf = (id) => {
+        const edited = current.find((c) => Number(c.link.id) === Number(id));
+        const raw = edited && !edited.closing ? typedNumber(edited.fixed) : (edited?.link ?? linkById.get(Number(id)))?.fixedAmount;
+        return Number.isFinite(Number(raw)) ? Number(raw) : 0;
+      };
+      for (const fs of fixed.values()) {
+        /*
+         * ดีลของร้าน×รอบนั้น = ดีลที่มีเหมาอยู่แล้ว (dealIds) + ดีลของรายการที่รอจ่ายในบิลร้านใบเดียวกัน
+         * (หนึ่งร้านหนึ่งรอบมีบิลเดียว) — ดีลที่ยังไม่มีเหมาไม่อยู่ใน dealIds ถ้าเพิ่งพิมพ์เหมาให้ดีลนั้นในหน้าต่างนี้
+         * เซิร์ฟเวอร์จะนับหลังบันทึกดีล ค่าตั้งต้นจึงต้องนับด้วย ไม่งั้นบิลในการบันทึกเดียวกันได้เหมาตัวเก่าที่ต่ำกว่า
+         */
+        const ids = [...new Set([
+          ...(fs.f.dealIds ?? []),
+          ...[...items.values()]
+            .filter((it) => String(it.item.invoiceId) === String(fs.f.invoiceId) && it.item.deal?.id)
+            .map((it) => it.item.deal.id),
+        ].map(Number))];
+        if (fs.amountTouched || !ids.includes(Number(s.link.id))) continue;
+        const best = Math.max(0, ...ids.map(fixedOf));
+        // ไม่เหลือเหมาแล้ว — ปล่อยตัวเลขเดิมไว้ ถ้าติ๊กแล้วบันทึก เซิร์ฟเวอร์จะตอบว่าไม่อยู่ในรายการแล้ว และหน้าต่างโหลดใหม่ให้
+        if (best <= 0 || String(best) === fs.amount) continue;
+        fs.amount = String(best);
+        if (fs.refs) { fs.refs.amountIn.value = fs.amount; paintFixed(fs); }
+      }
+    }
 
     /** แถวดีลเดิม — สินค้าเปลี่ยนไม่ได้ (จะเปลี่ยนสินค้า = ปิดดีลนี้แล้วเพิ่มสินค้าใหม่) */
     function currentRow(s) {
@@ -319,16 +403,20 @@ export async function salesAgentsView() {
           ? el('span', { class: 'badge red' }, 'จะปิดดีลเมื่อกดบันทึก')
           : isChanged(s) ? el('span', { class: 'badge blue' }, 'แก้แล้ว — ยังไม่บันทึก') : '');
       };
-      pctBox.addEventListener('input', () => { s.pct = pctBox.value; paint(); });
-      fixedBox.addEventListener('input', () => { s.fixed = fixedBox.value; paint(); });
-      closeBtn.addEventListener('click', () => { s.closing = !s.closing; paint(); });
+      const changed = () => { paint(); syncDealDefaults(s); paintTotals(); };
+      pctBox.addEventListener('input', () => { s.pct = pctBox.value; changed(); });
+      fixedBox.addEventListener('input', () => { s.fixed = fixedBox.value; changed(); });
+      closeBtn.addEventListener('click', () => { s.closing = !s.closing; changed(); });
       paint();
       return row;
     }
 
-    function drawRows() {
-      const taken = usedProducts();
-      rowBox.replaceChildren(
+    function drawDeals() {
+      // สินค้าที่มีดีลในหน้าต่างนี้แล้ว (รวมที่เพิ่งผูกสำเร็จตอนบันทึกค้างครึ่งทาง) และที่แถวอื่นเลือกไว้ — เลือกซ้ำไม่ได้
+      const held = new Set(current.map((s) => String(s.link.productId)));
+      const addable = productOptions.filter((o) => !held.has(o.value));
+      const taken = new Set(rows.map((r) => r.productId).filter(Boolean));
+      dealsBox.replaceChildren(
         current.length
           ? el('div', { class: 'adj-block m-0', style: 'margin-bottom:12px' },
             el('div', { class: 'adj-block-head' },
@@ -344,23 +432,23 @@ export async function salesAgentsView() {
             el('div', {},
               el('h3', {}, current.length ? `📦 เพิ่มสินค้าที่ผูกดีล (${rows.length})` : `📦 สินค้าที่ผูกดีล (${rows.length})`),
               el('div', { class: 'sub-line' },
-                '% คิดจากยอดขายเต็มของร้าน (ก่อนหักส่วนต่าง) · เซลได้เงินเมื่อทำบิลค่าคอมแล้วติ๊กรายการของสินค้านี้')),
+                '% คิดจากยอดขายเต็มของร้าน (ก่อนหักส่วนต่าง) · บิลร้านที่ออกแล้วของสินค้าที่เพิ่มใหม่ จะขึ้นให้ติ๊กจ่ายคอมเมื่อเปิดหน้าต่างนี้ครั้งถัดไป')),
             el('button', {
               class: 'btn sm',
               type: 'button',
               // เลือกครบทุกชิ้นที่ว่างแล้ว เพิ่มแถวไปก็ไม่มีอะไรให้เลือก
-              disabled: !canAdd || rows.length >= productOptions.length,
-              onclick: () => { rows.push({ productId: '', commissionPct: '', fixedAmount: '' }); drawRows(); },
+              disabled: !canAdd() || rows.length >= addable.length,
+              onclick: () => { rows.push({ productId: '', commissionPct: '', fixedAmount: '' }); drawDeals(); paintTotals(); },
             }, '+ เพิ่มสินค้า')),
 
           ...rows.map((row, i) => {
             // ซ่อนสินค้าที่แถวอื่นเลือกไปแล้ว กันผูกซ้ำตั้งแต่ตอนเลือก
-            const choices = productOptions.filter((o) => !taken.has(o.value) || o.value === row.productId);
+            const choices = addable.filter((o) => !taken.has(o.value) || o.value === row.productId);
 
             const productSel = el('select', { style: 'flex:1 1 260px;min-width:220px', 'aria-label': `สินค้าแถวที่ ${i + 1}` },
               el('option', { value: '', selected: !row.productId }, 'เลือกสินค้า…'),
               ...choices.map((o) => el('option', { value: o.value, selected: o.value === row.productId }, o.label)));
-            productSel.addEventListener('change', () => { row.productId = productSel.value; drawRows(); });
+            productSel.addEventListener('change', () => { row.productId = productSel.value; drawDeals(); paintTotals(); });
 
             const pctBox = el('input', {
               type: 'number', step: '0.01', inputmode: 'decimal', placeholder: '% ของยอดขายเต็ม', value: row.commissionPct,
@@ -387,7 +475,7 @@ export async function salesAgentsView() {
               el('button', {
                 class: 'btn ghost sm danger',
                 type: 'button',
-                onclick: () => { rows.splice(i, 1); drawRows(); },
+                onclick: () => { rows.splice(i, 1); drawDeals(); paintTotals(); },
               }, 'ลบ'),
               hint);
           }),
@@ -396,156 +484,16 @@ export async function salesAgentsView() {
             ? el('div', { class: 'sub-line mt-6' },
               'แต่ละชิ้นกรอกอย่างน้อยหนึ่งช่อง — % ของยอดขายเต็ม หรือเหมาต่อรอบ (คิดครั้งเดียวต่อร้านต่อรอบ)')
             : el('div', { class: 'sub-line' },
-              !canAdd
+              !canAdd()
                 ? 'เซลคนนี้หยุดใช้งานอยู่ — ผูกดีลใหม่ไม่ได้ (แก้/ปิดดีลเดิมด้านบนได้) · เปิดใช้งานเซลก่อนที่ปุ่ม "แก้ไข" ของแถวเซล'
-                : !productOptions.length
+                : !addable.length
                   ? 'สินค้าทุกชิ้นที่มีร้านถือสิทธิ์ขายอยู่ มีเซลถือดีลครบแล้ว — ถ้าจะเปลี่ยนมือ ให้ "ปิดดีล" เดิมก่อน'
                   : current.length
                     ? 'กด "+ เพิ่มสินค้า" ถ้าจะให้เซลคนนี้ถือสินค้าเพิ่ม'
-                    : 'ไม่บังคับ — เซลที่ได้แค่ค่าคอมอื่น ๆ ไม่ต้องผูกดีล (ใส่ค่าคอมอื่น ๆ ตอนทำบิลค่าคอม) · กด "+ เพิ่มสินค้า" ถ้าจะให้ได้ % จากยอดขายสินค้า')));
+                    : 'ไม่บังคับ — เซลที่ได้แค่ค่าคอมอื่น ๆ ไม่ต้องผูกดีล (ใส่ในส่วน "ค่าคอมอื่น ๆ" ด้านล่าง) · กด "+ เพิ่มสินค้า" ถ้าจะให้ได้ % จากยอดขายสินค้า')));
     }
-    drawRows();
 
-    return formModal({
-      title: lockedAgent ? `ตั้งค่าคอมให้ ${lockedAgent.username} — ${lockedAgent.name}` : 'ตั้งค่าคอม (ผูกดีลสินค้า) ให้เซล',
-      submitLabel: 'บันทึกดีล',
-      width: 760,
-      fields: [
-        // เปิดจากแถวเซลแล้วรู้อยู่แล้วว่าใคร ชื่ออยู่บนหัวโมดัล — ไม่ต้องมีช่องให้กดผิด
-        lockedAgent ? null : { name: 'salesAgentId', label: 'เซล', type: 'select', required: true, options: agentOptions },
-        {
-          name: 'note',
-          label: current.length || !lockedAgent ? 'หมายเหตุของดีลที่เพิ่มใหม่ (ไม่บังคับ)' : 'หมายเหตุของดีล (ไม่บังคับ)',
-          hint: 'ใช้กับสินค้าที่เพิ่มในครั้งนี้ · หมายเหตุของดีลเดิมแก้ได้ที่ "แก้ไข" ในรายละเอียดเซล',
-        },
-      ].filter(Boolean),
-      preview: (v) => {
-        // เลือกเซลคนอื่น (เปิดแบบไม่ล็อก) = ดีลเดิมที่โชว์ต้องเป็นของคนใหม่ — ที่พิมพ์แก้ไว้ของคนเก่าทิ้งไป
-        if (!lockedAgent && (v.salesAgentId ?? '') !== agentId) {
-          agentId = v.salesAgentId ?? '';
-          loadCurrent();
-          drawRows();
-        }
-        return { node: rowBox, canSubmit: true };
-      },
-      onSubmit: async (v) => {
-        if (!agentId) throw new Error('เลือกเซลก่อน');
-        const salesAgentId = Number(agentId);
-        const username = agentById(agentId)?.username ?? '';
-
-        // ตรวจทุกแถวให้ผ่านก่อนยิงคำขอแรก — ผิดแถวเดียวไม่มีอะไรถูกบันทึก
-        // แถวที่พิมพ์ตัวเลขไว้แต่ลืมเลือกสินค้า — เดิมถูกทิ้งเงียบ ๆ คนตั้งนึกว่าบันทึกไปแล้ว
-        rows.forEach((r, i) => {
-          if (!r.productId && (r.commissionPct !== '' || r.fixedAmount !== '')) {
-            throw new Error(`แถวสินค้าที่ ${i + 1} ยังไม่ได้เลือกสินค้า — เลือกสินค้าหรือกด ลบ แถวนั้น`);
-          }
-        });
-        const items = rows.filter((r) => r.productId).map((r) => ({
-          productId: Number(r.productId),
-          ...dealNumbers(r.commissionPct, r.fixedAmount, { prefix: `สินค้า ${skuOf(r.productId)}: ` }),
-        }));
-        const edits = current.filter((s) => !s.closing && isChanged(s)).map((s) => ({
-          s,
-          body: dealNumbers(s.pct, s.fixed, { prefix: `ดีล ${s.link.sku}: `, emptyMessage: EDIT_EMPTY }),
-        }));
-        const closing = current.filter((s) => s.closing);
-
-        if (!items.length && !edits.length && !closing.length) {
-          if (!current.length) throw new Error('ยังไม่ได้เลือกสินค้า — กด "+ เพิ่มสินค้า" แล้วเลือกสินค้าที่จะให้เซลได้ %');
-          toast('ไม่มีอะไรเปลี่ยน — ดีลเดิมยังเหมือนเดิม', 'info');
-          return;
-        }
-        if (closing.length && !window.confirm(
-          `ปิดดีล ${closing.map((s) => s.link.sku).join(', ')} ของ ${username}?\n\n`
-          + 'บิลร้านที่ออกไปแล้วยังติ๊กทำบิลค่าคอมให้เซลคนนี้ได้ตามเดิม (ขึ้นป้าย "ดีลปิดแล้ว") · '
-          + 'ปิดแล้วสินค้านี้ผูกดีลให้เซลคนอื่นได้',
-        )) {
-          throw new Error('ยังไม่ได้บันทึกอะไร — กด "ไม่ปิดแล้ว" ที่ดีลที่ยังไม่อยากปิด แล้วกดบันทึกอีกครั้ง');
-        }
-
-        const done = { edit: 0, end: 0, add: 0 };
-        const summary = () => [
-          done.edit ? `แก้ดีล ${done.edit}` : '',
-          done.end ? `ปิดดีล ${done.end}` : '',
-          done.add ? `เพิ่มดีล ${done.add}` : '',
-        ].filter(Boolean).join(' · ');
-        try {
-          for (const { s, body } of edits) {
-            // ตัวเลขใหม่กลายเป็น "ค่าเดิม" ทันที — พังขั้นถัดไปแล้วกดบันทึกซ้ำ แถวนี้จะไม่ถูกส่งซ้ำ
-            s.link = await api.patch(`/api/sales-agents/links/${s.link.id}`, body);
-            done.edit += 1;
-          }
-          for (const s of closing) {
-            await api.post(`/api/sales-agents/links/${s.link.id}/end`, {});
-            current = current.filter((x) => x !== s);
-            done.end += 1;
-          }
-          if (items.length) {
-            // ทรานแซกชันเดียวฝั่งเซิร์ฟเวอร์ — ชนสักชิ้นไม่มีชิ้นไหนถูกผูก
-            const res = await api.post('/api/sales-agents/links', { salesAgentId, ...(v.note ? { note: v.note } : {}), items });
-            rows.length = 0;
-            done.add = res.count ?? items.length;
-          }
-        } catch (err) {
-          if (!done.edit && !done.end && !done.add) throw err;
-          // บางส่วนเข้าไปแล้ว — วาดแถวตามของจริง แล้วบอกให้ชัดว่าอะไรเข้าแล้ว อะไรยังค้าง
-          drawRows();
-          render();
-          throw new Error(`บันทึกไปแล้วบางส่วน (${summary()}) แต่ขั้นถัดไปไม่ผ่าน: ${err.fullMessage ?? err.message} `
-            + '— แก้ตามข้อความแล้วกดบันทึกอีกครั้ง (ส่วนที่บันทึกแล้วไม่ถูกส่งซ้ำ)');
-        }
-
-        toast(`บันทึกดีลของ ${username} แล้ว — ${summary()}`, 'success');
-        render();
-      },
-    });
-  };
-
-  /**
-   * ทำบิลค่าคอมให้เซล — บิลค่าคอม 1 ใบ = จ่ายเซล 1 ครั้ง
-   *
-   * เจ้าของระบบ: "แต่ละรอบจ่ายค่าคอมไม่เหมือนกัน" — จึงไม่คิดอัตโนมัติตอนออกบิลร้านแล้ว
-   * ให้ติ๊กเองว่าจะจ่ายรายการไหน จากบิลร้านที่ออกไปแล้ว (ไม่ต้องรอร้านจ่าย) เฉพาะสินค้าที่เซลคนนี้ถือดีล
-   * แต่ละรายการคิด "% ของยอดเต็ม" (ตั้งต้น = % ของดีล) หรือ "กรอกเอง" + ค่าคอมอื่น ๆ ที่ไม่ต้องเลือกรอบ
-   *
-   * ตัวเลขในนี้เป็นพรีวิว เซิร์ฟเวอร์ตรวจและคิดใหม่เองตอนบันทึก
-   * รายการหนึ่งจ่ายเป็นค่าคอมได้ครั้งเดียว (ฐานข้อมูลกันไว้) — ชนกับคนอื่นเมื่อไรโหลดรายการใหม่ให้
-   *
-   * preset.salesAgentId + lock: เปิดจากแถวเซล = ล็อกชื่อเซล · จากแท็บบิลค่าคอม = เลือกไว้ให้แต่เปลี่ยนได้
-   */
-  const commissionBillModal = (preset = {}) => {
-    const locked = preset.lock ? agentById(preset.salesAgentId) : null;
-
-    /*
-     * สถานะทั้งหมดอยู่นอกฟอร์ม — พรีวิวของ formModal ถูกเรียกซ้ำทุกครั้งที่พิมพ์หมายเหตุ
-     * ถ้าวาดใหม่ทุกครั้ง ติ๊ก/ตัวเลขที่กรอกไว้จะหาย และเคอร์เซอร์หลุดระหว่างพิมพ์
-     */
-    let agentId = locked ? String(locked.id) : (agentById(preset.salesAgentId) ? String(preset.salesAgentId) : '');
-    let loadSeq = 0;
-    let loaded = false;
-    const items = new Map(); // entryId → { item, on, mode, pct, amount, refs }
-    const fixed = new Map(); // key → { f, on, amount, refs }
-    let others = []; // [{ label, amount }]
-    let groups = []; // บิลร้านละกลุ่ม: { invoiceNo, …, rows: [state], box }
-
-    const content = el('div');
-    const othersBox = el('div');
-    const totalBox = el('div', { class: 'notice-box', style: 'margin:12px 0 0' });
-    const toggleAll = el('input', { type: 'checkbox' });
-    const pickedCount = el('span', { class: 'sub-line' });
-
-    const picker = locked ? null : el('select', { 'aria-label': 'เซลที่จะทำบิลค่าคอมให้' },
-      el('option', { value: '', selected: !agentId }, 'เลือกเซล…'),
-      ...agents.map((a) => el('option', { value: String(a.id), selected: String(a.id) === agentId },
-        `${a.username} — ${a.name}${a.status === 'ACTIVE' ? '' : ' (หยุดใช้งาน)'}`)));
-    picker?.addEventListener('change', () => {
-      agentId = picker.value;
-      // ค่าคอมอื่น ๆ ที่พิมพ์ไว้เป็นของเซลคนก่อน — เปลี่ยนคนแล้วเริ่มใหม่ ไม่ให้ติดไปจ่ายผิดคน
-      others = [];
-      load();
-    });
-
-    /* ── ตัวเลขของแต่ละแถว: { amount } หรือ { amount: 0, error } ── */
+    /* ── รายการที่รอจ่ายคอม: ตัวเลขของแต่ละแถว = { amount } หรือ { amount: 0, error } ── */
 
     const itemResult = (s) => {
       const gross = Number(s.item.grossAmount);
@@ -610,8 +558,6 @@ export async function salesAgentsView() {
       };
     }
 
-    /* ── วาด/อัปเดต ── */
-
     // ป้ายเป็นข้อความทุกคอลัมน์ — บนมือถือตารางพลิกเป็นการ์ด แล้วใช้ป้ายนี้บอกว่าช่องคืออะไร
     const COLS = ['เลือก', 'สินค้า', 'ยอดขายเต็ม', 'วิธีคิด', '% ของยอดเต็ม', 'จำนวนเงิน (บาท)', 'ค่าคอม'];
     const NUM_COLS = new Set([2, 4, 5, 6]);
@@ -648,6 +594,7 @@ export async function salesAgentsView() {
 
     const paintRow = (s) => (s.item ? paintItem(s) : paintFixed(s));
 
+    /** สรุปสด ๆ ว่ากดบันทึกแล้วจะเกิดอะไร — บิลค่าคอม (ถ้ามีรายการ) + ดีลที่เปลี่ยน */
     function paintTotals() {
       const all = [...items.values(), ...fixed.values()];
       const onCount = all.filter((s) => s.on).length;
@@ -661,13 +608,21 @@ export async function salesAgentsView() {
       }
 
       const t = compute();
+      const d = dealChanges();
+      const dealLine = [d.edit ? `แก้ดีล ${d.edit}` : '', d.end ? `ปิดดีล ${d.end}` : '', d.add ? `เพิ่มดีล ${d.add}` : '']
+        .filter(Boolean).join(' · ');
       totalBox.replaceChildren(
-        el('strong', {}, `รวมบิลค่าคอม ${money(t.total)} ฿`),
-        el('div', { class: 'sub-line mt-4' }, [
-          `สินค้า ${t.itemRes.length} รายการ (ยอดเต็ม ${money(t.grossTotal)}) → ${money(t.itemsTotal)}`,
-          `เหมาต่อรอบ ${t.fixedRes.length} → ${money(t.fixedTotal)}`,
-          `ค่าคอมอื่น ๆ ${t.otherRes.length} → ${money(t.othersTotal)}`,
-        ].join(' · ')),
+        el('strong', {}, t.lineCount
+          ? `บิลค่าคอมที่จะทำ: รวม ${money(t.total)} ฿ (สินค้า ${t.itemRes.length} · เหมา ${t.fixedRes.length} · อื่น ๆ ${t.otherRes.length})`
+          : 'ไม่มีรายการ — บันทึกเฉพาะดีล'),
+        t.lineCount
+          ? el('div', { class: 'sub-line mt-4' }, [
+            `สินค้า ${t.itemRes.length} รายการ (ยอดเต็ม ${money(t.grossTotal)}) → ${money(t.itemsTotal)}`,
+            `เหมาต่อรอบ ${t.fixedRes.length} → ${money(t.fixedTotal)}`,
+            `ค่าคอมอื่น ๆ ${t.otherRes.length} → ${money(t.othersTotal)}`,
+          ].join(' · '))
+          : '',
+        el('div', { class: 'sub-line mt-4' }, dealLine ? `ดีลที่จะบันทึก: ${dealLine}` : 'ดีล: ยังไม่ได้แก้'),
         t.error
           ? el('div', { class: 'text-danger mt-4' }, `⚠ ${t.error}`)
           : t.lineCount && t.total <= 0
@@ -715,7 +670,8 @@ export async function salesAgentsView() {
         paintItem(s);
         paintTotals();
       });
-      pctIn.addEventListener('input', () => { s.pct = pctIn.value; paintItem(s); paintTotals(); });
+      // พิมพ์ % เองแล้ว = ตั้งใจ แก้ดีลด้านบนทีหลังจะไม่ทับเลขนี้
+      pctIn.addEventListener('input', () => { s.pct = pctIn.value; s.pctTouched = true; paintItem(s); paintTotals(); });
       amountIn.addEventListener('input', () => { s.amount = amountIn.value; paintItem(s); paintTotals(); });
 
       const tr = el('tr', {},
@@ -743,7 +699,7 @@ export async function salesAgentsView() {
       const f = s.f;
       const box = tickBox(s, `เลือกเหมาต่อรอบ ร้าน ${f.franchiseUsername} ${periodLabel(f.periodCode)}`);
       const amountIn = numberIn('line-amount', s.amount, 'บาท', `เหมาต่อรอบของร้าน ${f.franchiseUsername}`);
-      amountIn.addEventListener('input', () => { s.amount = amountIn.value; paintFixed(s); paintTotals(); });
+      amountIn.addEventListener('input', () => { s.amount = amountIn.value; s.amountTouched = true; paintFixed(s); paintTotals(); });
       const computed = el('span', { class: 'line-computed' });
       const error = el('span', { class: 'line-error' });
       const tr = el('tr', {},
@@ -810,7 +766,7 @@ export async function salesAgentsView() {
           el('div', {},
             el('h3', {}, `💰 ค่าคอมอื่น ๆ (${others.length})`),
             el('div', { class: 'sub-line' },
-              'จ่ายเป็นก้อน ไม่ผูกกับสินค้าและไม่ต้องเลือกรอบ เช่นโบนัสปิดดีล ค่าเดินทาง · ใส่ติดลบได้ ถ้าเป็นการหักคืน')),
+              'จ่ายเป็นก้อน ไม่ผูกกับสินค้าและไม่ต้องเลือกรอบ เช่นโบนัสปิดดีล ค่าเดินทาง · ใส่ติดลบได้ ถ้าเป็นการหักคืน · อยู่ในบิลค่าคอมใบเดียวกับรายการที่ติ๊ก')),
           el('button', {
             class: 'btn sm',
             type: 'button',
@@ -837,56 +793,48 @@ export async function salesAgentsView() {
               onclick: () => { others.splice(i, 1); drawOthers(); paintTotals(); },
             }, 'ลบ'));
         }),
-        others.length ? '' : el('div', { class: 'sub-line' }, 'ไม่มี — กด "+ เพิ่มรายการ" ถ้าจะจ่ายก้อนพิเศษหรือหักคืนในบิลนี้')));
+        others.length ? '' : el('div', { class: 'sub-line' }, 'ไม่มี — กด "+ เพิ่มรายการ" ถ้าจะจ่ายก้อนพิเศษหรือหักคืนในบิลค่าคอมครั้งนี้')));
     }
 
-    function draw() {
+    function drawCandidates() {
       groups = buildGroups();
       const tickable = items.size + fixed.size;
+      candCount.textContent = `(${tickable})`;
       const tbody = el('tbody', {}, ...groups.flatMap((g) => [
         groupHead(g),
         ...g.rows.map((s) => (s.item ? itemRow(s) : fixedRow(s))),
       ]));
 
-      content.replaceChildren(
-        tickable
-          ? el('div', { class: 'line-editor' },
-            el('div', { class: 'sub-line mb-8' },
-              'ติ๊กรายการจากบิลร้านที่จะจ่ายในบิลค่าคอมนี้ — ไม่ต้องรอร้านจ่ายบิลก่อน · '
-              + '% คิดจากยอดขายเต็ม (ตั้งต้นตาม % ของดีล) หรือเลือก "กรอกเอง" · ที่ไม่ติ๊กไว้จะยังค้างให้ทำบิลครั้งหน้า'),
-            // "เลือกทั้งหมด" อยู่เหนือตาราง — บนมือถือหัวตารางถูกซ่อน ถ้าอยู่ในหัวตารางจะหายไปด้วย
-            el('label', { class: 'check-all' }, toggleAll, 'เลือกทั้งหมด', pickedCount),
-            el('div', { class: 'table-scroll' },
-              el('table', {},
-                el('thead', {}, el('tr', {}, ...COLS.map((c, i) => el('th', { class: NUM_COLS.has(i) ? 'num' : '' }, c)))),
-                tbody)))
-          : el('div', { class: 'notice-box m-0' },
-            'ยังไม่มีรายการจากบิลร้านของสินค้าที่เซลคนนี้ถือดีล — ใส่ค่าคอมอื่น ๆ ได้'),
-        othersBox,
-        totalBox);
-      drawOthers();
-      paintTotals();
+      candContent.replaceChildren(tickable
+        ? el('div', { class: 'line-editor' },
+          // "เลือกทั้งหมด" อยู่เหนือตาราง — บนมือถือหัวตารางถูกซ่อน ถ้าอยู่ในหัวตารางจะหายไปด้วย
+          el('label', { class: 'check-all' }, toggleAll, 'เลือกทั้งหมด', pickedCount),
+          el('div', { class: 'table-scroll' },
+            el('table', {},
+              el('thead', {}, el('tr', {}, ...COLS.map((c, i) => el('th', { class: NUM_COLS.has(i) ? 'num' : '' }, c)))),
+              tbody)))
+        : el('div', { class: 'sub-line' },
+          'ยังไม่มีรายการจากบิลร้านของสินค้าที่เซลคนนี้ถือดีล — ใส่ค่าคอมอื่น ๆ ด้านล่างได้'));
     }
 
     /**
-     * โหลดรายการที่ทำบิลได้ของเซลคนนี้
-     * keepState: โหลดใหม่หลังชนกับคนอื่น — ติ๊ก/ตัวเลขของรายการที่ยังเหลืออยู่คงไว้ ค่าคอมอื่น ๆ ก็คงไว้
+     * โหลดรายการที่ทำบิลค่าคอมได้ของเซลคนนี้
+     * keepState: โหลดใหม่หลังชนกับคนอื่น — ติ๊ก/ตัวเลขของรายการที่ยังเหลืออยู่คงไว้ (ค่าคอมอื่น ๆ ไม่ถูกแตะอยู่แล้ว)
      */
     async function load({ keepState = false } = {}) {
       const seq = ++loadSeq;
       loaded = false;
-      if (!agentId) {
-        content.replaceChildren(el('div', { class: 'sub-line' },
-          'เลือกเซลก่อน — รายการจากบิลร้านของสินค้าที่เซลคนนั้นถือดีลจะขึ้นตรงนี้'));
-        return;
-      }
-      content.replaceChildren(el('div', { class: 'sub-line' }, 'กำลังโหลดรายการ…'));
+      if (!agentId) return;
+      candCount.textContent = '';
+      candContent.replaceChildren(el('div', { class: 'sub-line' }, 'กำลังโหลดรายการจากบิลร้าน…'));
       let res;
       try {
         res = await api.get(`/api/sales-agents/${agentId}/commission-candidates`);
       } catch (err) {
         if (seq === loadSeq) {
-          content.replaceChildren(el('div', { class: 'alert-box m-0' }, `โหลดรายการไม่ได้ — ${err.fullMessage ?? err.message}`));
+          candContent.replaceChildren(el('div', { class: 'alert-box m-0' },
+            `โหลดรายการไม่ได้ — ${err.fullMessage ?? err.message} `,
+            el('button', { class: 'btn ghost sm', type: 'button', onclick: () => load({ keepState: true }) }, 'ลองใหม่')));
         }
         return;
       }
@@ -901,95 +849,250 @@ export async function salesAgentsView() {
         items.set(it.entryId, prev
           ? { ...prev, item: it, refs: null }
           // ตั้งต้นไม่ติ๊ก — เงินออกจากบริษัท ต้องเป็นรายการที่ตั้งใจเลือกเท่านั้น (ติ๊กทั้งหมดได้ด้วยปุ่มเดียว)
-          : { item: it, on: false, mode: 'PCT', pct: String(it.deal?.pct ?? 0), amount: '', refs: null });
+          : { item: it, on: false, mode: 'PCT', pct: String(it.deal?.pct ?? 0), amount: '', pctTouched: false, refs: null });
       }
       for (const f of res.fixed ?? []) {
         const prev = prevFixed.get(f.key);
-        fixed.set(f.key, prev ? { ...prev, f, refs: null } : { f, on: false, amount: String(f.amount ?? ''), refs: null });
+        fixed.set(f.key, prev
+          ? { ...prev, f, refs: null }
+          : { f, on: false, amount: String(f.amount ?? ''), amountTouched: false, refs: null });
       }
-      // ไม่มีอะไรให้ติ๊ก = ทางเดียวที่เหลือคือค่าคอมอื่น ๆ — เปิดแถวว่างรอไว้เลย (เซลที่ไม่มีดีลก็จ่ายได้)
-      if (!items.size && !fixed.size && !others.length) others.push({ label: '', amount: '' });
+      // ดีลที่แก้ค้างไว้ในหน้าต่าง (ยังไม่บันทึก) ต้องเป็นค่าตั้งต้นของรายการที่เพิ่งโหลดด้วย
+      for (const s of current) if (s.closing || isChanged(s)) syncDealDefaults(s);
       loaded = true;
-      draw();
+      drawCandidates();
+      paintTotals();
     }
 
+    /* ── โครงหน้าต่าง ────────────────────────────────────── */
+
+    const picker = locked ? null : el('select', { 'aria-label': 'เซล' },
+      el('option', { value: '', selected: !agentId }, 'เลือกเซล…'),
+      ...agents.map((a) => el('option', { value: String(a.id), selected: String(a.id) === agentId },
+        `${a.username} — ${a.name}${a.status === 'ACTIVE' ? '' : ' (หยุดใช้งาน)'}`)));
+
+    function drawAll() {
+      if (!agentId) {
+        main.replaceChildren(el('div', { class: 'sub-line' },
+          'เลือกเซลก่อน — ดีลที่เซลถืออยู่ รายการจากบิลร้านที่รอจ่ายคอม และค่าคอมอื่น ๆ ของเซลคนนั้นจะขึ้นตรงนี้'));
+        return;
+      }
+      main.replaceChildren(
+        canAdd() ? '' : el('div', { class: 'notice-box' },
+          'เซลคนนี้หยุดใช้งานอยู่ — แก้/ปิดดีลเดิม และทำบิลค่าคอมที่ค้างจ่ายได้ แต่ผูกดีลใหม่ไม่ได้'),
+        dealsBox,
+        el('div', { class: 'adj-block' },
+          el('div', { class: 'adj-block-head' },
+            el('div', {},
+              el('h3', {}, '🧾 รายการจากบิลร้านที่รอจ่ายคอม ', candCount),
+              el('div', { class: 'sub-line' },
+                'ติ๊กรายการที่จะจ่ายในบิลค่าคอมครั้งนี้ — ไม่ต้องรอร้านจ่ายบิลก่อน · % คิดจากยอดขายเต็ม (ตั้งต้นตาม % ของดีล) '
+                + 'หรือเลือก "กรอกเอง" · ที่ไม่ติ๊กยังค้างไว้ทำบิลครั้งหน้า · ไม่ติ๊กอะไรเลย = บันทึกเฉพาะดีล'))),
+          candContent),
+        othersBox,
+        totalBox,
+        el('div', { class: 'form-grid', style: 'margin-top:14px' },
+          field('หมายเหตุของดีลที่เพิ่มใหม่ (ไม่บังคับ)', dealNote,
+            'ใช้กับสินค้าที่เพิ่มในครั้งนี้ · หมายเหตุของดีลเดิมแก้ได้ที่ "แก้ไข" ในรายละเอียดเซล'),
+          field('หมายเหตุของบิลค่าคอม (ไม่บังคับ)', billNote, 'เซลเห็นหมายเหตุนี้ในบิลของตัวเอง')));
+      drawDeals();
+      drawOthers();
+      paintTotals();
+    }
+
+    picker?.addEventListener('change', () => {
+      agentId = picker.value;
+      // ทุกอย่างในหน้าต่างเป็นของเซลคนก่อน — เปลี่ยนคนแล้วเริ่มใหม่หมด ไม่ให้ดีล/ติ๊ก/ค่าคอมอื่น ๆ ที่พิมพ์ไว้ติดไปจ่ายผิดคน
+      rows.length = 0;
+      others = [];
+      items.clear();
+      fixed.clear();
+      groups = [];
+      dealNote.value = '';
+      billNote.value = '';
+      loadCurrent();
+      drawAll();
+      load();
+    });
+
     const root = el('div', {},
-      picker
-        ? el('div', { class: 'field', style: 'margin-bottom:12px' }, el('label', {}, 'ทำบิลค่าคอมให้เซล *'), picker)
-        : '',
-      content);
+      picker ? el('div', { style: 'margin-bottom:12px' }, field('เซล *', picker)) : '',
+      main);
+    drawAll();
+
+    /** บันทึกแล้ว (ทั้งหมดหรือบางส่วน) — วาดสิ่งที่อยู่ข้างหลังใหม่ให้ตัวเลขตรงกับของจริง */
+    const refreshBehind = async () => {
+      if (preset.onSaved) await preset.onSaved();
+      else render();
+    };
 
     formModal({
-      title: locked ? `ทำบิลค่าคอมให้ ${locked.username} — ${locked.name}` : 'ทำบิลค่าคอมให้เซล',
-      submitLabel: '🧾 บันทึกบิลค่าคอม',
-      // ตารางมีช่องกรอกหลายคอลัมน์ — โมดัลปกติ 520px แคบจนต้องเลื่อนข้าง
+      title: locked ? `ตั้งค่าคอมให้ ${locked.username} — ${locked.name}` : 'ตั้งค่าคอม / ทำบิลค่าคอมให้เซล',
+      submitLabel: 'บันทึก',
+      // ตารางรายการที่รอจ่ายคอมมีช่องกรอกหลายคอลัมน์ — โมดัลปกติ 520px แคบจนต้องเลื่อนข้าง
       width: 920,
-      fields: [{
-        name: 'note',
-        label: 'หมายเหตุของบิลค่าคอม (ไม่บังคับ)',
-        placeholder: 'เช่น ค่าคอมรอบสิ้นเดือน ก.ย.',
-        hint: 'เซลเห็นหมายเหตุนี้ในบิลของตัวเอง',
-      }],
-      // คืนกล่องเดิมทุกครั้ง — พิมพ์หมายเหตุแล้วตารางที่ติ๊กไว้ต้องอยู่ครบ
+      // ช่องทั้งหมดอยู่ในกล่องพรีวิวของเราเอง (ลำดับบนลงล่างตามที่คนทำงานคิด และไม่ถูกวาดใหม่ทุกครั้งที่พิมพ์)
+      fields: [],
       preview: () => ({ node: root, canSubmit: true }),
-      onSubmit: async (v) => {
-        if (!agentId) throw new Error('เลือกเซลที่จะทำบิลค่าคอมให้ก่อน');
-        if (!loaded) throw new Error('ยังโหลดรายการไม่เสร็จ — รอสักครู่แล้วกดใหม่');
-        const t = compute();
-        if (t.error) throw new Error(t.error);
-        if (!t.lineCount) throw new Error('เลือกอย่างน้อยหนึ่งรายการ หรือใส่ค่าคอมอื่น ๆ');
-        if (t.itemRes.length > MAX_BILL_ITEMS) throw new Error(`บิลค่าคอมหนึ่งใบติ๊กสินค้าได้ไม่เกิน ${MAX_BILL_ITEMS} รายการ — แบ่งทำสองบิล`);
-        if (t.fixedRes.length > MAX_BILL_FIXED) throw new Error(`เหมาต่อรอบได้ไม่เกิน ${MAX_BILL_FIXED} รายการต่อบิล — แบ่งทำสองบิล`);
-        if (t.otherRes.length > MAX_BILL_OTHERS) throw new Error(`ค่าคอมอื่น ๆ ได้ไม่เกิน ${MAX_BILL_OTHERS} รายการต่อบิล`);
-        if (t.total <= 0) throw new Error('ยอดรวมบิลค่าคอมต้องมากกว่า 0 — รายการหักคืนต้องรวมอยู่กับรายการที่จ่ายในบิลเดียวกัน');
-        if ((v.note ?? '').length > 500) throw new Error('หมายเหตุยาวเกิน 500 ตัวอักษร');
+      onSubmit: async () => {
+        if (!agentId) throw new Error('เลือกเซลก่อน');
+        const salesAgentId = Number(agentId);
+        const username = agentNow()?.username ?? '';
 
-        const body = {
-          // ส่งเฉพาะช่องของวิธีที่เลือก — % ห้ามมี amount · กรอกเองห้ามมี pct (เซิร์ฟเวอร์ตอบ 400)
-          items: t.itemRes.map(({ s, amount, pct }) => (s.mode === 'MANUAL'
-            ? { entryId: s.item.entryId, mode: 'MANUAL', amount }
-            : { entryId: s.item.entryId, mode: 'PCT', pct })),
-          fixed: t.fixedRes.map(({ s, amount }) => ({ key: s.f.key, amount })),
-          others: t.otherRes.map(({ label, amount }) => ({ label, amount })),
-          ...(v.note ? { note: v.note } : {}),
-        };
+        /* ── 1. ตรวจทุกส่วนให้ผ่านก่อนยิงคำขอแรก — ผิดตรงไหน ไม่มีอะไรถูกบันทึก ── */
 
-        let res;
-        try {
-          res = await api.post(`/api/sales-agents/${agentId}/commission-bills`, body);
-        } catch (err) {
-          /*
-           * บางรายการเพิ่งถูกทำบิลไปจากอีกหน้าจอ หรือบิลร้านเพิ่งถูกยกเลิก — โหลดรายการใหม่ให้
-           * (ติ๊ก/ตัวเลขของรายการที่ยังอยู่คงไว้) แล้วให้ตรวจก่อนกดอีกครั้ง ไม่ส่งซ้ำเอง
-           */
-          if (err.status === 409 || (err.status === 400 && /ไม่อยู่ในรายการ/.test(err.message))) {
-            await load({ keepState: true });
-            // ข้อความเซิร์ฟเวอร์บอกให้ "โหลดใหม่" — โหลดให้แล้ว จึงเอาแค่ท่อนแรก แล้วบอกขั้นต่อไปแทน
-            throw new Error(`${String(err.message).split(' — ')[0]} — โหลดรายการใหม่ให้แล้ว `
-              + '(รายการที่ถูกทำบิลไปแล้วหายจากตาราง) ตรวจยอดแล้วกดบันทึกอีกครั้ง');
+        // แถวที่พิมพ์ตัวเลขไว้แต่ลืมเลือกสินค้า — เดิมถูกทิ้งเงียบ ๆ คนตั้งนึกว่าบันทึกไปแล้ว
+        rows.forEach((r, i) => {
+          if (!r.productId && (r.commissionPct !== '' || r.fixedAmount !== '')) {
+            throw new Error(`แถวสินค้าที่ ${i + 1} ยังไม่ได้เลือกสินค้า — เลือกสินค้าหรือกด ลบ แถวนั้น`);
           }
-          throw err;
+        });
+        const newDeals = rows.filter((r) => r.productId).map((r) => ({
+          productId: Number(r.productId),
+          ...dealNumbers(r.commissionPct, r.fixedAmount, { prefix: `สินค้า ${skuOf(r.productId)}: ` }),
+        }));
+        if (newDeals.length && !canAdd()) throw new Error(`เซล ${username} หยุดใช้งานอยู่ — ผูกดีลใหม่ไม่ได้ ลบแถวสินค้าใหม่ออกก่อน`);
+        const edits = current.filter((s) => !s.closing && isChanged(s)).map((s) => ({
+          s,
+          body: dealNumbers(s.pct, s.fixed, { prefix: `ดีล ${s.link.sku}: `, emptyMessage: EDIT_EMPTY }),
+        }));
+        const closing = current.filter((s) => s.closing);
+        const dealNoteText = dealNote.value.trim();
+        // หมายเหตุที่ไม่มีที่ลง — บอกก่อน ดีกว่าทิ้งเงียบ ๆ แล้วคนพิมพ์นึกว่าบันทึกไปแล้ว
+        if (dealNoteText && !newDeals.length) {
+          throw new Error('มีหมายเหตุของดีลที่เพิ่มใหม่ แต่ยังไม่ได้เพิ่มสินค้า — เพิ่มสินค้า หรือลบหมายเหตุออก (หมายเหตุของดีลเดิมแก้ที่ "แก้ไข" ในรายละเอียดเซล)');
         }
 
-        const agent = agentById(agentId);
-        toast(`ทำบิลค่าคอม ${res?.billNo ?? ''} ให้ ${agent?.username ?? ''} แล้ว — รวม ${money(res?.totalAmount ?? t.total)} ฿ (ยังไม่ได้จ่าย)`, 'success');
-        // พาไปที่บิลที่เพิ่งทำ — ขั้นต่อไปคือโอนเงินให้เซลแล้วกด "จ่ายแล้ว"
-        viewState.setItem(TAB_KEY, 'commissions');
-        viewState.setItem(COMM_STATUS_KEY, 'PENDING');
-        viewState.setItem(COMM_AGENT_KEY, String(agentId));
-        render();
+        const t = compute();
+        const wantBill = t.lineCount > 0;
+        const billNoteText = billNote.value.trim();
+        if (billNoteText && !wantBill) {
+          throw new Error('มีหมายเหตุของบิลค่าคอม แต่ยังไม่ได้ติ๊กรายการหรือใส่ค่าคอมอื่น ๆ — ติ๊กรายการ หรือลบหมายเหตุออก');
+        }
+        if (wantBill) {
+          // ยังไม่เห็นรายการจากบิลร้านครบ = ยังไม่ควรออกบิลค่าคอม (ดีลอย่างเดียวบันทึกได้ไม่ต้องรอ)
+          if (!loaded) throw new Error('รายการจากบิลร้านยังโหลดไม่เสร็จ (หรือโหลดไม่ได้) — รอสักครู่หรือกด "ลองใหม่" แล้วกดบันทึกอีกครั้ง');
+          if (t.error) throw new Error(t.error);
+          if (t.itemRes.length > MAX_BILL_ITEMS) throw new Error(`บิลค่าคอมหนึ่งใบติ๊กสินค้าได้ไม่เกิน ${MAX_BILL_ITEMS} รายการ — แบ่งทำสองบิล`);
+          if (t.fixedRes.length > MAX_BILL_FIXED) throw new Error(`เหมาต่อรอบได้ไม่เกิน ${MAX_BILL_FIXED} รายการต่อบิล — แบ่งทำสองบิล`);
+          if (t.otherRes.length > MAX_BILL_OTHERS) throw new Error(`ค่าคอมอื่น ๆ ได้ไม่เกิน ${MAX_BILL_OTHERS} รายการต่อบิล`);
+          if (t.total <= 0) throw new Error('ยอดรวมบิลค่าคอมต้องมากกว่า 0 — รายการหักคืนต้องรวมอยู่กับรายการที่จ่ายในบิลเดียวกัน');
+          if (billNoteText.length > 500) throw new Error('หมายเหตุของบิลค่าคอมยาวเกิน 500 ตัวอักษร');
+        }
+
+        if (!newDeals.length && !edits.length && !closing.length && !wantBill) {
+          toast('ไม่มีอะไรเปลี่ยน — ยังไม่ได้แก้ดีล ติ๊กรายการ หรือใส่ค่าคอมอื่น ๆ', 'info');
+          return;
+        }
+        if (closing.length && !window.confirm(
+          `ปิดดีล ${closing.map((s) => s.link.sku).join(', ')} ของ ${username}?\n\n`
+          + 'บิลร้านที่ออกไปแล้วยังติ๊กทำบิลค่าคอมให้เซลคนนี้ได้ตามเดิม (ขึ้นป้าย "ดีลปิดแล้ว") · '
+          + 'ปิดแล้วสินค้านี้ผูกดีลให้เซลคนอื่นได้',
+        )) {
+          throw new Error('ยังไม่ได้บันทึกอะไร — กด "ไม่ปิดแล้ว" ที่ดีลที่ยังไม่อยากปิด แล้วกดบันทึกอีกครั้ง');
+        }
+
+        /* ── 2. ยิงตามลำดับ แก้ → ปิด → เพิ่ม → บิลค่าคอม · พังตรงไหนหยุดตรงนั้น ── */
+
+        const done = { edit: 0, end: 0, add: 0 };
+        const dealSummary = () => [
+          done.edit ? `แก้ดีล ${done.edit}` : '',
+          done.end ? `ปิดดีล ${done.end}` : '',
+          done.add ? `เพิ่มดีล ${done.add}` : '',
+        ].filter(Boolean).join(' · ');
+        let bill = null;
+        let billStep = false;
+        /*
+         * ล็อกช่องเลือกเซลระหว่างยิง — เปลี่ยนคนกลางทาง = ดีลที่เพิ่งผูก/ปิดของคนเก่าไปปนในหน้าต่างของคนใหม่
+         * และบิลค่าคอม (ค่าคอมอื่น ๆ ที่คำนวณไว้แล้ว) จะไปออกให้คนใหม่ · URL ใช้ salesAgentId ที่จับไว้ตอนกดด้วย
+         */
+        if (picker) picker.disabled = true;
+        try {
+          for (const { s, body } of edits) {
+            // ตัวเลขใหม่กลายเป็น "ค่าเดิม" ทันที — พังขั้นถัดไปแล้วกดบันทึกซ้ำ แถวนี้จะไม่ถูกส่งซ้ำ
+            s.link = await api.patch(`/api/sales-agents/links/${s.link.id}`, body);
+            linkById.set(Number(s.link.id), s.link);
+            done.edit += 1;
+          }
+          for (const s of closing) {
+            await api.post(`/api/sales-agents/links/${s.link.id}/end`, {});
+            current = current.filter((x) => x !== s);
+            done.end += 1;
+          }
+          if (newDeals.length) {
+            // ทรานแซกชันเดียวฝั่งเซิร์ฟเวอร์ — ชนสักชิ้นไม่มีชิ้นไหนถูกผูก
+            const res = await api.post('/api/sales-agents/links', { salesAgentId, ...(dealNoteText ? { note: dealNoteText } : {}), items: newDeals });
+            rows.length = 0;
+            dealNote.value = '';
+            done.add = res.count ?? newDeals.length;
+            // ดีลที่เพิ่งผูกขึ้นเป็น "ดีลที่ถืออยู่" ทันที — ถ้าขั้นบิลค่าคอมพัง หน้าต่างยังเปิดอยู่และต้องตรงกับของจริง
+            current.push(...(res.items ?? []).map(toDealState));
+          }
+          if (wantBill) {
+            billStep = true;
+            bill = await api.post(`/api/sales-agents/${salesAgentId}/commission-bills`, {
+              // ส่งเฉพาะช่องของวิธีที่เลือก — % ห้ามมี amount · กรอกเองห้ามมี pct (เซิร์ฟเวอร์ตอบ 400)
+              items: t.itemRes.map(({ s, amount, pct: p }) => (s.mode === 'MANUAL'
+                ? { entryId: s.item.entryId, mode: 'MANUAL', amount }
+                : { entryId: s.item.entryId, mode: 'PCT', pct: p })),
+              fixed: t.fixedRes.map(({ s, amount }) => ({ key: s.f.key, amount })),
+              others: t.otherRes.map(({ label, amount }) => ({ label, amount })),
+              ...(billNoteText ? { note: billNoteText } : {}),
+            });
+          }
+        } catch (err) {
+          const saved = dealSummary();
+          if (saved) {
+            // บางส่วนเข้าไปแล้ว — วาดดีลตามของจริง (ที่แก้แล้วไม่ขึ้นป้าย "แก้แล้ว" อีก) แล้วบอกให้ชัดว่าอะไรเข้าแล้ว อะไรยังค้าง
+            drawDeals();
+            paintTotals();
+            await refreshBehind();
+          }
+          /*
+           * บางรายการเพิ่งถูกทำบิลไปจากอีกหน้าจอ หรือบิลร้านเพิ่งถูกยกเลิก — โหลดรายการใหม่ให้ในที่เดิม
+           * (ติ๊ก/ตัวเลขของรายการที่ยังอยู่คงไว้) แล้วให้ตรวจก่อนกดอีกครั้ง ไม่ส่งซ้ำเอง
+           */
+          if (billStep && (err.status === 409 || (err.status === 400 && /ไม่อยู่ในรายการ/.test(err.message)))) {
+            await load({ keepState: true });
+            // ข้อความเซิร์ฟเวอร์บอกให้ "โหลดใหม่" — โหลดให้แล้ว จึงเอาแค่ท่อนแรก แล้วบอกขั้นต่อไปแทน
+            throw new Error(`${saved ? `บันทึกดีลแล้ว (${saved}) แต่บิลค่าคอมยังไม่ได้ทำ: ` : ''}${String(err.message).split(' — ')[0]} `
+              + '— โหลดรายการใหม่ให้แล้ว (รายการที่ถูกทำบิลไปแล้วหายจากตาราง) ตรวจยอดแล้วกดบันทึกอีกครั้ง'
+              + (saved ? ' (ดีลที่บันทึกแล้วไม่ถูกส่งซ้ำ)' : ''));
+          }
+          if (!saved) throw err;
+          throw new Error(`บันทึกไปแล้วบางส่วน (${saved}) แต่${billStep ? 'ทำบิลค่าคอม' : 'ขั้นถัดไป'}ไม่ผ่าน: ${err.fullMessage ?? err.message} `
+            + '— แก้ตามข้อความแล้วกดบันทึกอีกครั้ง (ส่วนที่บันทึกแล้วไม่ถูกส่งซ้ำ)');
+        } finally {
+          if (picker) picker.disabled = false;
+        }
+
+        toast(`บันทึกของ ${username} แล้ว — ${[
+          dealSummary(),
+          bill ? `ทำบิลค่าคอม ${bill.billNo ?? ''} ${money(bill.totalAmount ?? t.total)} ฿ (ยังไม่ได้จ่าย)` : '',
+        ].filter(Boolean).join(' · ')}`, 'success');
+        // ทำบิลค่าคอมจากหน้ารายชื่อ/แท็บบิล = พาไปที่บิลที่เพิ่งทำ (ขั้นต่อไปคือโอนเงินให้เซลแล้วกด "จ่ายแล้ว")
+        // เปิดจากรายละเอียดเซล = บิลขึ้นในส่วน "ค่าคอมของเซลคนนี้" ของหน้าต่างเดิมอยู่แล้ว ไม่ต้องพาไปไหน
+        if (bill && !preset.onSaved) {
+          viewState.setItem(TAB_KEY, 'commissions');
+          viewState.setItem(COMM_STATUS_KEY, 'PENDING');
+          viewState.setItem(COMM_AGENT_KEY, String(salesAgentId));
+        }
+        await refreshBehind();
       },
     });
+    // เนื้อหาเข้าโมดัลหลังพรีวิวรอบแรก (ไม่ทันในจังหวะนี้) — โฟกัสหลังวาดเสร็จ ไม่งั้นโฟกัสลงช่องที่ยังไม่อยู่บนหน้า
+    if (picker) setTimeout(() => picker.focus());
     load();
   };
 
-  const body = tab === 'agents' ? agentsTab(agents, { createAgentModal, dealModal, commissionBillModal })
-    : tab === 'links' ? linksTab(allLinks, { dealModal })
-      : await commissionsTab(agents, { commissionBillModal });
+  const body = tab === 'agents' ? agentsTab(agents, { createAgentModal, commissionModal })
+    : tab === 'links' ? linksTab(allLinks, { commissionModal })
+      : await commissionsTab(agents, { commissionModal });
 
   /*
    * หัวหน้ามีแค่ "ประวัติ" กับ "+ เพิ่มเซล" — เจ้าของระบบให้เอาปุ่มผูกดีลมุมขวาบนออก
-   * ตั้งค่าคอม/ทำบิลค่าคอมเป็นเรื่องของเซลทีละคน จึงอยู่ที่แถวของเซล (ทำบิลค่าคอมแบบเลือกเซลอยู่ในแท็บ "ค่าคอมที่ต้องจ่าย")
+   * ตั้งค่าคอม (ดีล + ทำบิลค่าคอม ในหน้าต่างเดียว) เป็นเรื่องของเซลทีละคน จึงอยู่ที่แถวของเซล
+   * (แบบเลือกเซลเองอยู่ในแท็บ "ค่าคอมที่ต้องจ่าย")
    */
   return el('div', {},
     el('div', { class: 'page-head' },
@@ -997,7 +1100,7 @@ export async function salesAgentsView() {
         el('h1', {}, 'เซล และค่าคอมจากการหาลูกค้า'),
         el('p', { style: 'max-width:66ch' },
           'เซลได้ค่าคอมเมื่อทำบิลค่าคอม: ติ๊กรายการจากบิลร้านของสินค้าที่เซลถือดีล (% ของยอดขายเต็ม หรือกรอกเอง) '
-          + 'และใส่ค่าคอมอื่น ๆ ได้ · ตั้งค่าคอม (ผูกดีล) และทำบิลค่าคอมที่แถวของเซลแต่ละคน')),
+          + 'และใส่ค่าคอมอื่น ๆ ได้ · ทุกอย่างอยู่ในปุ่ม "ตั้งค่าคอม" ของแถวเซล (ดีล · รายการที่รอจ่ายคอม · ค่าคอมอื่น ๆ)')),
       el('div', { class: 'btn-row' },
         activityButton(['agent', 'sales_link', 'sales_commission'], { title: 'ประวัติเซลและค่าคอม' }),
         el('button', { class: 'btn', onclick: createAgentModal }, '+ เพิ่มเซล'))),
@@ -1006,16 +1109,24 @@ export async function salesAgentsView() {
 }
 
 /* ── รายชื่อเซล ────────────────────────────────────────────── */
-function agentsTab(agents, { createAgentModal, dealModal, commissionBillModal }) {
+function agentsTab(agents, { createAgentModal, commissionModal }) {
   /**
    * รายละเอียดเซล — ดีลที่ถืออยู่แก้/ปิดได้ตรงนี้เลย (เจ้าของระบบ: "ตรงที่ผูกดีลไปแล้ว สามารถแก้ไขได้")
    * บันทึกแล้ววาดเนื้อหาใหม่ในโมดัลเดิม (ไม่ปิด คนแก้มักแก้ต่อหลายดีล) และวาดหน้าข้างหลังใหม่ให้ตัวเลขตรงกัน
    * ทั้งหน้าเป็นของส่วนกลางอย่างเดียว (เส้นทางและ API ด่าน super) — ปุ่มแก้/ปิดดีลจึงไม่ต้องเช็กบทบาทซ้ำ
+   *
+   * มีส่วน "ค่าคอมของเซลคนนี้" ด้วย — เจ้าของระบบเห็นแค่ยอด "คอมค้างจ่าย" แล้วถาม
+   * "แล้วที่เขาได้ค่าคอมอื่น ๆ ทำไมไม่มีโชว์" จึงลิสต์บิลค่าคอมทุกใบ (ทุกสถานะ) พร้อมชื่อรายการค่าคอมอื่น ๆ ในแต่ละใบ
    */
   const detailModal = async (row) => {
+    // ทุกสถานะ (ไม่ส่ง status) — ต้องเห็นทั้งที่รอจ่าย จ่ายแล้ว และที่ยกเลิกไป
+    // โหลดค่าคอมไม่ได้ไม่ควรทำให้เปิดรายละเอียดเซลไม่ได้ทั้งหน้าต่าง — โชว์ข้อความในส่วนนั้นแทน
+    const loadCommissions = () => api.get(`/api/sales-agents/commissions${qs({ salesAgentId: row.id })}`)
+      .catch((err) => ({ error: err }));
     let full;
+    let comms;
     try {
-      full = await api.get(`/api/sales-agents/${row.id}`);
+      [full, comms] = await Promise.all([api.get(`/api/sales-agents/${row.id}`), loadCommissions()]);
     } catch (err) {
       toast(`เปิดรายละเอียดเซลไม่ได้ — ${err.fullMessage ?? err.message}`, 'error');
       return;
@@ -1029,12 +1140,24 @@ function agentsTab(agents, { createAgentModal, dealModal, commissionBillModal })
     const refresh = async () => {
       render();
       try {
-        fill(await api.get(`/api/sales-agents/${row.id}`));
+        const [data, list] = await Promise.all([api.get(`/api/sales-agents/${row.id}`), loadCommissions()]);
+        fill(data, list);
       } catch (err) {
         // บันทึกผ่านไปแล้ว แค่โหลดรายละเอียดใหม่ไม่ได้ — อย่าให้ฟอร์มที่เรียกมาเข้าใจว่าบันทึกไม่สำเร็จ
         toast(`บันทึกแล้ว แต่โหลดรายละเอียดใหม่ไม่ได้ — ปิดแล้วเปิดใหม่ (${err.fullMessage ?? err.message})`, 'error');
       }
     };
+    // ดู/จ่าย/ยกเลิกบิลค่าคอมจากในนี้ได้เลย — ทำแล้ววาดรายละเอียดใหม่ในที่เดิม
+    const { viewModal } = commissionActions({ onChanged: refresh });
+    /*
+     * หน้าต่างเดียวกับปุ่ม "ตั้งค่าคอม" ของแถวเซล — บันทึกแล้ววาดรายละเอียดนี้ใหม่ (ไม่พาไปแท็บอื่น)
+     * ส่งดีลชุดล่าสุดของรายละเอียดไปด้วย: commissionModal นี้มาจากตอนวาดหน้าก่อนเปิดรายละเอียด
+     * ถ้าแก้/ปิด/ผูกดีลจากในนี้แล้ว (แถว "แก้ไข" หรือ "ตั้งค่าคอม" รอบก่อน) ดีลของหน้านั้นเก่าไปแล้ว
+     */
+    let latest = full;
+    const openSettings = () => commissionModal({
+      salesAgentId: String(row.id), lock: true, onSaved: refresh, links: latest.links ?? [],
+    });
 
     // ดีลที่ยังถืออยู่ขึ้นก่อน (แก้ได้) ดีลที่ปิดแล้วต่อท้าย (อ่านอย่างเดียว)
     const dealsTable = (links) => table([
@@ -1055,17 +1178,67 @@ function agentsTab(agents, { createAgentModal, dealModal, commissionBillModal })
           : ''),
       },
     ], [...links.filter(dealOpen), ...links.filter((l) => !dealOpen(l))], {
-      empty: 'ยังไม่ได้ผูกดีล — ไม่บังคับ เซลได้แค่ค่าคอมอื่น ๆ ก็ได้ · ผูกดีลได้ที่ปุ่ม "ตั้งค่าคอม" ของแถวเซล',
+      empty: 'ยังไม่ได้ผูกดีล — ไม่บังคับ เซลได้แค่ค่าคอมอื่น ๆ ก็ได้ · ผูกดีลได้ที่ปุ่ม "ตั้งค่าคอม"',
       sortable: false,
     });
 
-    function fill(data) {
+    /** ค่าคอมอื่น ๆ ในบิลใบนั้น (ชื่อ + ยอด) — ไม่ต้องกด "ดู" ก็รู้ว่าก้อนพิเศษที่จ่ายไปคืออะไร · ยาวเกินตัดเหลือ 3 */
+    const otherLines = (r) => {
+      const lines = isBill(r) ? (r.lines ?? []).filter((l) => l.kind === 'OTHER') : [];
+      if (!lines.length) return '';
+      return el('div', { class: 'sub-line mt-4' },
+        ...lines.slice(0, 3).map((l) => el('div', {},
+          `💰 ${l.label ?? 'ค่าคอมอื่น ๆ'} `,
+          el('span', { class: Number(l.amount) < 0 ? 'text-danger' : '' }, `${money(l.amount)} ฿`))),
+        lines.length > 3 ? el('div', {}, `และอีก ${lines.length - 3} รายการ`) : '');
+    };
+
+    // รอจ่ายขึ้นก่อน (ต้องจัดการ) → จ่ายแล้ว → ยกเลิกท้ายสุด · ในกลุ่มเดียวกันคงลำดับเดิมของเซิร์ฟเวอร์ (ใหม่ก่อน)
+    const STATUS_ORDER = { PENDING: 0, PAID: 1, VOID: 2 };
+    const commissionsSection = (data, list) => el('div', {},
+      el('div', { class: 'adj-block-head', style: 'margin:18px 0 8px' },
+        el('div', {},
+          el('h3', {}, '💰 ค่าคอมของเซลคนนี้'),
+          list.error
+            ? ''
+            : el('div', { class: 'sub-line' },
+              `รอจ่าย ${money(list.summary?.pending)} ฿ · จ่ายแล้ว ${money(list.summary?.paid)} ฿`)),
+        el('button', { class: 'btn sm', onclick: openSettings },
+          `ตั้งค่าคอม${data.uncommissionedCount ? ` (${int(data.uncommissionedCount)} รอจ่าย)` : ''}`)),
+      list.error
+        ? el('div', { class: 'alert-box m-0' }, `โหลดค่าคอมไม่ได้ — ${list.error.fullMessage ?? list.error.message}`)
+        : table([
+          {
+            label: 'เลขที่ / รายการ',
+            render: (r) => el('div', {},
+              el('strong', {}, commissionTitle(r)),
+              el('div', { class: 'sub-line' }, commissionSubtitle(r)),
+              otherLines(r)),
+          },
+          // บิลค่าคอมไม่มีรอบ (วันที่ทำบิล) · แถวแบบเดิมผูกกับรอบบิลร้าน
+          { label: 'วันที่/รอบ', render: (r) => (isBill(r) ? dateTh(r.createdAt) : periodLabel(r.periodCode)) },
+          { label: 'ยอด', num: true, render: (r) => el('strong', {}, money(r.totalAmount)) },
+          { label: 'สถานะ', render: commStatusCell },
+          { label: '', render: (r) => el('button', { class: 'btn ghost sm', onclick: () => viewModal(r) }, 'ดู') },
+        ], [...(list.items ?? [])].sort((a, b) => (STATUS_ORDER[a.status] ?? 3) - (STATUS_ORDER[b.status] ?? 3)), {
+          sortable: false,
+          rowClass: (r) => (r.status === 'VOID' ? 'row-void' : ''),
+          empty: {
+            icon: '💰',
+            title: 'ยังไม่มีค่าคอม — กด "ตั้งค่าคอม" เพื่อทำบิลค่าคอมหรือใส่ค่าคอมอื่น ๆ',
+            action: { label: 'ตั้งค่าคอม', onClick: openSettings },
+          },
+        }));
+
+    function fill(data, list) {
+      latest = data;
       modal.body.replaceChildren(
         el('div', { class: 'stat-grid' },
           stat('สินค้าที่ถือดีลอยู่', int(data.activeProductCount), null, { tone: 'sales', icon: '📦' }),
           stat('คอมค้างจ่าย', money(data.pendingCommission) + ' ฿', null, { tone: 'due', icon: '⏳' }),
           stat('จ่ายไปแล้วสะสม', money(data.paidCommission) + ' ฿', null, { tone: 'income', icon: '✓' })),
-        el('h3', { style: 'margin:6px 0 4px' }, 'ดีลที่ถืออยู่'),
+        commissionsSection(data, list),
+        el('h3', { style: 'margin:18px 0 4px' }, 'ดีลที่ถืออยู่'),
         el('div', { class: 'sub-line mb-8' }, `${EDIT_EFFECT} · ปิดดีลกดครั้งเดียว ไม่ต้องเลือกวันที่`),
         dealsTable(data.links ?? []),
         el('h3', { style: 'margin:18px 0 8px' }, 'ยูสเซอร์สำหรับเข้าระบบ'),
@@ -1098,7 +1271,7 @@ function agentsTab(agents, { createAgentModal, dealModal, commissionBillModal })
           },
         ], data.users ?? [], { empty: 'ยังไม่มียูสเซอร์', sortable: false }));
     }
-    fill(full);
+    fill(full, comms);
   };
 
   const editModal = (row) => formModal({
@@ -1137,7 +1310,7 @@ function agentsTab(agents, { createAgentModal, dealModal, commissionBillModal })
     { label: 'สถานะ', render: (r) => badge(r.status) },
     {
       label: '',
-      // ปุ่มห้าปุ่มเรียงบรรทัดเดียวล้นจอโน้ตบุ๊ก — ให้ขึ้นบรรทัดสองได้ แทนการเลื่อนตารางไปหาปุ่ม
+      // ปุ่มหลายปุ่มเรียงบรรทัดเดียวล้นจอโน้ตบุ๊ก — ให้ขึ้นบรรทัดสองได้ แทนการเลื่อนตารางไปหาปุ่ม
       render: (r) => el('div', { class: 'btn-row', style: 'flex-wrap:wrap;max-width:390px' },
         el('button', {
           class: 'btn ghost sm',
@@ -1149,12 +1322,15 @@ function agentsTab(agents, { createAgentModal, dealModal, commissionBillModal })
           },
         }, '👁 ดูมุมมองนี้'),
         el('button', { class: 'btn ghost sm', onclick: () => detailModal(r) }, 'รายละเอียด'),
-        el('button', { class: 'btn ghost sm', onclick: () => dealModal({ salesAgentId: String(r.id) }) }, 'ตั้งค่าคอม'),
         el('button', {
           class: 'btn ghost sm',
-          // เซิร์ฟเวอร์นับรายการที่ยังไม่ได้ทำบิลค่าคอมมาให้ (ถ้ามี) — บอกไว้ที่ปุ่มเลย ไม่ต้องเปิดดูทีละคน
-          onclick: () => commissionBillModal({ salesAgentId: String(r.id), lock: true }),
-        }, `🧾 ทำบิลค่าคอม${r.uncommissionedCount ? ` (${int(r.uncommissionedCount)})` : ''}`),
+          /*
+           * ปุ่มเดียว — ดีล รายการที่รอจ่ายคอม และค่าคอมอื่น ๆ อยู่ในหน้าต่างเดียวกัน
+           * (เจ้าของระบบ: "อยู่หน้าเดียวกันแบบเดิมดีแล้ว ไม่แยกปุ่มแบบนี้")
+           * เซิร์ฟเวอร์นับรายการจากบิลร้านที่ยังไม่ได้ทำบิลค่าคอมมาให้ (ถ้ามี) — บอกไว้ที่ปุ่มเลย ไม่ต้องเปิดดูทีละคน
+           */
+          onclick: () => commissionModal({ salesAgentId: String(r.id), lock: true }),
+        }, `ตั้งค่าคอม${r.uncommissionedCount ? ` (${int(r.uncommissionedCount)} รอจ่าย)` : ''}`),
         el('button', { class: 'btn ghost sm', onclick: () => editModal(r) }, 'แก้ไข')),
     },
   ], agents, {
@@ -1169,7 +1345,7 @@ function agentsTab(agents, { createAgentModal, dealModal, commissionBillModal })
 }
 
 /* ── ดีล ───────────────────────────────────────────────────── */
-function linksTab(items, { dealModal }) {
+function linksTab(items, { commissionModal }) {
   // แก้/ปิดดีลใช้ฟอร์มเดียวกับรายละเอียดเซล (ไม่มีวันที่ ไม่มีตัวเลือกฐาน) — บันทึกแล้ววาดทั้งหน้าใหม่
   const refresh = () => render();
 
@@ -1218,22 +1394,24 @@ function linksTab(items, { dealModal }) {
       icon: '📦',
       title: 'ยังไม่มีดีล',
       detail: 'ผูกเซลกับสินค้าที่เขาผลักดัน แล้วรายการของสินค้านั้นจะขึ้นให้ติ๊กตอนทำบิลค่าคอม (ไม่บังคับ — เซลได้แค่ค่าคอมอื่น ๆ ก็ได้)',
-      action: { label: '+ ผูกดีล', onClick: () => dealModal() },
+      // หน้าต่างเดียวกับปุ่ม "ตั้งค่าคอม" ของแถวเซล — เลือกเซลก่อนแล้วผูกดีลได้เลย
+      action: { label: '+ ตั้งค่าคอม (ผูกดีล)', onClick: () => commissionModal() },
     },
   }), { tight: true }));
 }
 
 /* ── บิลค่าคอม ─────────────────────────────────────────────── */
 
-/**
- * รายการบิลค่าคอม (แบนราบ หนึ่งแถว = หนึ่งบิล = จ่ายเซลหนึ่งครั้ง)
- * แถวแบบเดิม (คิดตอนออกบิลร้าน / ค่าคอมอื่น ๆ แบบเลือกรอบ) ปนอยู่ในลิสต์เดียวกัน — จ่ายหรือยกเลิกได้เหมือนกัน
- */
-async function commissionsTab(agents, { commissionBillModal }) {
-  const statusFilter = viewState.getItem(COMM_STATUS_KEY) ?? 'PENDING';
-  const agentFilter = viewState.getItem(COMM_AGENT_KEY) ?? '';
-  const res = await api.get(`/api/sales-agents/commissions${qs({ status: statusFilter, salesAgentId: agentFilter })}`);
+/** ช่องสถานะของบิลค่าคอม — ป้าย + วันที่จ่าย / เหตุผลที่ยกเลิก (แท็บบิลค่าคอมและรายละเอียดเซลใช้ตัวเดียวกัน) */
+const commStatusCell = (r) => el('div', {}, commBadge(r.status),
+  r.status === 'PAID' && r.paidAt ? el('div', { class: 'sub-line' }, `จ่าย ${dateTh(r.paidAt)}`) : '',
+  r.status === 'VOID' && r.voidReason ? el('div', { class: 'sub-line' }, r.voidReason) : '');
 
+/**
+ * ดู / จ่าย / ยกเลิกบิลค่าคอม — ใช้ทั้งแท็บ "ค่าคอมที่ต้องจ่าย" และส่วน "ค่าคอมของเซลคนนี้" ในรายละเอียดเซล
+ * ให้สองที่ทำงานเหมือนกันทุกตัวอักษร · onChanged = วาดใหม่หลังจ่าย/ยกเลิก (แท็บ = ทั้งหน้า · รายละเอียดเซล = โมดัลเดิมด้วย)
+ */
+function commissionActions({ onChanged }) {
   const payModal = (row) => formModal({
     title: `บันทึกจ่าย ${commissionTitle(row)} — ${row.agentUsername}`,
     submitLabel: 'บันทึกว่าจ่ายแล้ว',
@@ -1246,7 +1424,7 @@ async function commissionsTab(agents, { commissionBillModal }) {
     onSubmit: async (v) => {
       await api.post(`/api/sales-agents/commissions/${row.id}/pay`, v);
       toast(`บันทึกจ่ายคอม ${money(row.totalAmount)} ฿ แล้ว`, 'success');
-      render();
+      await onChanged();
     },
   });
 
@@ -1271,7 +1449,7 @@ async function commissionsTab(agents, { commissionBillModal }) {
       if (v.reason.length < 3) throw new Error('เหตุผลสั้นเกินไป — พิมพ์อย่างน้อย 3 ตัวอักษร');
       await api.post(`/api/sales-agents/commissions/${row.id}/void`, { reason: v.reason });
       toast(`ยกเลิก ${commissionTitle(row)} แล้ว`, 'success');
-      render();
+      await onChanged();
     },
   });
 
@@ -1285,6 +1463,19 @@ async function commissionsTab(agents, { commissionBillModal }) {
           el('button', { class: 'btn sm', onclick: () => { modal.close(); payModal(row); } }, 'บันทึกว่าจ่ายแล้ว'))
         : '');
   };
+
+  return { payModal, voidModal, viewModal };
+}
+
+/**
+ * รายการบิลค่าคอม (แบนราบ หนึ่งแถว = หนึ่งบิล = จ่ายเซลหนึ่งครั้ง)
+ * แถวแบบเดิม (คิดตอนออกบิลร้าน / ค่าคอมอื่น ๆ แบบเลือกรอบ) ปนอยู่ในลิสต์เดียวกัน — จ่ายหรือยกเลิกได้เหมือนกัน
+ */
+async function commissionsTab(agents, { commissionModal }) {
+  const statusFilter = viewState.getItem(COMM_STATUS_KEY) ?? 'PENDING';
+  const agentFilter = viewState.getItem(COMM_AGENT_KEY) ?? '';
+  const res = await api.get(`/api/sales-agents/commissions${qs({ status: statusFilter, salesAgentId: agentFilter })}`);
+  const { payModal, voidModal, viewModal } = commissionActions({ onChanged: render });
 
   const filters = el('div', { class: 'filters', style: 'margin-bottom:16px' },
     el('div', { class: 'field' },
@@ -1318,9 +1509,9 @@ async function commissionsTab(agents, { commissionBillModal }) {
     el('div', { class: 'btn-row', style: 'margin-bottom:12px' },
       el('button', {
         class: 'btn',
-        // กรองเซลไว้ = เลือกเซลคนนั้นให้เลย (ยังเปลี่ยนได้ในหน้าต่าง)
-        onclick: () => commissionBillModal({ salesAgentId: agentFilter }),
-      }, '🧾 ทำบิลค่าคอม'),
+        // หน้าต่างเดียวกับปุ่ม "ตั้งค่าคอม" ของแถวเซล · กรองเซลไว้ = เลือกเซลคนนั้นให้เลย (ยังเปลี่ยนได้ในหน้าต่าง)
+        onclick: () => commissionModal({ salesAgentId: agentFilter }),
+      }, 'ตั้งค่าคอม / ทำบิลค่าคอม'),
       payAll.length > 1
         ? el('button', {
           class: 'btn ghost',
@@ -1342,12 +1533,7 @@ async function commissionsTab(agents, { commissionBillModal }) {
       // บิลใหม่: นับตามชนิดรายการ · แถวแบบเดิม: ร้าน/รอบที่มาของก้อนนั้น
       { label: 'รายการ', render: (r) => el('span', { class: isBill(r) ? '' : 'muted' }, commissionSubtitle(r)) },
       { label: 'ยอดรวม', num: true, sortValue: (r) => r.totalAmount, render: (r) => el('strong', {}, money(r.totalAmount)) },
-      {
-        label: 'สถานะ',
-        render: (r) => el('div', {}, commBadge(r.status),
-          r.status === 'PAID' && r.paidAt ? el('div', { class: 'sub-line' }, `จ่าย ${dateTh(r.paidAt)}`) : '',
-          r.status === 'VOID' && r.voidReason ? el('div', { class: 'sub-line' }, r.voidReason) : ''),
-      },
+      { label: 'สถานะ', render: commStatusCell },
       {
         label: '',
         sortable: false,
@@ -1361,7 +1547,7 @@ async function commissionsTab(agents, { commissionBillModal }) {
       empty: {
         icon: '🧾',
         title: statusFilter === 'PENDING' ? 'ไม่มีบิลค่าคอมที่ยังไม่จ่าย' : 'ไม่มีบิลค่าคอมตามตัวกรองนี้',
-        detail: 'กด "🧾 ทำบิลค่าคอม" แล้วติ๊กรายการจากบิลร้านที่ออกแล้ว (หรือใส่ค่าคอมอื่น ๆ) ให้เซล',
+        detail: 'กด "ตั้งค่าคอม / ทำบิลค่าคอม" แล้วติ๊กรายการจากบิลร้านที่ออกแล้ว (หรือใส่ค่าคอมอื่น ๆ) ให้เซล',
       },
       footer: res.items.length
         ? ['', '', '', 'รวม (ไม่นับที่ยกเลิก)', money(res.summary.total ?? sumBaht([res.summary.pending, res.summary.paid])), '', '']

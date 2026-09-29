@@ -24,7 +24,7 @@
     <button class="m-task" data-guide="start"><span class="m-task-ico">{i:rocket}</span><strong>เริ่มต้นครั้งแรก</strong><small>ตั้งค่าก่อนเปิดใช้</small></button>
     <button class="m-task" data-guide="shops"><span class="m-task-ico">{i:store}</span><strong>เพิ่มร้านและสินค้า</strong><small>มอบหมายสินค้าให้ร้าน · สินค้ากลุ่ม (ชุด)</small></button>
     <button class="m-task" data-guide="logins"><span class="m-task-ico">{i:key-round}</span><strong>ส่งข้อมูลเข้าระบบ</strong><small>ลิงก์ของร้าน · คัดลอกทั้งชุด · ตั้งรหัสใหม่</small></button>
-    <button class="m-task" data-guide="agents"><span class="m-task-ico">{i:handshake}</span><strong>เซลและค่าคอม</strong><small>ตั้งค่าคอม/แก้ดีล · ทำบิลค่าคอม · จ่ายคอม</small></button>
+    <button class="m-task" data-guide="agents"><span class="m-task-ico">{i:handshake}</span><strong>เซลและค่าคอม</strong><small>ตั้งค่าคอม (ดีล + ทำบิลค่าคอม ในหน้าต่างเดียว) · จ่ายคอม</small></button>
     <button class="m-task" data-guide="account"><span class="m-task-ico">{i:landmark}</span><strong>เลขบัญชีกับร้าน</strong><small>ส่งเลขบัญชีทาง Telegram · เปลี่ยนบัญชีของบิล · กระเป๋า USD</small></button>
     <button class="m-task" data-guide="news"><span class="m-task-ico">{i:megaphone}</span><strong>ประกาศถึงร้าน</strong><small>โปรโมชั่น · วันหยุด</small></button>
     <button class="m-task" data-guide="settings"><span class="m-task-ico">{i:bell}</span><strong>แจ้งเตือน / สำรองข้อมูล</strong><small>Telegram · ระบบ</small></button>
@@ -243,7 +243,7 @@
 <!-- ── เซล ── -->
 <section class="m-guide" id="agents" hidden>
   <button class="m-back" data-home>← เลือกเรื่องอื่น</button>
-  <div class="m-guide-head"><span class="m-task-ico">{i:handshake}</span><div><h2>เซลและค่าคอม</h2><p>ตั้งค่าคอม → ออกบิลร้านตามปกติ → ทำบิลค่าคอม → จ่าย</p></div></div>
+  <div class="m-guide-head"><span class="m-task-ico">{i:handshake}</span><div><h2>เซลและค่าคอม</h2><p>ตั้งค่าคอม (ผูกดีล) → ออกบิลร้านตามปกติ → กลับมาที่ "ตั้งค่าคอม" ติ๊กรายการที่รอจ่ายคอม → จ่าย</p></div></div>
   <div class="m-step">
     <div class="m-shot" data-modal="ตั้งค่าคอมให้ sale01" data-nav="agents" data-title="ตั้งค่าคอมให้ sale01">
             <div class="s-body">
@@ -257,14 +257,24 @@
           <span class="s-muted">% คิดจากยอดขายเต็มของร้าน</span>
         </div>
         <span class="s-btn ghost wide">+ เพิ่มสินค้า</span>
-        <span class="s-btn wide">บันทึกดีล</span>
+        <div class="s-card s-dim"><div class="s-row"><b>🧾 รายการจากบิลร้านที่รอจ่ายคอม (3)</b><span class="s-muted">ไม่ติ๊ก</span></div></div>
+        <div class="s-card s-dim"><div class="s-row"><b>💰 ค่าคอมอื่น ๆ (0)</b><span class="s-muted">+ เพิ่มรายการ</span></div></div>
+        <div class="s-alert warn">ไม่มีรายการ — บันทึกเฉพาะดีล</div>
+        <span class="s-btn wide">บันทึก</span>
       </div>
     </div>
-    <div class="m-step-text"><span class="m-num">1</span><h3>ตั้งค่าคอม (ผูกดีล) — ไม่มีวันที่</h3><p>{nav:agents} → <span class="m-ui is-primary">+ เพิ่มเซล</span> → ที่แถวเซลกด <span class="m-ui">ตั้งค่าคอม</span> — ดีลที่เซลถืออยู่ขึ้นก่อน <b>แก้ % / เหมาต่อรอบได้ตรงนั้น</b> หรือกด <span class="m-ui">ปิดดีล</span> (กดอีกครั้ง = ไม่ปิดแล้ว) · ผูกสินค้าใหม่กด <span class="m-ui">+ เพิ่มสินค้า</span> · กด <span class="m-ui is-primary">บันทึกดีล</span> ครั้งเดียว ระบบแก้ → ปิด (ถามยืนยันก่อน) → เพิ่ม ให้ครบ</p><p><b>% คิดจากยอดขายเต็มของร้านเสมอ</b> · ไม่ต้องเลือกวันที่ — เริ่มนับตั้งแต่วันที่บันทึก · สินค้าหนึ่งชิ้นมีเซลถือดีลได้ทีละคน · แก้ดีลแล้ว<b>มีผลกับบิลค่าคอมที่ทำหลังจากนี้</b> บิลค่าคอมที่ทำไปแล้วไม่เปลี่ยน</p><p><b>ไม่บังคับ</b> — เซลที่ได้แค่ค่าคอมอื่น ๆ ข้ามขั้นนี้ไปทำบิลค่าคอมได้เลย</p></div>
+    <div class="m-step-text"><span class="m-num">1</span><h3>ตั้งค่าคอม (ผูกดีล) — ไม่มีวันที่</h3><p>{nav:agents} → <span class="m-ui is-primary">+ เพิ่มเซล</span> → ที่แถวเซลกด <span class="m-ui">ตั้งค่าคอม</span> — <b>หน้าต่างเดียวมีทุกอย่างของเซลคนนั้น</b>: ดีลที่ถืออยู่ · เพิ่มสินค้าที่ผูกดีล · รายการจากบิลร้านที่รอจ่ายคอม · ค่าคอมอื่น ๆ</p><p>ดีลที่เซลถืออยู่ขึ้นก่อน <b>แก้ % / เหมาต่อรอบได้ตรงนั้น</b> หรือกด <span class="m-ui">ปิดดีล</span> (กดอีกครั้ง = ไม่ปิดแล้ว) · ผูกสินค้าใหม่กด <span class="m-ui">+ เพิ่มสินค้า</span> · กด <span class="m-ui is-primary">บันทึก</span> ครั้งเดียว ระบบแก้ → ปิด (ถามยืนยันก่อน) → เพิ่ม ให้ครบ · <b>ไม่ติ๊กรายการที่รอจ่ายคอม = บันทึกเฉพาะดีล</b> ไม่มีบิลค่าคอมเกิดขึ้น</p><p><b>% คิดจากยอดขายเต็มของร้านเสมอ</b> · ไม่ต้องเลือกวันที่ — เริ่มนับตั้งแต่วันที่บันทึก · สินค้าหนึ่งชิ้นมีเซลถือดีลได้ทีละคน · แก้ดีลแล้ว<b>มีผลกับบิลค่าคอมที่ทำหลังจากนี้</b> บิลค่าคอมที่ทำไปแล้วไม่เปลี่ยน</p><p><b>ไม่บังคับ</b> — เซลที่ได้แค่ค่าคอมอื่น ๆ ไม่ต้องผูกดีล ใส่ในส่วน "💰 ค่าคอมอื่น ๆ" ของหน้าต่างเดียวกันแล้วกดบันทึกได้เลย</p></div>
   </div>
   <div class="m-step">
     <div class="m-shot" data-modal="sale01 — สมชาย" data-nav="agents" data-title="sale01 — สมชาย">
             <div class="s-body">
+        <b>💰 ค่าคอมของเซลคนนี้</b>
+        <span class="s-muted">รอจ่าย 3,940.00 ฿ · จ่ายแล้ว 12,500.00 ฿</span>
+        <div class="s-card">
+          <div class="s-row"><b>COM-20260929-sale01</b><span class="s-badge amber">ยังไม่จ่าย</span></div>
+          <div class="s-row"><span class="s-muted">สินค้า 2 · เหมา 1 · อื่น ๆ 1</span><b>3,940.00</b></div>
+          <span class="s-muted">💰 โบนัสเปิดร้านใหม่ 1,000.00 ฿</span>
+        </div>
         <b>ดีลที่ถืออยู่</b>
         <div class="s-card">
           <div class="s-row"><span><b>KF-01</b> <span class="s-muted">bkk01</span></span><span>5% · เหมา 300</span></div>
@@ -276,11 +286,12 @@
         </div>
       </div>
     </div>
-    <div class="m-step-text"><span class="m-num">2</span><h3>แก้ดีลทีละตัว — จากรายละเอียดเซล</h3><p>ที่แถวเซลกด <span class="m-ui">รายละเอียด</span> → ตาราง "ดีลที่ถืออยู่" → <span class="m-ui">แก้ไข</span> (% ของยอดขายเต็ม · เหมาต่อรอบ · หมายเหตุ) หรือ <span class="m-ui">ปิดดีล</span> — หน้าต่างอัปเดตให้ทันที ไม่ต้องเปิดใหม่</p><p>ดีลที่ปิดแล้วขึ้นว่า "ปิดแล้ว" พร้อมวันที่ ไม่มีปุ่ม · ดูดีลของทุกเซลได้ที่แท็บ <span class="m-ui">ดีล สินค้า ↔ เซล</span> (ดีลที่ปิดแล้วยังแก้ตัวเลขได้ที่นั่น — ใช้เป็นค่าตั้งต้นตอนทำบิลค่าคอมของบิลร้านเก่า)</p></div>
+    <div class="m-step-text"><span class="m-num">2</span><h3>ดูค่าคอมและแก้ดีล — จากรายละเอียดเซล</h3><p>ที่แถวเซลกด <span class="m-ui">รายละเอียด</span> — ส่วน <b>💰 ค่าคอมของเซลคนนี้</b> ลิสต์บิลค่าคอมทุกใบ (ยังไม่จ่ายขึ้นก่อน → จ่ายแล้ว → ยกเลิกท้ายสุด) พร้อมชื่อและยอด<b>ค่าคอมอื่น ๆ</b> ในแต่ละใบ · กด <span class="m-ui">ดู</span> เพื่อดูรายการ บันทึกจ่าย หรือยกเลิก · ปุ่ม <span class="m-ui is-primary">ตั้งค่าคอม</span> ในนั้นเปิดหน้าต่างเดียวกับแถวเซล</p><p>ตาราง "ดีลที่ถืออยู่" → <span class="m-ui">แก้ไข</span> (% ของยอดขายเต็ม · เหมาต่อรอบ · หมายเหตุ) หรือ <span class="m-ui">ปิดดีล</span> — หน้าต่างอัปเดตให้ทันที ไม่ต้องเปิดใหม่</p><p>ดีลที่ปิดแล้วขึ้นว่า "ปิดแล้ว" พร้อมวันที่ ไม่มีปุ่ม · ดูดีลของทุกเซลได้ที่แท็บ <span class="m-ui">ดีล สินค้า ↔ เซล</span> (ดีลที่ปิดแล้วยังแก้ตัวเลขได้ที่นั่น — ใช้เป็นค่าตั้งต้นตอนทำบิลค่าคอมของบิลร้านเก่า)</p></div>
   </div>
   <div class="m-step">
-    <div class="m-shot" data-modal="ทำบิลค่าคอม — sale01" data-nav="agents" data-title="ทำบิลค่าคอม — sale01">
+    <div class="m-shot" data-modal="ตั้งค่าคอมให้ sale01" data-nav="agents" data-title="ตั้งค่าคอมให้ sale01 — เลื่อนลงมา">
             <div class="s-body">
+        <b>🧾 รายการจากบิลร้านที่รอจ่ายคอม (3)</b>
         <div class="s-row" style="justify-content:flex-start;gap:6px"><span class="s-check on"></span><b>INV-2609-014 · ร้าน bkk01 · 1–15 ก.ย. 69</b></div>
         <div class="s-card">
           <div class="s-row" style="justify-content:flex-start;gap:6px"><span class="s-check on"></span><b>KF-01</b><span class="s-muted">ยอดเต็ม 42,800</span></div>
@@ -290,19 +301,19 @@
           <div class="s-row" style="justify-content:flex-start;gap:6px"><span class="s-check on"></span><span>เหมาต่อรอบ · ร้าน bkk01</span><b style="margin-left:auto">300.00</b><span class="s-mark">3</span></div>
         </div>
         <div class="s-card"><div class="s-row"><b>💰 ค่าคอมอื่น ๆ</b><span class="s-mark">4</span></div><div class="s-row" style="gap:4px"><span class="s-input" style="flex:1;color:var(--text)">โบนัสเปิดร้านใหม่</span><span class="s-input" style="color:var(--text)">1,000</span></div></div>
-        <div class="s-alert ok">รวมบิลค่าคอม 3,940.00 ฿</div>
-        <span class="s-btn wide">บันทึกบิลค่าคอม</span>
+        <div class="s-alert warn">บิลค่าคอมที่จะทำ: รวม 3,940.00 ฿</div>
+        <span class="s-btn wide">บันทึก</span>
       </div>
     </div>
-    <div class="m-step-text"><span class="m-num">3</span><h3>ทำบิลค่าคอม — ติ๊กเองว่ารอบนี้จ่ายอะไร</h3><p>ออกบิลร้านตามปกติก่อน (<b>ไม่ต้องรอร้านจ่าย</b>) แล้วที่แถวเซลกด <span class="m-ui is-primary">🧾 ทำบิลค่าคอม</span> — ระบบลิสต์รายการจากบิลร้านที่ออกแล้ว เฉพาะสินค้าที่เซลคนนี้ถือดีล จัดกลุ่มตามบิลร้าน</p>
+    <div class="m-step-text"><span class="m-num">3</span><h3>ทำบิลค่าคอม — ติ๊กเองว่ารอบนี้จ่ายอะไร</h3><p>ออกบิลร้านตามปกติก่อน (<b>ไม่ต้องรอร้านจ่าย</b>) แล้วที่แถวเซลกด <span class="m-ui is-primary">ตั้งค่าคอม</span> (ปุ่มเดียวกับขั้นที่ 1 — มีรายการรอจ่ายจะขึ้นเช่น "ตั้งค่าคอม (3 รอจ่าย)") เลื่อนลงมาส่วน <b>🧾 รายการจากบิลร้านที่รอจ่ายคอม</b> — ระบบลิสต์รายการจากบิลร้านที่ออกแล้ว เฉพาะสินค้าที่เซลคนนี้ถือดีล จัดกลุ่มตามบิลร้าน (ตั้งต้นไม่ติ๊ก)</p>
       <ul class="m-legend">
         <li><span class="s-mark">1</span><span><b>% ของยอดเต็ม</b> — ตั้งต้นตาม % ในดีล แก้ได้ทีละรายการ</span></li>
         <li><span class="s-mark">2</span><span><b>กรอกเอง</b> — พิมพ์จำนวนเงินค่าคอมของรายการนั้น</span></li>
         <li><span class="s-mark">3</span><span><b>เหมาต่อรอบ</b> — ติ๊กแยก ได้ครั้งเดียวต่อร้านต่อรอบ</span></li>
         <li><span class="s-mark">4</span><span><b>ค่าคอมอื่น ๆ</b> — พิมพ์รายการ + จำนวนเงิน ไม่ต้องเลือกรอบ (ใส่ติดลบได้ ถ้าเป็นการหักคืน)</span></li>
       </ul>
-      <p>รายการที่ไม่ติ๊กยังรอให้ติ๊กในบิลค่าคอมครั้งหน้า · รายการที่อยู่ในบิลค่าคอมแล้วไม่โผล่ซ้ำ (จ่ายซ้ำไม่ได้) · ยอดรวมต้องมากกว่า 0</p>
-      <p>สินค้ากลุ่มเป็นรายการเดียว (ใต้ชื่อเขียน "ประกอบด้วย: …") คิด % จากยอดขายเต็มของทั้งชุด · ทำบิลค่าคอมแบบเลือกเซลเองได้จากแท็บ <span class="m-ui">ค่าคอมที่ต้องจ่าย</span> → <span class="m-ui is-primary">🧾 ทำบิลค่าคอม</span></p></div>
+      <p>รายการที่ไม่ติ๊กยังรอให้ติ๊กในบิลค่าคอมครั้งหน้า · รายการที่อยู่ในบิลค่าคอมแล้วไม่โผล่ซ้ำ (จ่ายซ้ำไม่ได้) · ยอดรวมต้องมากกว่า 0 · แก้ดีลแล้วติ๊กรายการพร้อมกันได้ — กด <span class="m-ui is-primary">บันทึก</span> ครั้งเดียว ระบบบันทึกดีลก่อนแล้วค่อยทำบิลค่าคอม (% ของรายการที่ยังไม่ได้แก้เองเปลี่ยนตามดีลที่แก้)</p>
+      <p>สินค้ากลุ่มเป็นรายการเดียว (ใต้ชื่อเขียน "ประกอบด้วย: …") คิด % จากยอดขายเต็มของทั้งชุด · เปิดหน้าต่างเดียวกันแบบเลือกเซลเองได้จากแท็บ <span class="m-ui">ค่าคอมที่ต้องจ่าย</span> → <span class="m-ui is-primary">ตั้งค่าคอม / ทำบิลค่าคอม</span></p></div>
   </div>
   <div class="m-step">
     <div class="m-shot" data-nav="agents" data-tap-nav data-title="เซล — ค่าคอมที่ต้องจ่าย">
@@ -513,7 +524,7 @@
     <details class="m-faq"><summary>ร้านบอกว่าเลขบัญชีบนเว็บไม่ตรงกับ Telegram</summary><div>เปิดบิลนั้นดูสถานะ Telegram ใต้กล่องบัญชี ถ้าเพิ่งเปลี่ยนบัญชีเอง ตรวจเลขให้แน่ใจแล้วกด "📨 ส่งเลขบัญชีให้ร้านทาง Telegram" · ถ้าไม่ได้เปลี่ยนเอง ให้ถือว่าถูกแก้โดยไม่รู้ตัว (ข้อถัดไป)</div></details>
     <details class="m-faq"><summary>ร้านบอกว่าเข้าระบบไม่ได้ ทั้งที่รหัสถูก</summary><div>ร้านต้องเปิดลิงก์ของร้านก่อน ({nav:shops} → "🔗 ลิงก์เข้าระบบ") — ไม่มีลิงก์ ลิงก์เก่า หรือลิงก์ของร้านอื่น ระบบตอบว่า "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" เหมือนรหัสผิดโดยตั้งใจ (คนที่เดารหัสได้จะไม่รู้ว่าเดาถูก) · ใต้ฟอร์มเข้าสู่ระบบบอกว่าเครื่องนั้นจำลิงก์ไว้แล้วหรือยัง</div></details>
     <details class="m-faq"><summary>ดูรหัสผ่านเดิมของร้านหรือเซลได้ไหม</summary><div>ไม่ได้ ระบบเก็บรหัสแบบเข้ารหัสทางเดียว ไม่มีใครเห็นรหัสเดิม — ใช้ "🔑 ตั้งรหัสใหม่ + คัดลอก" แล้วส่งชุดใหม่ให้ เข้าครั้งแรกเขาจะต้องตั้งรหัสของตัวเอง</div></details>
-    <details class="m-faq"><summary>ออกบิลร้านแล้ว ทำไมไม่มีค่าคอมเซลเกิดขึ้น</summary><div>ตั้งใจ — ค่าคอมเซลไม่เกิดเองตอนออกบิลร้านแล้ว ไปที่ {nav:agents} กด "🧾 ทำบิลค่าคอม" ที่แถวเซล แล้วติ๊กรายการที่จะจ่ายรอบนี้ (รายการจากบิลร้านรอให้ติ๊กจนกว่าจะอยู่ในบิลค่าคอม)</div></details>
+    <details class="m-faq"><summary>ออกบิลร้านแล้ว ทำไมไม่มีค่าคอมเซลเกิดขึ้น</summary><div>ตั้งใจ — ค่าคอมเซลไม่เกิดเองตอนออกบิลร้านแล้ว ไปที่ {nav:agents} กด "ตั้งค่าคอม" ที่แถวเซล แล้วติ๊กรายการที่จะจ่ายรอบนี้ในส่วน "รายการจากบิลร้านที่รอจ่ายคอม" (รายการจากบิลร้านรอให้ติ๊กจนกว่าจะอยู่ในบิลค่าคอม)</div></details>
     <details class="m-faq"><summary>ทำบิลค่าคอมแล้วไม่เห็นสินค้าบางตัว</summary><div>ติ๊กได้เฉพาะสินค้าที่เซลคนนั้นถือดีล (ดีลที่ปิดแล้วก็ยังติ๊กได้) จากบิลร้านที่ออกแล้วและไม่ถูกยกเลิก · รายการที่อยู่ในบิลค่าคอมใบอื่นแล้วไม่โผล่ซ้ำ — ถ้าบิลค่าคอมใบนั้นผิด ยกเลิกก่อน (ยังไม่จ่าย) รายการจะกลับมา</div></details>
     <details class="m-faq"><summary>แก้ % ในดีลของเซลแล้ว บิลค่าคอมเก่าเปลี่ยนไหม</summary><div>ไม่เปลี่ยน — บิลค่าคอมเก็บตัวเลขตอนทำบิลไว้แล้ว % ใหม่เป็นค่าตั้งต้นตอนติ๊กรายการในบิลค่าคอมที่ทำหลังจากนี้ (ยังแก้ทีละรายการได้ตอนทำบิล) · บิลค่าคอมที่ยังไม่จ่ายและต้องการคิดใหม่: ยกเลิกบิลนั้น แล้วทำใหม่</div></details>
     <details class="m-faq"><summary>สินค้ากลุ่มคิดเงินซ้ำกับสินค้าย่อยไหม</summary><div>ไม่ — ยอดขายของชุดกรอกที่สินค้ากลุ่มช่องเดียว บิลมีบรรทัดเดียวตาม % ของกลุ่ม · สินค้าย่อยเป็นแค่รายการ "ประกอบด้วย" ให้ร้านเห็น ถ้าร้านขายสินค้าย่อยแยกชิ้นด้วย ยอดนั้นกรอกที่สินค้าย่อยตามปกติ (คนละยอดกัน)</div></details>

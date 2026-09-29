@@ -721,12 +721,22 @@ export function formModal({ title, fields, submitLabel = 'บันทึก', o
     refreshPreview();
   }
 
+  /*
+   * กล่อง error อยู่บนสุดของโมดัล แต่ปุ่มบันทึกอยู่ล่างสุด — โมดัลยาว (เช่น "ตั้งค่าคอม" ที่มีตารางรายการรอจ่ายคอม)
+   * กดบันทึกจากท้ายหน้าต่างแล้ว error ไปขึ้นเหนือจอ ดูเหมือนกดแล้วไม่เกิดอะไร (รวมถึงข้อความ "บันทึกไปแล้วบางส่วน")
+   * เลื่อนให้เห็นทุกครั้ง · 'nearest' = อยู่ในจออยู่แล้วก็ไม่เลื่อน
+   */
+  const showError = (message) => {
+    errorBox.textContent = message;
+    errorBox.style.display = '';
+    errorBox.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+  };
+
   const submit = async () => {
     const values = collect();
     for (const f of fields) {
       if (f.required && isVisible(f, values) && values[f.name] === undefined) {
-        errorBox.textContent = `กรุณากรอก "${labelOf(f, values)}"`;
-        errorBox.style.display = '';
+        showError(`กรุณากรอก "${labelOf(f, values)}"`);
         return;
       }
     }
@@ -736,8 +746,7 @@ export function formModal({ title, fields, submitLabel = 'บันทึก', o
       await onSubmit(values);
       close();
     } catch (err) {
-      errorBox.textContent = err.fullMessage ?? err.message;
-      errorBox.style.display = '';
+      showError(err.fullMessage ?? err.message);
     } finally {
       submitBtn.disabled = false;
     }
