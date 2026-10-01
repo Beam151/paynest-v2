@@ -2,6 +2,7 @@
 
 namespace App\Controllers\Api;
 
+use App\Libraries\AssetVersion;
 use App\Libraries\AuthContext;
 
 /**
@@ -49,7 +50,8 @@ class Manual extends BaseApiController
 
     private static function icon(string $name): string
     {
-        return '<svg class="icon" aria-hidden="true"><use href="/icons.svg#i-' . $name . '"></use></svg>';
+        // ไฟล์ไอคอนติดป้ายรุ่นแบบเดียวกับหน้าเว็บ (ui.js) — อัปเดตเพิ่มไอคอนแล้วคู่มือไม่ใช้ไฟล์เก่าที่ไม่มีไอคอนนั้น
+        return '<svg class="icon" aria-hidden="true"><use href="' . AssetVersion::url('/icons.svg') . '#i-' . $name . '"></use></svg>';
     }
 
     private static function find(array $items, string $key): ?array

@@ -1943,3 +1943,17 @@ details.m-faq > div { padding: 0 16px 14px; color: var(--text-2); }
   .m-device-bar { justify-content: flex-start; }
 }
 .s-burger.s-hl { margin-right: 12px; }
+
+/* แถบ "ระบบอัปเดตเป็นรุ่นใหม่แล้ว" (public/js/freshness.js) — อยู่เหนือหน้าต่างและ toast */
+.update-bar {
+  position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 120;
+  display: flex; align-items: center; gap: 12px; width: max-content; max-width: calc(100vw - 32px);
+  padding: 10px 12px 10px 16px; font-size: var(--fs-sm); color: var(--text);
+  background: var(--surface); border: 1px solid var(--primary); border-radius: var(--radius);
+  box-shadow: 0 8px 28px rgba(15, 23, 42, .22);
+}
+.update-bar .btn { flex: none; }
+@media (max-width: 860px) {
+  /* จอมือถือมีแถบเมนูติดขอบล่าง — ย้ายขึ้นบน */
+  .update-bar { left: 16px; right: 16px; top: 12px; bottom: auto; transform: none; width: auto; max-width: none; }
+}

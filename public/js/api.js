@@ -1,3 +1,5 @@
+import { noteBuild } from './freshness.js';
+
 const TOKEN_KEY = 'franchise.token';
 const USER_KEY = 'franchise.user';
 
@@ -90,6 +92,7 @@ async function request(method, path, body, { headers = {} } = {}) {
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  noteBuild(res); // เซิร์ฟเวอร์อัปเดตไปแล้วระหว่างที่หน้านี้เปิดค้างอยู่ไหม
 
   const payload = res.status === 204 ? null : await res.json().catch(() => null);
 

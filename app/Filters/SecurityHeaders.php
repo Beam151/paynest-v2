@@ -2,6 +2,7 @@
 
 namespace App\Filters;
 
+use App\Libraries\AssetVersion;
 use CodeIgniter\Filters\FilterInterface;
 use CodeIgniter\HTTP\RequestInterface;
 use CodeIgniter\HTTP\ResponseInterface;
@@ -16,6 +17,10 @@ use CodeIgniter\HTTP\ResponseInterface;
  *   เปิดไว้ตลอดแม้ยังไม่ได้ตั้ง captcha เพราะหน้าตั้งค่าต้องวาดช่องทดสอบคีย์ก่อนบันทึก
  *
  * ไม่มี CORS โดยตั้งใจ — หน้าเว็บกับ API อยู่ origin เดียวกัน
+ * script-src เพิ่ม hash ของ import map ในหน้า HTML (AssetVersion) ตอนส่ง — สคริปต์ในหน้าตัวอื่นยังถูกบล็อกเหมือนเดิม
+ *
+ * X-Paynest-Build (ไม่ใช่เรื่องความปลอดภัย แต่ต้องติดทุก response เหมือนกัน) = ป้ายรุ่นของไฟล์หน้าเว็บชุดปัจจุบัน
+ * หน้าที่เปิดค้างไว้ตั้งแต่ก่อนอัปเดตเทียบกับป้ายที่โหลดมา แล้วบอกให้โหลดหน้าใหม่ (public/js/freshness.js)
  */
 class SecurityHeaders implements FilterInterface
 {
@@ -55,6 +60,8 @@ class SecurityHeaders implements FilterInterface
         foreach (self::HEADERS as $name => $value) {
             $response->setHeader($name, $value);
         }
+        $response->setHeader('Content-Security-Policy', str_replace("script-src 'self'", "script-src 'self' " . AssetVersion::importMapCsp(), self::CSP));
+        $response->setHeader('X-Paynest-Build', AssetVersion::build());
         // ไม่บอกว่าเบื้องหลังเป็น PHP เวอร์ชันไหน
         if (! headers_sent()) {
             header_remove('X-Powered-By');

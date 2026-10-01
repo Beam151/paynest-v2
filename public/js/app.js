@@ -1,6 +1,7 @@
 import { api, session } from './api.js';
 import { beginRender, clear, el, icon, iconFor, toast } from './ui.js';
 import { scopeStateTo } from './viewState.js';
+import { isStale } from './freshness.js';
 import { versionButton } from './version.js';
 import { loginView, passwordSetupView, rememberShopLoginKey } from './views/login.js';
 import { dashboardView } from './views/dashboard.js';
@@ -402,5 +403,6 @@ export async function render() {
   if (keepScroll) requestAnimationFrame(() => window.scrollTo(0, keepScroll));
 }
 
-window.addEventListener('hashchange', render);
+// ระบบอัปเดตไปแล้วระหว่างที่หน้านี้เปิดค้าง — เปลี่ยนเมนูทีไหนโหลดหน้าใหม่ทั้งหน้า (ได้โค้ดรุ่นใหม่ · ไม่มีฟอร์มค้างให้หาย)
+window.addEventListener('hashchange', () => (isStale() ? location.reload() : render()));
 render();

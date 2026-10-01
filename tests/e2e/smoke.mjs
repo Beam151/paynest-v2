@@ -4276,6 +4276,63 @@ section('แก้วันที่สัญญาจากหน้าแก�
     log.endDate === '2030-03-31' && log.from?.endDate === null && log.from?.startDate === '2030-02-01' && log.productId === pid, log);
 }
 
+/* ── ป้ายรุ่นของไฟล์หน้าเว็บ ─────────────────────────────────────
+ * เจ้าของอัปเดตแล้วยังเห็นหน้าแก้ไขสินค้าแบบเก่า (แท็บเปิดค้าง + เบราว์เซอร์เก็บ js ไว้ 1 ชม.)
+ * ทุกไฟล์ติด ?v= ผ่าน import map · ทุก response บอกป้ายรวม (X-Paynest-Build) ให้หน้าที่เปิดค้างรู้ตัว
+ */
+section('หน้าเว็บติดป้ายรุ่น — อัปเดตแล้วเบราว์เซอร์ไม่ใช้ไฟล์เก่า');
+{
+  const { createHash } = await import('node:crypto');
+  const page = async () => {
+    const r = await fetch(`${base}/`);
+    const html = await r.text();
+    const mapText = html.match(/<script type="importmap">(.*?)<\/script>/s)?.[1] ?? '';
+    let imports = {};
+    try { imports = JSON.parse(mapText).imports ?? {}; } catch { /* ตรวจด้านล่าง */ }
+    return { r, html, mapText, imports, build: html.match(/name="paynest-build" content="([0-9a-f]{12})"/)?.[1] };
+  };
+  const first = await page();
+  const jsDir = path.join(process.cwd(), 'public', 'js');
+  const jsFiles = fs.readdirSync(jsDir, { recursive: true }).filter((f) => f.endsWith('.js')).map((f) => `/js/${f.replaceAll('\\', '/')}`);
+  check('import map ครอบทุกไฟล์ js ของหน้าเว็บ และทุกตัวติดป้าย ?v=',
+    jsFiles.length > 30 && jsFiles.every((f) => new RegExp(`^${f.replaceAll('.', '\\.')}\\?v=[0-9a-f]{10}$`).test(first.imports[f] ?? '')),
+    { files: jsFiles.length, missing: jsFiles.filter((f) => !first.imports[f]) });
+  const entry = first.html.match(/<script type="module" src="([^"]+)"/)?.[1];
+  check('สคริปต์ตัวแรกใช้ที่อยู่เดียวกับใน import map (ไม่งั้น app.js ถูกโหลดซ้ำเป็นสองชุด)',
+    Boolean(entry) && entry === first.imports['/js/app.js'], { entry, mapped: first.imports['/js/app.js'] });
+  check('styles.css และไฟล์ไอคอนติดป้ายรุ่น',
+    /href="\/styles\.css\?v=[0-9a-f]{10}"/.test(first.html) && /name="paynest-icons" content="\/icons\.svg\?v=[0-9a-f]{10}"/.test(first.html));
+  const csp = first.r.headers.get('content-security-policy') ?? '';
+  const hash = createHash('sha256').update(first.mapText).digest('base64');
+  check('CSP อนุญาตเฉพาะ import map ตัวนี้ด้วย hash (สคริปต์ในหน้าตัวอื่นยังถูกบล็อก · ไม่เปิด unsafe-inline)',
+    csp.includes(`'sha256-${hash}'`) && !/script-src[^;]*unsafe-inline/.test(csp), csp);
+  const healthBuild = (await fetch(`${base}/health`)).headers.get('x-paynest-build');
+  const apiRes = await fetch(`${base}/api/charge-items`, { headers: { authorization: `Bearer ${admin}` } });
+  const apiBuild = apiRes.headers.get('x-paynest-build');
+  const missing = (await fetch(`${base}/api/no-such-route`)).headers.get('x-paynest-build');
+  check('ทุก response บอกป้ายรุ่นเดียวกับที่หน้าเว็บโหลดมา (X-Paynest-Build) — รวม API และ 404',
+    Boolean(first.build) && apiRes.status === 200 && healthBuild === first.build && apiBuild === first.build && missing === first.build,
+    { build: first.build, healthBuild, apiBuild, missing });
+  const versioned = await fetch(`${base}${first.imports['/js/ui.js']}`);
+  check('ไฟล์ที่ติดป้ายเปิดได้ตามปกติ', versioned.status === 200 && (await versioned.text()).includes('export function'), versioned.status);
+
+  // จำลองอัปเดต: git pull เขียนไฟล์หนึ่งใหม่ (เวลาแก้ไขเปลี่ยน) — คืนเวลาเดิมให้เสมอ
+  const target = path.join(jsDir, 'version.js');
+  const { atime, mtime } = fs.statSync(target);
+  try {
+    fs.utimesSync(target, atime, new Date(mtime.getTime() + 5000));
+    const after = await page();
+    const healthAfter = (await fetch(`${base}/health`)).headers.get('x-paynest-build');
+    check('ไฟล์เปลี่ยน → ที่อยู่ของไฟล์นั้นเปลี่ยน · ไฟล์อื่นคงเดิม (ยังใช้ของที่เบราว์เซอร์เก็บไว้ได้)',
+      after.imports['/js/version.js'] !== first.imports['/js/version.js'] && after.imports['/js/ui.js'] === first.imports['/js/ui.js'],
+      { before: first.imports['/js/version.js'], after: after.imports['/js/version.js'] });
+    check('ป้ายรวมเปลี่ยน → หน้าที่เปิดค้างไว้รู้ว่ามีรุ่นใหม่ (ขึ้นแถบ "โหลดหน้าใหม่")',
+      Boolean(after.build) && after.build !== first.build && healthAfter === after.build, { before: first.build, after: after.build, healthAfter });
+  } finally {
+    fs.utimesSync(target, atime, mtime);
+  }
+}
+
 section('captcha หน้าเข้าสู่ระบบ: หลาย IP ผลัดกันเดารหัสบัญชีเดียว (botnet)');
 {
   const botKeys = {};
