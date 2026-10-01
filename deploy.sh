@@ -828,7 +828,9 @@ detect_composer() {
     COMPOSER_KIND=$(composer_kind "$COMPOSER_BIN")
     if [ -x "$COMPOSER_BIN" ] || [ "$COMPOSER_KIND" = php ]; then
         local v
-        v=$(run_composer --version --no-ansi 2>/dev/null </dev/null | sed -n '1p' || true)
+        # หาบรรทัดที่ขึ้นต้นด้วย "Composer " (บรรทัดบอกรุ่น) — PHP บางเครื่องพิมพ์ notice (ขึ้นต้นด้วยบรรทัดว่าง) ก่อนรุ่นของ composer
+        # เดิมอ่านบรรทัดแรกเฉย ๆ เลยได้บรรทัดว่าง แล้วเตือนว่าเรียกไม่ได้ ทั้งที่ composer ใช้ได้ (เจอบน aaPanel)
+        v=$(run_composer --version --no-ansi 2>/dev/null </dev/null | sed -n '/^Composer /{p;q;}' || true)
         if [ -n "$v" ]; then
             ok "Composer: $COMPOSER_BIN ($v)"
         else
@@ -845,7 +847,8 @@ run_composer() {
     if [ "$IS_ROOT" = 1 ]; then export COMPOSER_ALLOW_SUPERUSER=1; fi
     export COMPOSER_NO_INTERACTION=1
     if [ "$COMPOSER_KIND" = php ]; then
-        "$PHP_BIN" "$COMPOSER_BIN" "$@"
+        # notice/deprecation ของ PHP ไปออก stderr — ยังเห็นในจอและ log แต่ไม่ปนกับผลลัพธ์ที่สคริปต์อ่าน
+        "$PHP_BIN" -d display_errors=stderr "$COMPOSER_BIN" "$@"
     else
         "$COMPOSER_BIN" "$@"
     fi
