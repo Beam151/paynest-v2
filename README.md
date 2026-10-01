@@ -63,6 +63,8 @@ php spark serve                   # เปิด http://localhost:8080
 | คำสั่ง | ทำอะไร |
 | --- | --- |
 | `php spark serve` | เซิร์ฟเวอร์สำหรับพัฒนา (เครื่องจริงใช้ nginx/Apache + PHP-FPM — ดู DEPLOY.md) |
+| `sudo ./deploy.sh` | ติดตั้งบนเซิร์ฟเวอร์ครั้งแรกในคำสั่งเดียว: composer · `.env` · ฐานข้อมูล · `app:install` · cron · ตรวจ `/health` — ไม่ถามอะไร รันซ้ำได้ · `--dry-run` ดูก่อน · `--help` ค่าที่ตั้งได้ (ดู DEPLOY.md) |
+| `sudo ./update.sh` | อัปเดตเซิร์ฟเวอร์: สำรองข้อมูล → `git fetch` + `merge --ff-only` → composer → `app:install` → ตรวจ `/health` · composer พัง = ถอยโค้ดกลับเอง · `--dry-run` ดูว่ามีอะไรใหม่ |
 | `php spark app:install` | ติดตั้ง/อัปเดต: migration + กุญแจลับ + แอดมินคนแรก · รันซ้ำได้ทุกครั้งหลัง `git pull` ไม่ล้างข้อมูล |
 | `php spark schedule:run` | งานตั้งเวลา — ให้ cron เรียกทุกนาที |
 | `php spark schedule:work` | งานตั้งเวลาแบบรันค้างไว้ (แทน cron · ร้านผูก Telegram เสร็จใน 10 วินาทีแทนไม่เกิน 1 นาที) |

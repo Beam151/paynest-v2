@@ -99,6 +99,17 @@ node_modules/
 #-------------------------
 vendor/
 
+# composer ที่ deploy.sh / update.sh ดาวน์โหลดมาเอง (เครื่องที่ไม่มี composer)
+.composer-bin/
+
+# ล็อกกันรัน deploy.sh / update.sh ซ้อนกัน (มีอยู่เฉพาะระหว่างรัน · .stale.<PID> = ตอนยึดล็อกค้าง)
+/writable/update.lock/
+/writable/update.lock.stale.*/
+
+# update.sh ย้ายไฟล์สคริปต์ที่คัดลอกมาวางเอง (ไม่อยู่ใน git) ออกก่อน merge — เหลือไว้เมื่อต่างจากรุ่นใน git
+/deploy.sh.before-update
+/update.sh.before-update
+
 #-------------------------
 # IDE / Development Files
 #-------------------------

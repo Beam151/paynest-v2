@@ -18,7 +18,92 @@
 
 ---
 
+## ติดตั้ง/อัปเดตด้วยสคริปต์ (แนะนำ)
+
+สองไฟล์ที่รากโปรเจกต์ทำข้อ 1 · 3 · 7 ให้ครบในคำสั่งเดียว — **ไม่ถามอะไรระหว่างทาง รันจบเอง**
+บอกผลทีละขั้นด้วย ✓ / ✗ แล้วสรุปตอนจบ · สำเร็จ = exit code 0 · รันซ้ำได้เสมอ (ไม่ล้างข้อมูล)
+
+**ติดตั้งครั้งแรก**
+
+```bash
+sudo -s                                            # เป็น root ก่อน (ล็อกอินเป็น root อยู่แล้ว = ข้าม)
+git clone <ที่เก็บโค้ด> /www/wwwroot/paynest        # หรือโฟลเดอร์ไหนก็ได้ — clone ด้วย root (โค้ดเป็นของ root)
+cd /www/wwwroot/paynest
+./deploy.sh --dry-run                              # (ไม่บังคับ) ดูก่อนว่าจะทำอะไร — ยังไม่แก้อะไรในเครื่อง
+read -rsp 'รหัสฐานข้อมูล (จาก aaPanel): ' DB_PASS; echo   # พิมพ์แล้วไม่ขึ้นจอ ไม่เข้า history
+DB_PASS=$DB_PASS APP_URL=https://paynest.live DB_NAME=paynest DB_USER=paynest ./deploy.sh
+```
+
+- ฐานข้อมูล: สร้างใน aaPanel ไว้ก่อน (Databases → Add database) แล้วส่งชื่อ/ผู้ใช้/รหัสมาตามตัวอย่าง
+  หรือให้สคริปต์สร้างให้: `read -rsp 'รหัส root ของ MySQL: ' DB_ROOT_PASS; echo` แล้ว
+  `DB_ROOT_PASS=$DB_ROOT_PASS DB_ROOT_USER=root APP_URL=… ./deploy.sh` (ไม่ต้องส่ง `DB_PASS` — รหัสของผู้ใช้ใหม่สุ่มให้ 32 ตัว)
+  · Ubuntu ที่ root เข้า MySQL ผ่าน socket ได้: `sudo ./deploy.sh` เฉย ๆ ก็สร้างให้
+- ⚠ **อย่าใส่รหัสผ่านไว้หลัง `sudo`** (`sudo DB_PASS='…' ./deploy.sh`) หรือเป็นตัวเลือก `--db-pass=…` — ผู้ใช้อื่นในเครื่องเห็นใน `ps`
+  ตลอดการติดตั้ง (สคริปต์ไม่รับ `--db-pass` / `--db-root-pass`) · อีกทาง: เก็บรหัสในไฟล์ `chmod 600` แล้วส่ง `DB_PASS_FILE=/root/ไฟล์`
+- `deploy.sh` ทำ: ตรวจเครื่อง (PHP 8.2+ และส่วนขยาย · composer — ไม่มีจะดาวน์โหลดตัวทางการแล้วตรวจลายเซ็นให้)
+  → `git config core.fileMode false` → `composer install --no-dev` → สร้าง `.env` จาก `env` (**มีอยู่แล้ว = ไม่แตะ**)
+  → สร้างฐานข้อมูล/ผู้ใช้ถ้ายังเข้าไม่ได้ → สิทธิ์ไฟล์ `writable/` `.env` → `php spark app:install` ในนาม `www`
+  → cron ทุกนาทีใน crontab ของ `www` → ตรวจ `/health` → สรุป (รุ่น · ไฟล์รหัสแอดมินแรก · งานที่ต้องทำเองต่อ)
+- ยังต้องทำเอง: ข้อ 2 (เว็บเซิร์ฟเวอร์ + HTTPS + ค่า PHP) · ข้อ 4 (ตั้งค่าในหน้าเว็บ) · ข้อ 5 (UptimeRobot) · ข้อ 6 (สำรองออกนอกเครื่อง)
+  — สคริปต์พิมพ์รายการนี้ให้ตอนจบ
+
+**อัปเดต**
+
+```bash
+cd /www/wwwroot/paynest
+sudo ./update.sh --dry-run                         # (ไม่บังคับ) ดูว่ามี commit ใหม่อะไรบ้าง
+sudo ./update.sh
+```
+
+- `update.sh` ทำ: ล็อกกันรันซ้อน → หยุดถ้ามีไฟล์โค้ดถูกแก้บนเครื่อง (ไม่ stash/reset ให้) → `app:backup` (ไม่สำเร็จ = ไม่อัปเดต)
+  → `git fetch` + `git merge --ff-only` (ไม่มีของใหม่ = ขึ้น "เป็นรุ่นล่าสุดอยู่แล้ว" ไม่เปลี่ยนโค้ด) → `composer install`
+  → `app:install` → reload PHP-FPM ถ้า OPcache ไม่ตรวจไฟล์ → ตรวจ `/health` → สรุป (รุ่นเดิม → รุ่นใหม่ · ไฟล์สำรอง · migration ที่รัน)
+- `composer install` พัง = ถอยโค้ดกลับรุ่นเดิมให้เอง (ยังไม่แตะฐานข้อมูล ระบบใช้ต่อได้)
+- `app:install` พัง = **ไม่กู้ฐานข้อมูลเอง** (ข้อมูลที่ร้านเพิ่งบันทึกจะหาย) — พิมพ์คำสั่งกู้จากไฟล์สำรองของรอบนั้นพร้อม commit เดิมให้ (ตามข้อ 6)
+  ไฟล์สำรองก่อนอัปเดตชื่อ `paynest-<วันที่>_<เวลา>-pre-update-<เวลา>.sql.gz` (ไม่ถูกทับ) · แก้แล้วรัน `./update.sh` ซ้ำได้เลย —
+  รอบที่ซ้ำยังจำรุ่น/ไฟล์สำรองก่อนอัปเดตของรอบแรกไว้ (`writable/data/update-pending.env` ลบเองเมื่อ `app:install` ผ่าน)
+- SSH หลุดระหว่างรัน = สคริปต์ทำต่อจนจบเอง ดูผลใน `writable/logs/update-<วันเวลา>.log`
+- `git fetch` ใช้สิทธิ์ของคนที่รัน (root) — repo ส่วนตัวต้องมี SSH key / deploy key ของ root (สคริปต์ไม่ถามรหัส ไม่มี key = หยุดพร้อมบอกวิธี)
+- **เครื่องที่ติดตั้งแบบทำมือมาก่อนมีสคริปต์** (เช่น paynest.live): อัปเดตครั้งแรกทำมือตามข้อ 7 (`git pull` …) หนึ่งครั้ง
+  จะได้ `update.sh` มากับโค้ด แล้วครั้งถัดไปค่อยใช้ `sudo ./update.sh` — อย่าคัดลอกไฟล์ `update.sh` มาวางเอง
+  (ถ้าเผลอวางไว้แล้ว สคริปต์จะย้ายไปเป็น `update.sh.before-update` ให้ก่อน merge)
+- รันด้วย root ได้เมื่อโค้ด (`.git`) **ไม่ใช่ของผู้ใช้เว็บ** — ถ้า `www` แก้ `.git` ได้ git ที่ root รันจะรันโปรแกรมของ `www` ด้วยสิทธิ์ root
+  (เว็บโดนเจาะ = ยึดเครื่องได้) สคริปต์จึงหยุดพร้อมบอกวิธี: `chown -R root:root <โฟลเดอร์>; chown -R www:www <โฟลเดอร์>/writable <โฟลเดอร์>/.env`
+- เครื่อง aaPanel ที่มี PHP หลายรุ่น: สคริปต์อ่านรุ่นที่เว็บใช้จากไฟล์ vhost ของ aaPanel (root = `<โฟลเดอร์>/public`) ให้ cron และ reload ตรงรุ่น
+  หาไม่เจอ (ยังไม่ได้ Add site) = ใช้รุ่นสูงสุดแล้วเตือน — ตั้ง `PHP_BIN=/www/server/php/82/bin/php` เองได้
+
+ค่าที่ตั้งได้ — ตัวแปรสภาพแวดล้อม หรือ `--ชื่อตัวเล็ก=ค่า` (เช่น `--db-name=paynest` `--skip-cron`) · ดูทั้งหมด: `./deploy.sh --help` `./update.sh --help`
+
+| ตัวแปร | ใช้กับ | ค่าตั้งต้น | ใช้ทำอะไร |
+| --- | --- | --- | --- |
+| `APP_URL` | ทั้งคู่ | ไม่มี (update: `app.baseURL` ใน `.env`) | ใส่ `app.baseURL` ใน `.env` ใหม่ · ตรวจ `<APP_URL>/health` ตอนจบ |
+| `DB_HOST` `DB_PORT` | deploy | `127.0.0.1` `3306` | ที่อยู่ฐานข้อมูล |
+| `DB_NAME` `DB_USER` | deploy | `paynest` `paynest` | ชื่อฐานข้อมูล / ผู้ใช้ของระบบ |
+| `DB_PASS` | deploy | สุ่ม 32 ตัว | รหัสของ `DB_USER` — เก็บใน `.env` ไม่พิมพ์ออกจอ/log · ตัวแปรสภาพแวดล้อมเท่านั้น (ไม่มี `--db-pass`) |
+| `DB_PASS_FILE` | deploy | ไม่มี | อ่าน `DB_PASS` จากบรรทัดแรกของไฟล์ (`chmod 600`) |
+| `DB_ROOT_USER` `DB_ROOT_PASS` | deploy | ไม่มี | ให้สคริปต์สร้างฐานข้อมูล + ผู้ใช้ (`IF NOT EXISTS` · ผู้ใช้เดิมไม่เปลี่ยนรหัส) · `DB_ROOT_PASS_FILE` ก็ได้ |
+| `ALLOW_NEW_SECRETS` | deploy | `0` | `1` = ยอมสุ่มกุญแจลับใหม่ เมื่อฐานข้อมูลติดตั้งแล้วแต่ `secrets.json` หาย (ปกติหยุดให้กู้จากข้อ 6 ก่อน — กุญแจใหม่ทำให้ Google Authenticator และลิงก์ของร้านใช้ไม่ได้ทั้งหมด) |
+| `TRUST_PROXY` | deploy | `0` | `1` = มี Cloudflare (เมฆสีส้ม) / load balancer (ดูข้อ 1) |
+| `SKIP_CRON` | deploy | `0` | `1` = ไม่แตะ crontab — ตั้งในหน้า Cron ของ aaPanel เองตามข้อ 3 |
+| `SKIP_DB_CREATE` | deploy | `0` | `1` = ไม่สร้างฐานข้อมูล/ผู้ใช้ให้ |
+| `BRANCH` | ทั้งคู่ | branch ปัจจุบัน | update: branch ที่ดึง (ต้องตรงกับที่ checkout อยู่) · deploy: แค่ตรวจ |
+| `REMOTE` | update | `origin` | ที่เก็บโค้ดต้นทาง |
+| `SKIP_BACKUP` | update | `0` | `1` = ไม่สำรองก่อนอัปเดต — **ไม่แนะนำ** |
+| `RELOAD_FPM` | update | `auto` | `auto` = reload เมื่อ `opcache.validate_timestamps=0` · `1` = เสมอ · `0` = ไม่ reload |
+| `WEB_USER` | ทั้งคู่ | `www` → `www-data` → `nginx` → `apache` | ผู้ใช้ที่รัน `php spark` |
+| `PHP_BIN` | ทั้งคู่ | รุ่นที่เว็บใช้ใน aaPanel → `/www/server/php/<รุ่นสูงสุด>/bin/php` → `php` | เครื่องมี PHP หลายรุ่น: ตั้งให้ตรงกับรุ่นที่เว็บใช้ |
+| `COMPOSER_BIN` | ทั้งคู่ | `composer` → `.composer-bin/composer.phar` | ไม่มีทั้งคู่ = ดาวน์โหลดตัวติดตั้งทางการ (ตรวจ SHA-384) |
+
+- รันด้วย `sudo` (root) — สคริปต์รัน `php spark` ทุกคำสั่งในนาม `WEB_USER` ให้เอง · รันในนาม `www` ตรง ๆ ก็ได้ (ข้าม chown)
+- log ของทุกครั้ง: `writable/logs/deploy-<วันเวลา>.log` / `update-<วันเวลา>.log` (ไม่มีรหัสผ่าน)
+- ขึ้น `Permission denied` ตอนสั่ง `./deploy.sh`: ใช้ `sudo bash deploy.sh` / `sudo bash update.sh` แทน
+- deploy.sh รันซ้ำบนเครื่องที่ติดตั้งแล้วแต่ `writable/data/secrets.json` หาย = หยุด ไม่สุ่มกุญแจใหม่ — กู้จาก `writable/data/backups/secrets.json` (ข้อ 6) ก่อน
+- ตั้ง cron ไว้ในหน้า Cron ของ aaPanel แล้ว (ทำมือตามข้อ 3) = deploy.sh เห็นแล้วไม่เพิ่มซ้ำใน crontab
+- ขั้นตอนแบบทำมือในข้อ 1 · 3 · 7 ด้านล่างยังใช้ได้เหมือนเดิม — เก็บไว้เป็นคู่มืออ้างอิงว่าสคริปต์ทำอะไร
+
 ## 1. ติดตั้งครั้งแรก
+
+> ทำด้วยสคริปต์ได้ในคำสั่งเดียว: `sudo ./deploy.sh` (หัวข้อด้านบน) — ด้านล่างคือขั้นตอนเดียวกันแบบทำมือ
 
 ```bash
 git clone <ที่เก็บโค้ด> /www/wwwroot/paynest        # หรือโฟลเดอร์ไหนก็ได้
@@ -117,6 +202,8 @@ server {
 ระบบไม่มีโปรเซสค้างเหมือนระบบเดิม — งานพวกนี้เกิดเฉพาะตอน cron เรียกทุกนาที:
 ส่ง Telegram ที่ค้าง/ส่งไม่ผ่าน · อ่านข้อความถึงบอท (ร้านผูก Telegram) · สรุปรายวัน · เตือนร้านก่อน/หลังครบกำหนด
 · ส่งประกาศ · เช็กดิสก์ · **สำรองข้อมูลทุกคืน ตี 3 ครึ่ง**
+
+> ติดตั้งด้วย `deploy.sh` = ตั้งให้แล้วใน crontab ของ `www` (`crontab -u www -l` ดูได้) — ทำเองตามข้อนี้เฉพาะตอนรันด้วย `SKIP_CRON=1`
 
 **aaPanel:** Cron → Add Cron → Type: Shell Script · Execution cycle: N Minutes = 1 · Script content:
 
@@ -218,6 +305,8 @@ sudo -u www php spark app:install
 ข้อมูลที่เกิดหลังเวลาของไฟล์สำรองจะหายไป — แจ้งร้านให้แจ้งชำระซ้ำถ้าจำเป็น · บางคนอาจต้องล็อกอินใหม่
 
 ## 7. อัปเดตระบบ
+
+> ทำด้วยสคริปต์ได้ในคำสั่งเดียว: `sudo ./update.sh` (หัวข้อ "ติดตั้ง/อัปเดตด้วยสคริปต์") — ด้านล่างคือขั้นตอนเดียวกันแบบทำมือ
 
 ```bash
 cd /www/wwwroot/paynest
