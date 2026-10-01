@@ -17,7 +17,7 @@ class Paynest extends BaseConfig
      * เป็นค่าคงที่ ตั้งผ่าน .env ไม่ได้โดยตั้งใจ: เลขรุ่นต้องมากับโค้ด ไม่ใช่กับเครื่อง
      * ลืมเลื่อนก็ยังจดเวลาอัปเดตได้ เพราะเทียบ commit ของ git ด้วย (ดู VersionService)
      */
-    public const VERSION = '2.2.0';
+    public const VERSION = '2.3.0';
 
     /** ชื่อที่ขึ้นในแอป Google Authenticator ให้รู้ว่ารหัสนี้ของระบบไหน */
     public string $appName = 'ระบบจัดการร้าน';

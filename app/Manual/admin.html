@@ -49,16 +49,19 @@
     <div class="m-shot" data-nav="sales" data-tap-nav data-title="ยอดขายรายรอบ" data-extra="1–15 ก.ย. 69 ▾">
             <div class="s-body">
         <div class="s-card">
-          <div class="s-row"><span><b>KF-01</b> <span class="s-muted">bkk01</span></span><span class="s-input s-hl" style="width:92px;color:var(--text)">42,800</span></div>
-          <div class="s-row"><span><b>KF-02</b> <span class="s-muted">bkk01</span></span><span class="s-input" style="width:92px;color:var(--text)">31,500</span></div>
-          <div class="s-row"><span><b>DR-01</b> <span class="s-muted">cnx01</span></span><span class="s-input" style="width:92px">ยังไม่กรอก</span></div>
+          <div class="s-row s-muted"><span></span><span style="display:flex;gap:6px"><span style="width:70px;text-align:right">ยอดเต็ม</span><span style="width:70px;text-align:right">กรอกเอง (ถ้ามี)</span></span></div>
+          <div class="s-row"><span><b>KF-01</b> <span class="s-muted">bkk01</span></span><span style="display:flex;gap:6px"><span class="s-input s-hl" style="width:70px;color:var(--text)">42,800</span><span class="s-input" style="width:70px">ถ้ามี</span></span></div>
+          <div class="s-row"><span><b>KF-02</b> <span class="s-muted">bkk01</span></span><span style="display:flex;gap:6px"><span class="s-input" style="width:70px;color:var(--text)">31,500</span><span class="s-input" style="width:70px;color:var(--text)">3,000</span></span></div>
+          <div class="s-row"><span></span><span class="s-muted">ออกบิลจะใช้: ยอดที่กรอกเอง <b>3,000.00</b></span></div>
+          <div class="s-row"><span><b>DR-01</b> <span class="s-muted">cnx01</span></span><span style="display:flex;gap:6px"><span class="s-input" style="width:70px">ยังไม่กรอก</span><span class="s-input" style="width:70px">ถ้ามี</span></span></div>
         </div>
         <span class="s-btn wide s-hl">💾 บันทึกทั้งหมด (2)<span class="s-tap">{i:hand}</span></span>
       </div>
     </div>
-    <div class="m-step-text"><span class="m-num">1</span><h3>เลือกรอบ แล้วกรอกยอดเต็ม</h3><p>{nav:sales} → เลือกรอบด้านบน → พิมพ์ยอดขายเต็มของแต่ละสินค้า → <span class="m-ui is-primary">💾 บันทึกทั้งหมด</span></p><p>ระบบคิดส่วนต่างให้เอง · ร้านคืนของมากกว่าขาย ใส่ติดลบได้</p></div>
+    <div class="m-step-text"><span class="m-num">1</span><h3>เลือกรอบ แล้วกรอกยอดเต็ม</h3><p>{nav:sales} → เลือกรอบด้านบน → พิมพ์ยอดขายเต็มของแต่ละสินค้า → <span class="m-ui is-primary">💾 บันทึกทั้งหมด</span></p><p>ระบบคิดส่วนต่างให้เอง · ร้านคืนของมากกว่าขาย ใส่ติดลบได้</p><p><b>รู้ยอดที่จะเรียกเก็บอยู่แล้ว</b> (ไม่อยากให้คิดจาก %) ใส่ช่อง <span class="m-ui">ยอดส่วนต่างที่กรอกเอง (ถ้ามี)</span> ด้วย — ต้องอยู่ระหว่าง 0 ถึงยอดเต็ม · ใต้ช่องบอกว่า "ออกบิลจะใช้" ยอดไหน · ตอนออกบิลยังเลือกได้ทีละสินค้าว่าจะใช้ยอดนี้ หรือยอดเต็ม × %</p></div>
   </div>
-  <div class="m-tip">{i:info}<span><b>สินค้าที่ปิดใช้งานแล้ว</b> กรอกยอดใหม่ไม่ได้ ยอดที่บันทึกไว้ก่อนยังโชว์เป็นแถว <span class="s-badge">ปิดใช้งาน</span> (ออกบิลได้ตามปกติ และไม่นับใน "กรอกแล้ว x/y") · สินค้าที่ถูกลบ ยอดรอบเก่าขึ้นเป็นแถวอ่านอย่างเดียว <span class="s-badge red">ลบแล้ว</span> · ช่อง % ที่ขึ้น <span class="m-ui">กรอกยอดเอง</span> = ยอดนั้นกำหนดตอนออกบิล ไม่ได้คิดจาก %</span></div>
+  <div class="m-tip">{i:info}<span><b>ยอดเต็มต้องกรอกเสมอ</b> แม้กรอกยอดส่วนต่างเองแล้ว (รายงาน อันดับร้าน และค่าคอมเซลคิดจากยอดเต็ม) · ช่องกรอกเองเว้นว่าง = คิดจากยอดเต็ม × % · <b>เลิกใช้ยอดที่กรอกไว้</b>: <span class="m-ui">แก้ไข</span> → ลบตัวเลขในช่องกรอกเอง → <span class="m-ui">บันทึก</span> · แก้ยอดเต็มจนยอดที่กรอกไว้เกินยอดเต็ม ระบบไม่ยอมบันทึกจนกว่าจะแก้หรือล้างช่องกรอกเอง</span></div>
+  <div class="m-tip">{i:info}<span><b>สินค้าที่ปิดใช้งานแล้ว</b> กรอกยอดใหม่ไม่ได้ ยอดที่บันทึกไว้ก่อนยังโชว์เป็นแถว <span class="s-badge">ปิดใช้งาน</span> (ออกบิลได้ตามปกติ และไม่นับใน "กรอกแล้ว x/y") · สินค้าที่ถูกลบ ยอดรอบเก่าขึ้นเป็นแถวอ่านอย่างเดียว <span class="s-badge red">ลบแล้ว</span> · ใต้ช่องกรอกเองขึ้น "ออกบิลจะใช้: <b>ยอดที่กำหนดตอนออกบิล</b>" = บิลเดิมถูกยกเลิกแล้วยอดกลับมารอออกใหม่ (ใช้ยอดที่เคยกำหนดตอนออกบิลใบนั้น) — บันทึกยอดใหม่ = กลับไปใช้ค่าจากหน้านี้</span></div>
   <div class="m-tip">{i:package}<span><b>สินค้ากลุ่ม (ชุด)</b> ขึ้นเป็นแถวเดียวมีป้าย <span class="s-badge">กลุ่ม</span> และรหัสสินค้าย่อยใต้ชื่อ — กรอก<b>ยอดขายรวมของทั้งชุด</b>ช่องเดียว ไม่ต้องกรอกยอดของสินค้าย่อย</span></div>
 </section>
 
@@ -72,32 +75,34 @@
         <div class="s-row"><span class="s-btn">พร้อมออกบิล (3)</span><span class="s-btn ghost">บิล</span><span class="s-btn ghost">สลิปรอตรวจ</span></div>
         <div class="s-card">
           <div class="s-row" style="justify-content:flex-start;gap:8px"><span class="s-check on"></span><b>bkk01</b><span class="s-muted" style="margin-left:auto">6,489.00</span></div>
-          <div class="s-row" style="justify-content:flex-start;gap:8px"><span class="s-check on"></span><b>bkk02</b><span class="s-muted" style="margin-left:auto">8,886.00</span></div>
+          <div class="s-row" style="justify-content:flex-start;gap:8px"><span class="s-check on"></span><b>bkk02</b><span class="s-muted" style="margin-left:auto">8,886.00 · ใช้ยอดที่กรอกไว้ 1</span></div>
           <div class="s-row" style="justify-content:flex-start;gap:8px"><span class="s-check on"></span><b>cnx01</b><span class="s-muted" style="margin-left:auto">10,775.00</span></div>
         </div>
         <span class="s-btn wide s-hl">ออกบิล 3 ร้านที่เลือก<span class="s-tap">{i:hand}</span></span>
       </div>
     </div>
-    <div class="m-step-text"><span class="m-num">1</span><h3>ติ๊กร้าน แล้วออกบิล</h3><p>{nav:bills} → แท็บ <span class="m-ui">พร้อมออกบิล</span> → ติ๊กร้าน → <span class="m-ui is-primary">ออกบิล N ร้านที่เลือก</span></p><p>ร้านได้ข้อความ "บิลรอบใหม่ออกแล้ว" ทันที พร้อม<b>ธนาคาร เลขที่บัญชี ชื่อบัญชี</b>และคำเตือนให้ตรวจก่อนโอน (ร้านปิดเรื่องนี้ไม่ได้)</p></div>
+    <div class="m-step-text"><span class="m-num">1</span><h3>ติ๊กร้าน แล้วออกบิล</h3><p>{nav:bills} → แท็บ <span class="m-ui">พร้อมออกบิล</span> → ติ๊กร้าน → <span class="m-ui is-primary">ออกบิล N ร้านที่เลือก</span></p><p>ร้านได้ข้อความ "บิลรอบใหม่ออกแล้ว" ทันที พร้อม<b>ธนาคาร เลขที่บัญชี ชื่อบัญชี</b>และคำเตือนให้ตรวจก่อนโอน (ร้านปิดเรื่องนี้ไม่ได้)</p><p>สินค้าที่กรอกยอดส่วนต่างไว้ในหน้ายอดขาย ใช้ยอดนั้น (แถวร้านบอก "ใช้ยอดที่กรอกไว้ N รายการ") ที่เหลือคิดจากยอดเต็ม × % — เปลี่ยนทีหลังได้ที่บิล</p></div>
   </div>
   <div class="m-step">
     <div class="m-shot" data-modal="ออกใบเรียกเก็บ" data-nav="bills" data-title="ออกใบเรียกเก็บ">
             <div class="s-body">
+        <div class="s-row" style="justify-content:flex-start;gap:6px"><span class="s-btn ghost">ใช้ยอดที่กรอกไว้ทุกรายการ</span><span class="s-btn ghost">คิดจาก % ทุกรายการ</span></div>
         <div class="s-card">
-          <div class="s-row" style="justify-content:flex-start;gap:6px"><span class="s-check on"></span><b>KF-01</b><span class="s-input" style="margin-left:auto">คิดตาม % ▾</span><b>5,136.00</b></div>
-          <div class="s-row s-hl" style="justify-content:flex-start;gap:6px;padding:2px"><span class="s-check on"></span><b>KF-02</b><span class="s-input" style="margin-left:auto">กรอกยอดเอง ▾</span><b>3,000.00</b></div>
+          <div class="s-row" style="justify-content:flex-start;gap:6px"><span class="s-check on"></span><b>KF-01</b><span class="s-input" style="margin-left:auto">คิดจากยอดเต็ม × % ▾</span><b>5,136.00</b></div>
+          <div class="s-row s-hl" style="justify-content:flex-start;gap:6px;padding:2px"><span class="s-check on"></span><b>KF-02</b><span class="s-input" style="margin-left:auto">ใช้ยอดที่กรอกไว้ (3,000.00) ▾</span><b>3,000.00</b></div>
           <div class="s-row" style="justify-content:flex-start;gap:6px"><span class="s-check"></span><b>DR-01</b><span class="s-muted" style="margin-left:auto">ไม่ออกรอบนี้</span></div>
         </div>
         <div class="s-input">📎 รูปประกอบบิล: ใบส่งของ.jpg, สรุปยอด.pdf</div>
         <span class="s-btn wide">ออกใบเรียกเก็บ</span>
       </div>
     </div>
-    <div class="m-step-text"><span class="m-num">2</span><h3>ออกทีละร้าน — เลือกสินค้าและวิธีคิด</h3><p><span class="m-ui is-primary">+ ออกใบเรียกเก็บ</span> → เลือกรอบและร้าน → ติ๊กสินค้าที่จะเรียกเก็บ แต่ละสินค้าเลือกได้ว่า <span class="m-ui">คิดตาม %</span> (แก้ % ได้) หรือ <span class="m-ui">กรอกยอดเอง</span> (พิมพ์จำนวนเงินที่เรียกเก็บ)</p>
+    <div class="m-step-text"><span class="m-num">2</span><h3>ออกทีละร้าน — เลือกสินค้าและวิธีคิด</h3><p><span class="m-ui is-primary">+ ออกใบเรียกเก็บ</span> → เลือกรอบและร้าน → ติ๊กสินค้าที่จะเรียกเก็บ แต่ละสินค้าเลือกได้ 2 ทาง: <span class="m-ui">คิดจากยอดเต็ม × %</span> (แก้ % ได้) หรือ <span class="m-ui">ใช้ยอดส่วนต่างที่กรอกไว้ (…)</span> — สินค้าที่กรอกช่องนี้ไว้ในหน้ายอดขาย ตั้งต้นเลือกให้แล้ว ตัวเลขยังแก้ได้ · สินค้าที่ไม่ได้กรอกไว้เป็น <span class="m-ui">กรอกยอดเอง</span> (พิมพ์จำนวนเงินที่เรียกเก็บ)</p>
+      <p>ปุ่มเหนือตาราง <span class="m-ui">ใช้ยอดที่กรอกไว้ทุกรายการ</span> / <span class="m-ui">คิดจาก % ทุกรายการ</span> เปลี่ยนทีเดียวทุกบรรทัด · ยอดรวมและค่าใช้จ่ายที่คิดเป็น % ขยับตามทันที</p>
       <p><b>รูปประกอบบิล</b> — แนบรูปหรือ PDF ได้สูงสุด 10 ไฟล์ต่อบิล ร้านเห็นในบิลของตัวเอง</p>
-      <p>ใช้ทางนี้ด้วยเมื่อต้องใส่ค่าใช้จ่าย/ส่วนลด หรือให้จ่ายเป็นดอลลาร์ · ออกหลายร้านพร้อมกัน (ขั้นที่ 1) ใช้ % ตั้งต้นทั้งหมด แก้ทีหลังได้ที่บิล</p>
+      <p>ใช้ทางนี้ด้วยเมื่อต้องใส่ค่าใช้จ่าย/ส่วนลด หรือให้จ่ายเป็นดอลลาร์ · ออกหลายร้านพร้อมกัน (ขั้นที่ 1) ใช้ยอดที่กรอกไว้ (ถ้ามี) ที่เหลือคิดจาก % — แก้ทีหลังได้ที่บิล</p>
       <p>ออกบิลร้าน<b>ไม่สร้างค่าคอมเซล</b> — ค่าคอมทำเป็น "บิลค่าคอม" แยกทีหลังที่หน้าเซล (ดูเรื่อง "เซลและค่าคอม")</p></div>
   </div>
-  <div class="m-tip">{i:info}<span><b>แก้วิธีคิดหลังออกบิล</b> เปิดบิลด้วย <span class="m-ui">แก้ไขบิล</span> → กด <span class="m-ui">แก้</span> ที่สินค้า (ได้เฉพาะบิลที่ยังไม่มีเงินเข้าและไม่มีสลิปรอตรวจ) · <b>แนบรูปเพิ่ม / ลบรูป</b> กด <span class="m-ui">📎 แนบรูป</span> ที่บิลได้ตลอด แม้ร้านจ่ายแล้ว</span></div>
+  <div class="m-tip">{i:info}<span><b>แก้วิธีคิดหลังออกบิล</b> เปิดบิลด้วย <span class="m-ui">แก้ไขบิล</span> → กด <span class="m-ui">แก้</span> ที่สินค้า (ได้เฉพาะบิลที่ยังไม่มีเงินเข้าและไม่มีสลิปรอตรวจ) — สลับได้ทั้งสองทาง ยอดเต็ม × % ↔ ยอดที่กรอกไว้ (คอลัมน์วิธีคิดขึ้น <span class="m-ui">ยอดที่กรอกไว้</span> / <span class="m-ui">ตาม %</span> · ยอดที่กรอกไว้ในหน้ายอดขายไม่เปลี่ยนตาม) · <b>แนบรูปเพิ่ม / ลบรูป</b> กด <span class="m-ui">📎 แนบรูป</span> ที่บิลได้ตลอด แม้ร้านจ่ายแล้ว</span></div>
   <div class="m-tip">{i:package}<span><b>สินค้ากลุ่มในบิล</b> เป็นบรรทัดเดียว คิดตาม % ของกลุ่ม ใต้ชื่อเขียน "ประกอบด้วย: KF-01, KF-02" ให้ร้านรู้ว่าในชุดมีอะไร · บิลจำรายการย่อยไว้ตอนออกบิล — แก้ชุดทีหลัง บิลเก่าไม่เปลี่ยน (ยกเลิกแล้วออกใหม่ = ใช้รายการปัจจุบัน)</span></div>
 </section>
 
@@ -514,7 +519,7 @@
     <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:plus}</span><strong>ยอดเพิ่มหลังออกบิล</strong><small>แท็บพร้อมออกบิล → "ไปเพิ่มเข้าบิล" (ก่อนร้านจ่าย)</small></div>
     <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:file-pen-line}</span><strong>ยอดในบิลผิด</strong><small>"แก้ไขบิล" ได้ถ้ายังไม่มีเงินเข้า · ไม่งั้นยกเลิก (ใส่เหตุผล) แล้วออกใหม่</small></div>
     <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:calendar}</span><strong>เลื่อนวันครบกำหนด / เปลี่ยนบัญชี</strong><small>เปิดบิลโหมดแก้ไข → "🏦 เปลี่ยนบัญชี / วันครบกำหนด" · เปลี่ยนบัญชีต้องใส่รหัส 6 หลัก แล้วกด "📨 ส่งเลขบัญชีให้ร้าน"</small></div>
-    <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:file-pen-line}</span><strong>ยอดสินค้าไม่ได้คิดจาก %</strong><small>บิลที่ยังไม่มีเงินเข้า: แก้ไขบิล → "แก้" ที่สินค้า → กรอกยอดเอง</small></div>
+    <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:file-pen-line}</span><strong>ยอดสินค้าไม่ได้คิดจาก %</strong><small>ก่อนออกบิล: กรอกช่อง "ยอดส่วนต่างที่กรอกเอง" ที่หน้ายอดขาย · ออกบิลแล้ว (ยังไม่มีเงินเข้า): แก้ไขบิล → "แก้" ที่สินค้า</small></div>
     <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:package}</span><strong>เลิกขายสินค้า</strong><small>ชั่วคราว = "ปิดใช้งาน" (เปิดกลับได้) · ถาวร = "ลบ" (บิลเก่ายังแสดงสินค้าเดิม)</small></div>
     <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:store}</span><strong>เลิกกับร้าน</strong><small>พักไว้ = "แก้ไข" สถานะ ปิด/ระงับ · ถาวร = "ลบ" (รหัส 6 หลัก · เคลียร์บิลค้างก่อน · ผู้ใช้ของร้านเข้าไม่ได้อีก)</small></div>
     <div class="m-task" style="cursor:default"><span class="m-task-ico">{i:refresh-cw}</span><strong>ร้านคืนของมากกว่าขาย</strong><small>ไม่ต้องโอนคืน ระบบหักบิลรอบถัดไปให้เอง</small></div>
@@ -534,6 +539,8 @@
   <div class="m-guide-head"><span class="m-task-ico">{i:circle-help}</span><div><h2>คำถามที่พบบ่อย</h2></div></div>
   <div class="m-faqs">
     <details class="m-faq"><summary>ร้านบอกว่าโอนแล้ว แต่ในระบบยังค้าง</summary><div>ดูแท็บ "สลิปรอตรวจ" ก่อน ถ้ามี = ยังไม่ได้กดยืนยัน ถ้าไม่มี = ร้านยังไม่ได้แนบสลิปในระบบ</div></details>
+    <details class="m-faq"><summary>กรอกยอดส่วนต่างไว้แล้ว แต่บิลออกเป็นยอดเต็ม × %</summary><div>ตอนออกบิลบรรทัดนั้นถูกเลือกเป็น "คิดจากยอดเต็ม × %" (หรือกดปุ่ม "คิดจาก % ทุกรายการ") · บิลที่ยังไม่มีเงินเข้า: <span class="m-ui">แก้ไขบิล</span> → <span class="m-ui">แก้</span> ที่สินค้า → เลือก "ใช้ยอดส่วนต่างที่กรอกไว้" · ยอดที่กรอกไว้ในหน้ายอดขายยังอยู่ ไม่หายไปไหน</div></details>
+    <details class="m-faq"><summary>กรอกยอดส่วนต่างเองแล้ว ต้องกรอกยอดเต็มด้วยไหม</summary><div>ต้อง — รายงาน อันดับร้าน และค่าคอมเซล (% ของยอดเต็ม) ใช้ยอดเต็มเสมอ · ยอดส่วนต่างที่กรอกเองต้องอยู่ระหว่าง 0 ถึงยอดเต็ม (รอบคืนของที่ยอดเต็มติดลบ ยอดส่วนต่างก็ติดลบตาม)</div></details>
     <details class="m-faq"><summary>แก้ยอดขายที่ออกบิลไปแล้วไม่ได้</summary><div>ตั้งใจให้เป็นแบบนั้น ยอดในบิลต้องตรงกับที่ร้านเห็น ถ้ายังไม่มีเงินเข้า ยกเลิกบิล แก้ยอด แล้วออกใหม่</div></details>
     <details class="m-faq"><summary>ร้านไม่ได้ข้อความ Telegram</summary><div>ร้านต้องเชื่อม Telegram เองที่เมนูบัญชีของร้าน ใช้ "👁 ดูมุมมองนี้" ดูว่าเช็กลิสต์ "เชื่อม Telegram" ยังค้างอยู่ไหม</div></details>
     <details class="m-faq"><summary>มือถือที่มี Google Authenticator หาย</summary><div>เข้าด้วยรหัสสำรอง 1 ชุด แล้วตั้งใหม่ · รหัสสำรองหมด: ให้แอดมินอีกคนปลดให้ หรือให้ผู้ดูแลเซิร์ฟเวอร์ปลด</div></details>

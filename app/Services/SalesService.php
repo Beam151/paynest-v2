@@ -16,6 +16,12 @@ final class SalesService
 {
     private const EDITABLE_STATUSES = ['DRAFT', 'SUBMITTED'];
 
+    /**
+     * ยอดที่กรอกเอง (หน้ายอดขาย และตอนออกบิล) ไม่เกินนี้ — กันตัวเลขยาวผิดปกติ
+     * Money::toSatang กับเลขที่เกิน int64 พังเป็น 500 แทนที่จะบอกผู้ใช้
+     */
+    public const MAX_MANUAL_BAHT = 100_000_000;
+
     public const SELECT_ENTRY = '
         SELECT se.*,
                bp.code AS period_code, bp.start_date AS period_start, bp.end_date AS period_end,
@@ -43,6 +49,12 @@ final class SalesService
     /**
      * บันทึกยอดขายของสินค้าในรอบบิล (เรียกซ้ำด้วย periodCode + productId เดิม = แก้ไข)
      * กรอก "ยอดเงินเต็ม" ระบบคิดส่วนต่างตามเปอร์เซ็นต์ที่ตั้งไว้ให้เอง
+     *
+     * R21: กรอก "ยอดส่วนต่างที่กรอกเอง" (manualAmount) ไว้ด้วยก็ได้ — ยอดบิลที่คิดมาแล้ว ไม่ต้องคิดจาก %
+     *   ไม่ส่งคีย์มา = ใช้ค่าเดิมของรายการ (รายการใหม่ = ไม่มี) · null = ล้าง · ตัวเลข = ตั้งใหม่
+     *   ยอดเต็มยังบังคับกรอก — รายงาน อันดับ และค่าคอมเซล (% ของยอดเต็ม) ใช้ยอดเต็มเสมอ
+     * ค่าที่ใช้ออกบิล (bill_mode + commission_amount_satang) ตั้งเป็นค่าตั้งต้นของหน้ายอดขายทุกครั้งที่บันทึก:
+     *   มียอดที่กรอกไว้ = MANUAL ตามยอดนั้น · ไม่มี = PCT (ยอดเต็ม × % ของสินค้า) — ตอนออกบิลเปลี่ยนรายบรรทัดได้
      */
     public static function upsert(array $input, array $user): array
     {
@@ -64,8 +76,7 @@ final class SalesService
         // % มาจากสินค้าชิ้นนั้น แล้วเก็บ snapshot ไว้กับรายการนี้ (แก้ % ภายหลังไม่ย้อนไปกระทบยอดเก่า)
         $pctBp = AssignmentService::effectiveCommissionBp($product);
         // ยอดติดลบได้ — ใช้ตอนมีการคืนสินค้า หรือปรับยอดที่กรอกเกินในรอบก่อน
-        $grossSatang      = Money::toSatang($input['grossAmount'] ?? null, 'grossAmount');
-        $commissionSatang = Money::commissionOf($grossSatang, $pctBp);
+        $grossSatang = Money::toSatang($input['grossAmount'] ?? null, 'grossAmount');
 
         $existing = Db::one('SELECT * FROM sales_entries WHERE period_id = ? AND product_id = ?', [$period['id'], $product['id']]);
         if ($existing !== null) {
@@ -75,23 +86,35 @@ final class SalesService
             if ($existing['status'] === 'INVOICED') {
                 throw ApiException::conflict('รายการนี้ถูกออกใบเรียกเก็บแล้ว ต้องยกเลิกใบเรียกเก็บก่อนจึงจะแก้ไขได้');
             }
+        }
+
+        $manualSatang = self::resolveManual($input, $existing, $grossSatang, (string) $product['sku']);
+        // ค่าตั้งต้นของหน้ายอดขาย: มียอดที่กรอกไว้ = ใช้ยอดนั้น · ไม่มี = ยอดเต็ม × %
+        $billMode         = $manualSatang === null ? 'PCT' : 'MANUAL';
+        $commissionSatang = $manualSatang ?? Money::commissionOf($grossSatang, $pctBp);
+
+        if ($existing !== null) {
+            $oldManual = $existing['manual_amount_satang'] === null ? null : (int) $existing['manual_amount_satang'];
+            $oldMode   = $existing['bill_mode'] ?? 'PCT';
             /*
-             * บันทึกยอดใหม่ = เริ่มจากค่าตั้งต้นทั้งหมด: % ของสินค้า · วิธีคิดยอด "คิดตาม %"
-             * ยอด "กรอกเอง" ที่เลือกตอนออกบิลผูกกับยอดเดิม — ยอดเปลี่ยนแล้วต้องเลือกใหม่ตอนออกบิล
+             * บันทึกยอดใหม่ = เริ่มจากค่าตั้งต้นทั้งหมด: % ของสินค้า · วิธีคิดตามยอดที่กรอกไว้ (มี = ใช้ยอดนั้น · ไม่มี = คิดตาม %)
+             * วิธีคิดที่เลือกตอนออกบิลผูกกับยอดเดิม — บันทึกยอดใหม่แล้วต้องเลือกใหม่ตอนออกบิล
              * (มาถึงตรงนี้ได้เฉพาะรายการที่ยังไม่ขึ้นบิล คือยังไม่เคยออก หรือบิลเดิมถูกยกเลิกแล้ว)
              * ค่าคอมเซลไม่ได้เก็บที่รายการนี้แล้ว — อยู่ในบิลค่าคอม (sales_commission_lines) ซึ่งเก็บยอดเต็ม ณ ตอนทำบิลไว้เอง
              */
             Db::exec(
-                "UPDATE sales_entries
+                'UPDATE sales_entries
                     SET units = ?, gross_amount_satang = ?, commission_pct_bp = ?, commission_amount_satang = ?,
-                        bill_mode = 'PCT',
+                        manual_amount_satang = ?, bill_mode = ?,
                         note = ?, assignment_id = ?, updated_by_user_id = ?, updated_at = UTC_TIMESTAMP()
-                  WHERE id = ?",
+                  WHERE id = ?',
                 [
                     array_key_exists('units', $input) ? $input['units'] : $existing['units'],
                     $grossSatang,
                     $pctBp,
                     $commissionSatang,
+                    $manualSatang,
+                    $billMode,
                     array_key_exists('note', $input) ? $input['note'] : $existing['note'],
                     $assignment['id'],
                     $user['id'],
@@ -99,10 +122,16 @@ final class SalesService
                 ],
             );
             Audit::write((int) $user['id'], 'entry.update', 'sales_entry', (int) $existing['id'], [
-                'grossSatang' => $grossSatang,
-                'pctBp'       => $pctBp,
-                // ให้ประวัติบอกได้ว่ายอดกรอกเองที่เคยเลือกไว้ถูกล้างกลับเป็น "คิดตาม %" เพราะการแก้ครั้งนี้
-                'modesReset'  => ($existing['bill_mode'] ?? 'PCT') !== 'PCT',
+                'grossSatang'  => $grossSatang,
+                'pctBp'        => $pctBp,
+                'manualSatang' => $manualSatang,
+                /*
+                 * ให้ประวัติบอกได้ว่าวิธีคิดที่เลือกไว้ตอนออกบิล (บิลเดิมถูกยกเลิก) ถูกล้างกลับเป็นค่าตั้งต้นของหน้ายอดขาย
+                 * เพราะการแก้ครั้งนี้: กรอกยอดเองตอนออกบิล (ไม่ใช่ยอดที่กรอกไว้) หรือเลือกคิดตาม % ทั้งที่มียอดที่กรอกไว้
+                 */
+                'modesReset' => $oldMode === 'MANUAL'
+                    ? $oldManual === null || (int) $existing['commission_amount_satang'] !== $oldManual
+                    : $oldManual !== null,
             ]);
 
             return self::get((int) $existing['id'], $user);
@@ -111,18 +140,93 @@ final class SalesService
         $id = Db::insert(
             "INSERT INTO sales_entries
                (period_id, franchise_id, product_id, assignment_id, units, gross_amount_satang,
-                commission_pct_bp, commission_amount_satang, note, status, created_by_user_id, updated_by_user_id,
-                created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP())",
+                commission_pct_bp, commission_amount_satang, manual_amount_satang, bill_mode,
+                note, status, created_by_user_id, updated_by_user_id, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP())",
             [
                 $period['id'], $assignment['franchise_id'], $product['id'], $assignment['id'],
-                $input['units'] ?? null, $grossSatang, $pctBp, $commissionSatang,
+                $input['units'] ?? null, $grossSatang, $pctBp, $commissionSatang, $manualSatang, $billMode,
                 $input['note'] ?? null, $user['id'], $user['id'],
             ],
         );
-        Audit::write((int) $user['id'], 'entry.create', 'sales_entry', $id, ['periodCode' => $period['code'], 'productId' => (int) $product['id']]);
+        Audit::write((int) $user['id'], 'entry.create', 'sales_entry', $id, [
+            'periodCode'   => $period['code'],
+            'productId'    => (int) $product['id'],
+            'manualSatang' => $manualSatang,
+        ]);
 
         return self::get($id, $user);
+    }
+
+    /* ── ยอดส่วนต่างที่กรอกเอง (R21) ─────────────────────────────── */
+
+    /**
+     * ยอดส่วนต่างที่กรอกเองของรายการหลังบันทึกครั้งนี้ (สตางค์ · null = ไม่มี)
+     *   ไม่ส่งคีย์มา = ค่าเดิมของรายการ · null = ล้าง · ตัวเลข = ตั้งใหม่
+     * ตรวจกับยอดเต็ม "ใหม่" เสมอ — แก้ยอดเต็มจนยอดที่กรอกไว้เกิน/คนละเครื่องหมาย ต้องให้คนแก้หรือล้าง ห้ามเก็บค่าที่ใช้ไม่ได้ไว้เงียบ ๆ
+     */
+    private static function resolveManual(array $input, ?array $existing, int $grossSatang, string $sku): ?int
+    {
+        if (! array_key_exists('manualAmount', $input)) {
+            $kept = $existing['manual_amount_satang'] ?? null;
+            if ($kept === null) {
+                return null;
+            }
+            $kept = (int) $kept;
+            if (! self::manualFits($kept, $grossSatang)) {
+                throw ApiException::badRequest(
+                    "สินค้า {$sku}: ยอดเงินเต็มใหม่ " . Money::fmtSatang($grossSatang) . ' บาท ใช้กับยอดส่วนต่างที่กรอกไว้ '
+                    . Money::fmtSatang($kept) . ' บาท ไม่ได้ (ยอดส่วนต่างต้องอยู่ระหว่าง 0 ถึงยอดเงินเต็ม) — '
+                    . 'แก้ช่อง "ยอดส่วนต่างที่กรอกเอง" หรือล้างช่องนั้นแล้วบันทึกใหม่',
+                );
+            }
+
+            return $kept;
+        }
+        if ($input['manualAmount'] === null) {
+            return null;
+        }
+        $manual = self::manualSatang($input['manualAmount'], $sku, 'ยอดส่วนต่างที่กรอกเอง', 'manualAmount');
+        if (! self::manualFits($manual, $grossSatang)) {
+            throw ApiException::badRequest(
+                "สินค้า {$sku}: ยอดส่วนต่างที่กรอกเองต้องอยู่ระหว่าง 0 ถึงยอดเงินเต็ม (" . Money::fmtSatang($grossSatang) . ' บาท) '
+                . 'และเป็นบวก/ลบตามยอดเงินเต็ม',
+            );
+        }
+
+        return $manual;
+    }
+
+    /**
+     * จำนวนเงินที่กรอกเอง → สตางค์ (ช่อง "ยอดส่วนต่างที่กรอกเอง" ของหน้ายอดขาย และ "กรอกยอดเอง" ตอนออกบิล)
+     * กันตัวเลขยาวผิดปกติก่อนแปลง — เกิน int64 แล้ว Money::toSatang พังเป็น 500
+     *
+     * @param string $what  ชื่อช่องในข้อความ error ("จำนวนเงิน" / "ยอดส่วนต่างที่กรอกเอง")
+     * @param string $field ชื่อช่องสำหรับข้อความรูปแบบผิดของ Money::toSatang
+     */
+    public static function manualSatang(mixed $amount, string $sku, string $what, string $field): int
+    {
+        $tooBig = "สินค้า {$sku}: {$what}เกินกำหนด (ไม่เกิน " . Money::fmt(self::MAX_MANUAL_BAHT) . ' บาท)';
+        $raw    = is_string($amount) ? str_replace(',', '', trim($amount)) : $amount;
+        if (is_numeric($raw) && abs((float) $raw) > self::MAX_MANUAL_BAHT) {
+            throw ApiException::badRequest($tooBig);
+        }
+        $satang = Money::toSatang($amount, $field);
+        if (abs($satang) > self::MAX_MANUAL_BAHT * 100) {
+            throw ApiException::badRequest($tooBig);
+        }
+
+        return $satang;
+    }
+
+    /**
+     * ยอดส่วนต่างที่กำหนดเองใช้กับยอดเต็มนี้ได้ไหม: 0 ได้เสมอ · ไม่งั้นเครื่องหมายเดียวกับยอดเต็ม และไม่เกินยอดเต็ม
+     * กันพิมพ์ "-" หลงบนบรรทัดขายปกติ — ยอดบิลติดลบกลายเป็นเครดิตที่เราติดค้างร้านจริง ๆ
+     * กติกาเดียวกับ CHECK ck_entries_manual ของฐานข้อมูล (migration 000005)
+     */
+    public static function manualFits(int $amount, int $grossSatang): bool
+    {
+        return $amount === 0 || (($amount > 0) === ($grossSatang > 0) && abs($amount) <= abs($grossSatang));
     }
 
     public static function list(array $filters, array $user): array
@@ -346,10 +450,19 @@ final class SalesService
             'units'             => $row['units'] === null ? null : (int) $row['units'],
             'grossAmount'       => Money::toBaht($row['gross_amount_satang']),
             'commissionPct'     => Money::bpToPct($row['commission_pct_bp']),
+            // ยอดที่ใช้ออกบิลจริง (ตามวิธีคิดใน billMode)
             'commissionAmount'  => Money::toBaht($row['commission_amount_satang']),
             // PCT = ส่วนต่างคิดจาก % · MANUAL = ส่วนกลางกำหนดยอดเอง (% ด้านบนเป็นแค่ค่าเดิมที่เก็บไว้)
             // ห้ามใส่ข้อมูลค่าคอมเซลที่นี่ — ร้านเห็นบรรทัดบิลผ่านตัวนี้ (ค่าคอมอยู่ในบิลค่าคอมแยกต่างหาก)
             'billMode'          => $row['bill_mode'] ?? 'PCT',
+            /*
+             * สองตัวเลือกตอนออกบิล (R21) ให้หน้าเว็บโชว์คู่กันได้โดยไม่ต้องคิดเอง
+             *   manualAmount = ยอดส่วนต่างที่กรอกไว้ที่หน้ายอดขาย (null = ไม่ได้กรอก) — ส่วนกลางเท่านั้น
+             *                  InvoiceService::get ถอดออกจากบรรทัดบิลที่ร้านเห็น (ยอดที่ไม่ได้เลือกใช้ไม่ใช่เรื่องของร้าน)
+             *   pctAmount    = ยอดที่ได้ถ้าเลือก "คิดจากยอดเต็ม × %" (ยอดเต็ม × % ที่เก็บไว้กับรายการ)
+             */
+            'manualAmount'      => ($row['manual_amount_satang'] ?? null) === null ? null : Money::toBaht($row['manual_amount_satang']),
+            'pctAmount'         => Money::toBaht(Money::commissionOf((int) $row['gross_amount_satang'], (int) $row['commission_pct_bp'])),
             'isGroup'           => $isGroup,
             'components'        => $components ?? [],
             'netAmount'         => Money::toBaht((int) $row['gross_amount_satang'] - (int) $row['commission_amount_satang']),

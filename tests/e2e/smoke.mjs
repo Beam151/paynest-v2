@@ -2699,7 +2699,8 @@ section('วิธีคิดยอดรายสินค้าในบิ�
     ['บรรทัดที่ไม่ได้เลือกออกบิล ส่งวิธีคิดมาไม่ได้', [{ entryId: le3.id, mode: 'PCT' }]],
     ['ส่งวิธีคิดของบรรทัดเดียวกันซ้ำไม่ได้', [{ entryId: le1.id, mode: 'PCT' }, { entryId: le1.id, mode: 'MANUAL', amount: 100 }]],
     ['"คิดตาม %" แต่ส่งจำนวนเงินมาด้วย ไม่รับ', [{ entryId: le1.id, mode: 'PCT', amount: 100 }]],
-    ['"กรอกยอดเอง" แต่ไม่ใส่จำนวนเงิน ไม่รับ', [{ entryId: le1.id, mode: 'MANUAL' }]],
+    // รุ่น 2.3.0: MANUAL ไม่ใส่จำนวนเงิน = ใช้ยอดส่วนต่างที่กรอกไว้ในหน้ายอดขาย — LINE-1 ไม่ได้กรอกไว้ จึงยังไม่รับ
+    ['"กรอกยอดเอง" แต่ไม่ใส่จำนวนเงิน (และไม่ได้กรอกยอดส่วนต่างไว้ในหน้ายอดขาย) ไม่รับ', [{ entryId: le1.id, mode: 'MANUAL' }]],
     ['"กรอกยอดเอง" แต่ส่ง % มาด้วย ไม่รับ', [{ entryId: le1.id, mode: 'MANUAL', amount: 100, pct: 5 }]],
     ['กรอกยอดเกินยอดเงินเต็มไม่ได้', [{ entryId: le1.id, mode: 'MANUAL', amount: 10000.01 }]],
     ['กรอกยอดติดลบบนยอดขายปกติไม่ได้', [{ entryId: le1.id, mode: 'MANUAL', amount: -1 }]],
@@ -3939,6 +3940,207 @@ section('เซล: ชื่อยาว · ปิดดีลที่ยั�
     lreissue.status === 201 && lreissue.body.id !== linv.id && !lcand.items?.some((i) => i.entryId === lentry.id)
       && lcand.fixed?.length === 0 && lagent.uncommissionedCount === 0,
     { items: lcand.items, fixed: lcand.fixed, count: lagent.uncommissionedCount });
+}
+
+/* ── ยอดส่วนต่างที่กรอกเอง (R21 · รุ่น 2.3.0) ────────────────────
+ * หน้ายอดขายมีช่องที่สอง "ยอดส่วนต่างที่กรอกเอง" (manualAmount) — ยอดเต็ม × % ยังอยู่ ตอนออกบิลเลือกได้ทีละบรรทัด
+ * manual_amount_satang = ค่าของหน้ายอดขาย · bill_mode + commission_amount_satang = ยอดที่ใช้ออกบิลจริง
+ */
+section('ยอดส่วนต่างที่กรอกเองในหน้ายอดขาย (เลือกตอนออกบิล)');
+{
+  const ms = await api('POST', '/api/franchises', { token: admin, body: { username: 'manualshop', password: 'manualshop-pass-1' } });
+  const mfid = ms.body.franchise?.id;
+  const mtok = (await shopLogin('manualshop', 'manualshop-pass-1', mfid)).body.token;
+  const mk = async (sku, pct) => (await api('POST', '/api/products', {
+    token: admin, body: { sku, name: `สินค้ายอดกรอกเอง ${sku}`, commissionPct: pct, franchiseId: mfid, startDate: '2026-01-01' },
+  })).body.product;
+  const [m1, m2, m3, m4, m5] = [await mk('MAN-1', 12.5), await mk('MAN-2', 10), await mk('MAN-3', 20), await mk('MAN-4', 10), await mk('MAN-5', 10)];
+  const MP = '2029-09-H1';
+  const up = (body, token = admin) => api('POST', '/api/sales-entries', { token, body: { periodCode: MP, ...body } });
+  const entryRow = (id) => db.prepare('SELECT gross_amount_satang AS g, manual_amount_satang AS m, bill_mode AS mode, commission_amount_satang AS c FROM sales_entries WHERE id = ?').get(id);
+  const lastAudit = (action, id) => JSON.parse(db.prepare('SELECT detail FROM audit_logs WHERE action = ? AND entity_id = ? ORDER BY id DESC LIMIT 1').get(action, id)?.detail ?? '{}');
+  const readyOf = async () => (await api('GET', `/api/invoices/readiness?periodCode=${MP}`, { token: admin })).body.items?.find((i) => i.franchiseId === mfid);
+  const lineOf = (body, id) => body?.lines?.find((l) => l.id === id);
+
+  // บันทึกยอด: ยอดเต็มยังบังคับ · ช่องที่สองไม่บังคับ
+  const e1 = (await up({ productId: m1?.id, grossAmount: 100000, manualAmount: 8000 })).body;
+  check('กรอกยอดส่วนต่างเอง → ออกบิลจะใช้ยอดนั้น (MANUAL 8,000) · ยังบอกยอดเต็ม × % (100,000 × 12.5% = 12,500) ให้เทียบ',
+    e1.billMode === 'MANUAL' && e1.commissionAmount === 8000 && e1.manualAmount === 8000 && e1.pctAmount === 12500
+      && e1.grossAmount === 100000 && e1.netAmount === 92000, e1);
+  const e3 = (await up({ productId: m3?.id, grossAmount: 4000 })).body;
+  check('ไม่กรอกช่องที่สอง → คิดจากยอดเต็ม × % แบบเดิม (PCT 800 · manualAmount = null)',
+    e3.billMode === 'PCT' && e3.commissionAmount === 800 && e3.pctAmount === 800 && e3.manualAmount === null, e3);
+  check('ประวัติการบันทึกยอดจดยอดที่กรอกเองไว้ (entry.create · manualSatang)',
+    lastAudit('entry.create', e1.id).manualSatang === 800000 && lastAudit('entry.create', e3.id).manualSatang === null);
+
+  // กติกาเดียวกับ "กรอกยอดเอง" ตอนออกบิล — ผิดแล้วไม่มีรายการถูกบันทึก
+  const bad = [
+    ['ยอดที่กรอกเองติดลบบนยอดขายปกติไม่ได้', { grossAmount: 20000, manualAmount: -1 }],
+    ['ยอดที่กรอกเองเกินยอดเต็มไม่ได้', { grossAmount: 20000, manualAmount: 20000.01 }],
+    ['ยอดเต็มติดลบ (คืนของ) กรอกยอดเองเป็นบวกไม่ได้', { grossAmount: -500, manualAmount: 100 }],
+    ['ยอดเต็มเป็น 0 กรอกยอดเองอย่างอื่นนอกจาก 0 ไม่ได้', { grossAmount: 0, manualAmount: 1 }],
+    ['ยอดที่กรอกเองเกิน 100 ล้านบาทไม่ได้ (แม้ยอดเต็มสูงกว่า)', { grossAmount: 200000000, manualAmount: 100000000.01 }],
+    ['ตัวเลขยาวผิดปกติ → 400 บอกว่าเกินกำหนด (ไม่ใช่ระบบพัง)', { grossAmount: 20000, manualAmount: 1e15 }],
+  ];
+  for (const [label, body] of bad) {
+    const r = await up({ productId: m2?.id, ...body });
+    check(label, r.status === 400 && /ยอดส่วนต่างที่กรอกเอง/.test(r.body?.error?.message ?? ''), r.body);
+  }
+  check('ตรวจไม่ผ่านแล้วไม่มีรายการถูกบันทึก',
+    db.prepare('SELECT COUNT(*) AS n FROM sales_entries WHERE product_id = ?').get(m2?.id).n === 0);
+  const neg = await up({ productId: m4?.id, grossAmount: -1000, manualAmount: -300 });
+  const zero = await up({ productId: m4?.id, grossAmount: -1000, manualAmount: 0 });
+  check('ยอดเต็มติดลบกรอกยอดเองติดลบได้ (ไม่เกินยอดเต็ม) · กรอก 0 ได้เสมอ',
+    neg.status === 201 && neg.body.billMode === 'MANUAL' && neg.body.commissionAmount === -300
+      && zero.status === 201 && zero.body.commissionAmount === 0 && zero.body.manualAmount === 0, [neg.body, zero.body]);
+  await api('DELETE', `/api/sales-entries/${zero.body.id}`, { token: admin });
+
+  // ไม่ส่งคีย์ = คงค่าเดิม · แก้ยอดเต็มจนยอดที่กรอกไว้ใช้ไม่ได้ = 400 (ไม่ล้างให้เงียบ ๆ)
+  const keep = await up({ productId: m1?.id, grossAmount: 90000 });
+  check('แก้ยอดเต็มโดยไม่ส่งช่องที่สอง → ยอดที่กรอกไว้ยังอยู่ (MANUAL 8,000 · ยอดเต็ม × % = 11,250)',
+    keep.status === 201 && keep.body.manualAmount === 8000 && keep.body.billMode === 'MANUAL'
+      && keep.body.commissionAmount === 8000 && keep.body.pctAmount === 11250, keep.body);
+  const shrink = await up({ productId: m1?.id, grossAmount: 5000 });
+  const flip = await up({ productId: m1?.id, grossAmount: -5000 });
+  check('แก้ยอดเต็มจนยอดที่กรอกไว้เกิน/คนละเครื่องหมาย → 400 บอกให้แก้หรือล้างช่องยอดส่วนต่าง · รายการไม่เปลี่ยน',
+    shrink.status === 400 && /ยอดส่วนต่างที่กรอกเอง/.test(shrink.body?.error?.message ?? '') && flip.status === 400
+      && Number(entryRow(e1.id).g) === 9000000 && Number(entryRow(e1.id).m) === 800000, [shrink.body, flip.body]);
+  const both = await up({ productId: m1?.id, grossAmount: 5000, manualAmount: 4000 });
+  check('แก้ยอดเต็มพร้อมยอดที่กรอกเองในครั้งเดียวได้', both.status === 201 && both.body.commissionAmount === 4000 && both.body.grossAmount === 5000, both.body);
+  await up({ productId: m1?.id, grossAmount: 90000, manualAmount: 8000 });
+
+  const e2 = (await up({ productId: m2?.id, grossAmount: 20000, manualAmount: 1500 })).body;
+  const cleared = await up({ productId: m2?.id, grossAmount: 20000, manualAmount: null });
+  check('ล้างช่องที่สอง (null) → กลับไปคิดจากยอดเต็ม × % (20,000 × 10% = 2,000)',
+    e2.billMode === 'MANUAL' && cleared.status === 201 && cleared.body.billMode === 'PCT' && cleared.body.commissionAmount === 2000
+      && cleared.body.manualAmount === null && entryRow(e2.id).m === null, cleared.body);
+  check('ประวัติการแก้ยอดจดว่าล้างยอดที่กรอกเอง (entry.update · manualSatang = null)',
+    'manualSatang' in lastAudit('entry.update', e2.id) && lastAudit('entry.update', e2.id).manualSatang === null, lastAudit('entry.update', e2.id));
+
+  const bulk = await api('POST', '/api/sales-entries/bulk', {
+    token: admin,
+    body: { items: [
+      { periodCode: MP, productId: m2?.id, grossAmount: 20000, manualAmount: 1500 },
+      { periodCode: MP, productId: m3?.id, grossAmount: 4000, manualAmount: null },
+      { periodCode: MP, productId: m5?.id, grossAmount: 3000, manualAmount: 3000.01 },
+    ] },
+  });
+  const bsaved = (pid) => bulk.body?.saved?.find((s) => s.productId === pid);
+  check('บันทึกยอดทั้งหมด: ส่งยอดที่กรอกเองรายแถวได้ · แถวที่ผิดบอกเป็นรายแถว ไม่ล้มทั้งชุด (207)',
+    bulk.status === 207 && bulk.body.saved?.length === 2 && bulk.body.errors?.length === 1 && bulk.body.errors[0].productId === m5?.id
+      && bsaved(m2?.id)?.billMode === 'MANUAL' && bsaved(m2?.id)?.commissionAmount === 1500
+      && bsaved(m3?.id)?.billMode === 'PCT' && bsaved(m3?.id)?.manualAmount === null, bulk.body);
+  /*
+   * ทางบันทึกทั้งหมดต้องแยก "ไม่ส่งคีย์" กับ null แบบเดียวกับทีละแถว — ข้อบนส่ง null ให้แถวที่ไม่มียอดที่กรอกไว้อยู่แล้ว
+   * จึงยังไม่พิสูจน์ว่า null ล้างได้จริง (ถ้า null ถูกตีเป็น "ไม่ส่ง" หน้าเว็บจะลบยอดที่กรอกไว้ไม่ได้เลย และยอดเก่ากลับมาเงียบ ๆ)
+   */
+  const bulkKeep = await api('POST', '/api/sales-entries/bulk', {
+    token: admin,
+    body: { items: [
+      { periodCode: MP, productId: m2?.id, grossAmount: 20000 },
+      { periodCode: MP, productId: m1?.id, grossAmount: 90000, manualAmount: null },
+    ] },
+  });
+  const bkSaved = (pid) => bulkKeep.body?.saved?.find((s) => s.productId === pid);
+  check('บันทึกยอดทั้งหมด: ไม่ส่งคีย์ = คงยอดที่กรอกไว้ (MAN-2 1,500) · null = ล้างจริงกลับเป็น % (MAN-1 90,000 × 12.5% = 11,250)',
+    bulkKeep.status === 201 && bkSaved(m2?.id)?.billMode === 'MANUAL' && bkSaved(m2?.id)?.manualAmount === 1500
+      && bkSaved(m1?.id)?.billMode === 'PCT' && bkSaved(m1?.id)?.commissionAmount === 11250 && bkSaved(m1?.id)?.manualAmount === null
+      && entryRow(e1.id).m === null, bulkKeep.body);
+  const bulkShrink = await api('POST', '/api/sales-entries/bulk', {
+    token: admin, body: { items: [{ periodCode: MP, productId: m2?.id, grossAmount: 1000 }] },
+  });
+  check('บันทึกยอดทั้งหมด: แก้ยอดเต็มจนยอดที่กรอกไว้เกิน → แถวนั้นไม่ผ่าน (207 + ข้อความยอดส่วนต่าง) · รายการไม่เปลี่ยน',
+    bulkShrink.status === 207 && bulkShrink.body.saved?.length === 0
+      && /ยอดส่วนต่างที่กรอกเอง/.test(bulkShrink.body.errors?.[0]?.message ?? '')
+      && Number(entryRow(e2.id).g) === 2000000 && Number(entryRow(e2.id).m) === 150000, bulkShrink.body);
+  await up({ productId: m1?.id, grossAmount: 90000, manualAmount: 8000 });
+
+  const shopUp =await up({ productId: m1?.id, grossAmount: 90000, manualAmount: 1 }, mtok);
+  const shopBulk = await api('POST', '/api/sales-entries/bulk', {
+    token: mtok, body: { items: [{ periodCode: MP, productId: m1?.id, grossAmount: 90000, manualAmount: 1 }] },
+  });
+  check('ร้านกรอกยอดส่วนต่างเองไม่ได้ (403 ทั้งทีละแถวและทั้งหมด) · ยอดที่กรอกไว้ไม่ขยับ',
+    shopUp.status === 403 && shopBulk.status === 403 && Number(entryRow(e1.id).m) === 800000, [shopUp.status, shopBulk.status]);
+  let dbRejected = false;
+  try { db.prepare('UPDATE sales_entries SET manual_amount_satang = gross_amount_satang + 1 WHERE id = ?').run(e1.id); } catch { dbRejected = true; }
+  check('ฐานข้อมูลกันยอดที่กรอกเองเกินยอดเต็มอีกชั้น (CHECK ck_entries_manual)', dbRejected && Number(entryRow(e1.id).m) === 800000);
+
+  let ready = await readyOf();
+  check('หน้าพร้อมออกบิลนับรายการที่ใช้ยอดที่กรอกไว้ (manualCount 2) · ยอดรอออกบิลใช้ยอดนั้น (8,000 + 1,500 + 800 = 10,300)',
+    ready?.manualCount === 2 && ready.pendingCommission === 10300 && ready.status === 'READY', ready);
+
+  // ออกบิล: ไม่ส่งวิธีคิด = ยอดที่กรอกไว้ · เลือก % = ยอดเต็ม × %
+  const gen = await api('POST', '/api/invoices/generate', {
+    token: admin, body: { franchiseId: mfid, periodCode: MP, entryIds: [e1.id, e2.id], lines: [{ entryId: e1.id, mode: 'PCT' }] },
+  });
+  const inv = gen.body?.id;
+  check('ออกบิล: บรรทัดที่ไม่เลือกวิธีคิดใช้ยอดที่กรอกไว้เป็นค่าตั้งต้น (MAN-2 → 1,500)',
+    gen.status === 201 && lineOf(gen.body, e2.id)?.billMode === 'MANUAL' && lineOf(gen.body, e2.id)?.commissionAmount === 1500, gen.body);
+  check('ออกบิล: เลือก "คิดจากยอดเต็ม × %" ให้บรรทัดที่กรอกยอดไว้ → 90,000 × 12.5% = 11,250 (รวม 12,750)',
+    lineOf(gen.body, e1.id)?.billMode === 'PCT' && lineOf(gen.body, e1.id)?.commissionAmount === 11250 && gen.body?.commissionTotal === 12750, gen.body);
+  check('เลือกวิธีคิดตอนออกบิลไม่แก้ยอดที่กรอกไว้ในหน้ายอดขาย · บรรทัดบิลของส่วนกลางบอกทั้งสองยอด',
+    Number(entryRow(e1.id).m) === 800000 && lineOf(gen.body, e1.id)?.manualAmount === 8000 && lineOf(gen.body, e1.id)?.pctAmount === 11250,
+    lineOf(gen.body, e1.id));
+
+  const toPreset = await api('PATCH', `/api/invoices/${inv}/lines/${e1.id}`, { token: admin, body: { mode: 'MANUAL' } });
+  check('แก้บรรทัดเป็น "กรอกยอดเอง" โดยไม่ใส่จำนวนเงิน = ใช้ยอดที่กรอกไว้ 8,000 (รวม 9,500) · ประวัติบอกว่าใช้ยอดที่กรอกไว้',
+    toPreset.status === 200 && lineOf(toPreset.body, e1.id)?.billMode === 'MANUAL' && lineOf(toPreset.body, e1.id)?.commissionAmount === 8000
+      && toPreset.body.commissionTotal === 9500 && lastAudit('invoice.line.update', inv).preset === true, toPreset.body);
+  const backPct = await api('PATCH', `/api/invoices/${inv}/lines/${e1.id}`, { token: admin, body: { mode: 'PCT' } });
+  check('สลับกลับเป็น % ได้ (11,250 · รวม 12,750) · ยอดที่กรอกไว้ยังอยู่',
+    backPct.status === 200 && lineOf(backPct.body, e1.id)?.commissionAmount === 11250 && backPct.body.commissionTotal === 12750
+      && Number(entryRow(e1.id).m) === 800000, backPct.body);
+  const typed = await api('PATCH', `/api/invoices/${inv}/lines/${e2.id}`, { token: admin, body: { mode: 'MANUAL', amount: 1000 } });
+  check('พิมพ์จำนวนเงินอื่นตอนแก้บรรทัด → บิลใช้ 1,000 แต่ยอดที่กรอกไว้ในหน้ายอดขายยังเป็น 1,500',
+    typed.status === 200 && lineOf(typed.body, e2.id)?.commissionAmount === 1000 && lineOf(typed.body, e2.id)?.manualAmount === 1500
+      && Number(entryRow(e2.id).m) === 150000 && lastAudit('invoice.line.update', inv).preset === false, lineOf(typed.body, e2.id));
+
+  const noPreset = await api('POST', `/api/invoices/${inv}/lines`, {
+    token: admin, body: { entryIds: [e3.id], lines: [{ entryId: e3.id, mode: 'MANUAL' }] },
+  });
+  check('"กรอกยอดเอง" ไม่ใส่จำนวนเงิน กับรายการที่ไม่ได้กรอกยอดไว้ → 400 ต้องใส่จำนวนเงิน (เหมือนเดิม)',
+    noPreset.status === 400 && /ต้องใส่จำนวนเงิน/.test(noPreset.body?.error?.message ?? ''), noPreset.body);
+  const e5 = (await up({ productId: m5?.id, grossAmount: 3000, manualAmount: 250 })).body;
+  const added = await api('POST', `/api/invoices/${inv}/lines`, {
+    token: admin, body: { entryIds: [e5.id, e3.id], lines: [{ entryId: e5.id, mode: 'MANUAL' }] },
+  });
+  check('เพิ่มรายการเข้าบิล: "กรอกยอดเอง" ไม่ใส่จำนวนเงิน = ยอดที่กรอกไว้ 250 · รายการที่ไม่ได้กรอกคิดตาม % 800 (รวม 13,300)',
+    added.status === 200 && lineOf(added.body, e5.id)?.commissionAmount === 250 && lineOf(added.body, e3.id)?.billMode === 'PCT'
+      && lineOf(added.body, e3.id)?.commissionAmount === 800 && added.body.commissionTotal === 13300, added.body);
+
+  const shopView = await api('GET', `/api/invoices/${inv}`, { token: mtok });
+  check('ร้านเห็นบรรทัดที่กำหนดยอดเป็น MANUAL ตามยอดที่ใช้จริง แต่ไม่เห็นยอดที่กรอกไว้ในหน้ายอดขาย (ไม่มี manualAmount)',
+    shopView.status === 200 && lineOf(shopView.body, e2.id)?.billMode === 'MANUAL' && lineOf(shopView.body, e2.id)?.commissionAmount === 1000
+      && shopView.body.lines?.length === 4 && shopView.body.lines.every((l) => !('manualAmount' in l)), shopView.body?.lines);
+
+  // ยกเลิกบิล → รายการคงวิธีที่เลือกตอนออกบิล · บันทึกยอดใหม่ = กลับไปใช้ค่าตั้งต้นของหน้ายอดขาย
+  await api('POST', `/api/invoices/${inv}/void`, { token: admin, body: { reason: 'ทดสอบยอดส่วนต่างที่กรอกเอง' } });
+  const afterVoid = (await api('GET', `/api/sales-entries/${e1.id}`, { token: admin })).body;
+  ready = await readyOf();
+  check('ยกเลิกบิลแล้ว รายการคงวิธีที่เลือกตอนออกบิล (MAN-1 = % 11,250) · นับเฉพาะรายการที่ใช้ยอดที่กรอกไว้ตรงตัว (MAN-5 → 1)',
+    afterVoid.billMode === 'PCT' && afterVoid.commissionAmount === 11250 && afterVoid.manualAmount === 8000 && ready?.manualCount === 1,
+    { afterVoid, ready });
+  const rerec = await up({ productId: m1?.id, grossAmount: 90000 });
+  check('บันทึกยอดใหม่หลังยกเลิกบิล → กลับไปใช้ยอดที่กรอกไว้ (MANUAL 8,000) · ประวัติบอกว่าวิธีที่เลือกตอนออกบิลถูกล้าง',
+    rerec.status === 201 && rerec.body.billMode === 'MANUAL' && rerec.body.commissionAmount === 8000
+      && lastAudit('entry.update', e1.id).modesReset === true, rerec.body);
+  await up({ productId: m2?.id, grossAmount: 20000 });
+  ready = await readyOf();
+  check('พร้อมออกบิลอีกครั้ง: manualCount 3 · ยอดรอออกบิล 8,000 + 1,500 + 250 + 800 = 10,550',
+    ready?.manualCount === 3 && ready.pendingCommission === 10550 && ready.status === 'READY', ready);
+
+  // ออกบิลหลายร้านพร้อมกันไม่มีที่เลือกวิธีคิด → ใช้ยอดที่กรอกไว้เอง · ค่าคอมเซลไม่เกี่ยวกับยอดที่กรอกเอง (คิดจากยอดเต็ม)
+  const sm = (await api('POST', '/api/sales-agents', { token: admin, body: { username: 'salemanual', password: 'salemanual-pass-1', name: 'เซลยอดกรอกเอง' } })).body.agent;
+  await api('POST', '/api/sales-agents/links', { token: admin, body: { salesAgentId: sm?.id, items: [{ productId: m1?.id, commissionPct: 5 }] } });
+  const bulkIssue = await api('POST', '/api/invoices/generate-bulk', { token: admin, body: { periodCode: MP, franchiseIds: [mfid] } });
+  const binv = (await api('GET', `/api/invoices/${bulkIssue.body?.created?.[0]?.invoiceId}`, { token: admin })).body;
+  check('ออกบิลหลายร้านพร้อมกันใช้ยอดที่กรอกไว้ (8,000 + 1,500 + 250 + 800 = 10,550)',
+    bulkIssue.status === 201 && binv.commissionTotal === 10550 && lineOf(binv, e1.id)?.billMode === 'MANUAL'
+      && lineOf(binv, e1.id)?.commissionAmount === 8000 && lineOf(binv, e3.id)?.billMode === 'PCT', { bulk: bulkIssue.body, lines: binv.lines });
+  check('ออกบิลแล้ว manualCount = 0', (await readyOf())?.manualCount === 0);
+  const mbill = await api('POST', `/api/sales-agents/${sm?.id}/commission-bills`, { token: admin, body: { items: [{ entryId: e1.id, mode: 'PCT', pct: 5 }] } });
+  check('ค่าคอมเซลยังคิดจากยอดเต็ม ไม่ใช่ยอดที่กรอกเอง (90,000 × 5% = 4,500)',
+    mbill.status === 201 && mbill.body.lines?.[0]?.baseAmount === 90000 && mbill.body.totalAmount === 4500, mbill.body);
 }
 
 section('captcha หน้าเข้าสู่ระบบ: หลาย IP ผลัดกันเดารหัสบัญชีเดียว (botnet)');

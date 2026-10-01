@@ -127,6 +127,7 @@ final class InvoiceService
 
     /**
      * แต่ละร้านในรอบนี้อยู่ขั้นไหน — ใช้หน้า "พร้อมออกบิล" และหน้าภาพรวม
+     * ยอดที่ยังไม่ขึ้นบิล (pendingCommission) เป็นยอดที่ใช้ออกบิลจริงของแต่ละรายการ — รายการที่กรอกยอดส่วนต่างไว้ใช้ยอดนั้น (manualCount)
      *   NO_SALES   มีสินค้าต้องขายในรอบนี้ แต่ยังไม่มีการกรอกยอด
      *   READY      กรอกยอดแล้ว ยังไม่ได้ออกบิล
      *   INVOICED   ออกบิลแล้ว (addedLater = มียอดกรอกเพิ่มทีหลังที่ยังไม่ได้เพิ่มเข้าบิล)
@@ -146,6 +147,10 @@ final class InvoiceService
                       WHERE se.franchise_id = f.id AND se.period_id = ? AND se.status <> 'INVOICED') AS pending_commission,
                     (SELECT COALESCE(SUM(se.gross_amount_satang), 0) FROM sales_entries se
                       WHERE se.franchise_id = f.id AND se.period_id = ? AND se.status <> 'INVOICED') AS pending_gross,
+                    (SELECT COUNT(*) FROM sales_entries se
+                      WHERE se.franchise_id = f.id AND se.period_id = ? AND se.status <> 'INVOICED'
+                        AND se.bill_mode = 'MANUAL' AND se.manual_amount_satang IS NOT NULL
+                        AND se.commission_amount_satang = se.manual_amount_satang) AS manual_entries,
                     i.id AS invoice_id, i.invoice_no, i.net_total_satang,
                     (SELECT COUNT(*) FROM product_assignments a
                        JOIN products p ON p.id = a.product_id AND p.status = 'ACTIVE'
@@ -154,7 +159,7 @@ final class InvoiceService
                LEFT JOIN invoices i ON i.franchise_id = f.id AND i.period_id = ? AND i.status <> 'VOID'
               WHERE f.status = 'ACTIVE'
               ORDER BY f.username",
-            [$pid, $pid, $pid, $p['endDate'], $p['startDate'], $pid],
+            [$pid, $pid, $pid, $pid, $p['endDate'], $p['startDate'], $pid],
         );
 
         $items = [];
@@ -168,6 +173,9 @@ final class InvoiceService
                 'pendingEntries'    => $pending,
                 'pendingCommission' => Money::toBaht((int) $r['pending_commission']),
                 'pendingGross'      => Money::toBaht((int) $r['pending_gross']),
+                // รายการที่ยังไม่ขึ้นบิลซึ่งจะใช้ "ยอดส่วนต่างที่กรอกไว้" ที่หน้ายอดขาย (R21) — หน้าออกบิลหลายร้านใช้บอกผู้ใช้
+                // pendingCommission ด้านบนรวมยอดพวกนี้แล้ว (เป็นยอดที่ใช้ออกบิลจริง)
+                'manualCount'       => (int) $r['manual_entries'],
                 'invoiceId'         => $r['invoice_id'] === null ? null : (int) $r['invoice_id'],
                 'invoiceNo'         => $r['invoice_no'] ?? null,
                 'invoiceNetTotal'   => $r['invoice_id'] ? Money::toBaht($r['net_total_satang']) : null,
@@ -289,7 +297,8 @@ final class InvoiceService
         /*
          * วิธีคิดยอดรายบรรทัด (กรอกยอดเอง / คิดตาม %) ตรวจให้ครบก่อนเปิด transaction
          * ยอดรวมต้องมาจากยอดที่ "ใช้จริง" หลังเลือกวิธีคิดแล้ว — ค่าใช้จ่าย % ที่แนบมาตอนออกบิลคิดจากก้อนนี้
-         * บรรทัดที่ไม่ได้ส่งมาใช้ค่าที่เก็บไว้กับรายการ (ค่าตั้งต้น หรือค่าที่เลือกไว้ก่อนยกเลิกบิลใบเดิม)
+         * บรรทัดที่ไม่ได้ส่งมาใช้ค่าที่เก็บไว้กับรายการ — ค่าตั้งต้นจากหน้ายอดขาย (กรอกยอดส่วนต่างไว้ = ใช้ยอดนั้น
+         * ไม่ได้กรอก = คิดตาม %) หรือค่าที่เลือกไว้ก่อนยกเลิกบิลใบเดิม · ออกบิลหลายร้าน (generateBulk) จึงใช้ยอดที่กรอกไว้ให้เอง
          */
         $plan            = self::planLineModes(array_column($entries, null, 'id'), $input['lines'] ?? []);
         $effective       = $plan['entries'];
@@ -436,9 +445,6 @@ final class InvoiceService
 
     /* ── วิธีคิดยอดรายบรรทัด (กรอกยอดเอง / คิดตาม %) ─────────────────── */
 
-    /** กันตัวเลขยาวผิดปกติ — Money::toSatang กับเลขที่เกิน int64 พังเป็น 500 แทนที่จะบอกผู้ใช้ */
-    private const MAX_MANUAL_BAHT = 100_000_000;
-
     /**
      * ตรวจและคิดยอดของแต่ละบรรทัดตามวิธีที่เลือก — ยังไม่เขียนอะไรลงฐานข้อมูล
      * แยกตัวคิดกับตัวเขียน เพื่อให้ตรวจ input ครบทุกบรรทัดก่อนเปิด transaction
@@ -446,6 +452,8 @@ final class InvoiceService
      *
      *   PCT     ส่วนต่าง = ยอดเต็ม × % (ไม่ส่ง % = ใช้ % ที่เก็บไว้กับรายการ)
      *   MANUAL  ส่วนต่าง = จำนวนที่กรอก · % เดิมเก็บไว้เฉย ๆ เป็นข้อมูลประกอบ
+     *           ไม่ส่งจำนวนเงิน = ใช้ "ยอดส่วนต่างที่กรอกเอง" ที่กรอกไว้ที่หน้ายอดขาย (R21) · ไม่มีที่กรอกไว้ = 400
+     * เลือกวิธีคิดตรงนี้ไม่แตะ manual_amount_satang — นั่นคือค่าของหน้ายอดขาย ตรงนี้ตั้งแค่ยอดที่ใช้ออกบิล
      *
      * @param array<int, array>                                                     $entriesById แถว sales_entries (+ sku) ของบรรทัดที่กำลังออกบิล/แก้
      * @param list<array{entryId: int, mode: string, pct?: mixed, amount?: mixed}> $lines
@@ -485,16 +493,20 @@ final class InvoiceService
                 if (array_key_exists('pct', $line)) {
                     throw ApiException::badRequest("สินค้า {$sku}: เลือก \"กรอกยอดเอง\" ไม่ต้องใส่ % — ใส่แค่จำนวนเงินที่เรียกเก็บ");
                 }
-                if (! array_key_exists('amount', $line)) {
+                $preset = ($e['manual_amount_satang'] ?? null) === null ? null : (int) $e['manual_amount_satang'];
+                if (array_key_exists('amount', $line)) {
+                    $amount = SalesService::manualSatang($line['amount'], $sku, 'จำนวนเงิน', "amount (สินค้า {$sku})");
+                } elseif ($preset !== null) {
+                    $amount = $preset; // ยอดส่วนต่างที่กรอกไว้ที่หน้ายอดขาย
+                } else {
                     throw ApiException::badRequest("สินค้า {$sku}: เลือก \"กรอกยอดเอง\" ต้องใส่จำนวนเงิน");
                 }
-                $amount = self::manualSatang($line['amount'], $sku);
                 /*
-                 * ยอดที่กรอกต้องอยู่ระหว่าง 0 ถึงยอดเต็ม และเครื่องหมายเดียวกับยอดเต็ม
+                 * ยอดที่กรอกต้องอยู่ระหว่าง 0 ถึงยอดเต็ม และเครื่องหมายเดียวกับยอดเต็ม (SalesService::manualFits)
                  * กันพิมพ์ "-" หลงบนบรรทัดขายปกติ — ยอดบิลติดลบกลายเป็นเครดิตที่เราติดค้างร้านจริง ๆ
                  * และพอเครดิตถูกหักไปใช้ บิลใบนี้จะแก้/ยกเลิกไม่ได้อีก
                  */
-                if ($amount !== 0 && (($amount > 0) !== ($gross > 0) || abs($amount) > abs($gross))) {
+                if (! SalesService::manualFits($amount, $gross)) {
                     throw ApiException::badRequest("สินค้า {$sku}: ยอดที่เรียกเก็บต้องอยู่ระหว่าง 0 ถึงยอดเงินเต็ม (" . Money::fmtSatang($gross) . ' บาท)');
                 }
             } else {
@@ -514,6 +526,8 @@ final class InvoiceService
                 'pctBp'      => $mode === 'PCT' ? $pctBp : null,
                 'amount'     => Money::toBaht($amount),
                 'fromAmount' => Money::toBaht($from),
+                // ใช้ยอดส่วนต่างที่กรอกไว้ที่หน้ายอดขาย (ไม่ได้พิมพ์จำนวนเงินมาตอนออกบิล/แก้บรรทัด)
+                'preset'     => $mode === 'MANUAL' && ! array_key_exists('amount', $line),
             ];
             $entries[$id] = [...$e, 'bill_mode' => $mode, 'commission_pct_bp' => $pctBp, 'commission_amount_satang' => $amount];
         }
@@ -533,20 +547,6 @@ final class InvoiceService
                 [$c['bill_mode'], $c['commission_pct_bp'], $c['commission_amount_satang'], $actorUserId, $c['id']],
             );
         }
-    }
-
-    private static function manualSatang(mixed $amount, string $sku): int
-    {
-        $raw = is_string($amount) ? str_replace(',', '', trim($amount)) : $amount;
-        if (is_numeric($raw) && abs((float) $raw) > self::MAX_MANUAL_BAHT) {
-            throw ApiException::badRequest("สินค้า {$sku}: จำนวนเงินเกินกำหนด (ไม่เกิน " . Money::fmt(self::MAX_MANUAL_BAHT) . ' บาท)');
-        }
-        $satang = Money::toSatang($amount, "amount (สินค้า {$sku})");
-        if (abs($satang) > self::MAX_MANUAL_BAHT * 100) {
-            throw ApiException::badRequest("สินค้า {$sku}: จำนวนเงินเกินกำหนด (ไม่เกิน " . Money::fmt(self::MAX_MANUAL_BAHT) . ' บาท)');
-        }
-
-        return $satang;
     }
 
     /**
@@ -894,7 +894,8 @@ final class InvoiceService
             throw ApiException::forbidden();
         }
 
-        $lines = array_map([SalesService::class, 'serialize'], Db::all(
+        $isSuper = AuthContext::isSuperAdmin($user);
+        $lines   = array_map([SalesService::class, 'serialize'], Db::all(
             'SELECT se.*, bp.code AS period_code, bp.start_date AS period_start, bp.end_date AS period_end,
                     bp.year AS period_year, bp.month AS period_month, bp.half AS period_half, bp.status AS period_status,
                     p.sku, p.name AS product_name, f.username AS franchise_username,
@@ -908,6 +909,14 @@ final class InvoiceService
               ORDER BY p.sku',
             [$id],
         ));
+        if (! $isSuper) {
+            // ยอดส่วนต่างที่กรอกไว้ที่หน้ายอดขายเป็นข้อมูลภายในของส่วนกลาง — ร้านเห็นแค่ยอดที่ใช้ออกบิลจริง (commissionAmount + billMode)
+            $lines = array_map(static function (array $l): array {
+                unset($l['manualAmount']);
+
+                return $l;
+            }, $lines);
+        }
         $adjustments = array_map([self::class, 'serializeAdjustment'], Db::all(
             'SELECT * FROM invoice_adjustments WHERE invoice_id = ? ORDER BY kind DESC, id',
             [$id],
@@ -944,7 +953,7 @@ final class InvoiceService
             // get() ตรวจแล้วว่าเป็นบิลของร้านนี้ ร้านจึงได้ลิงก์เฉพาะรูปของบิลตัวเอง
             'attachments' => InvoiceAttachmentService::listFor($id),
         ];
-        if (AuthContext::isSuperAdmin($user)) {
+        if ($isSuper) {
             $out['telegramAccount'] = self::telegramAccount($row);
         }
 

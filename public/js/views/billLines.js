@@ -63,6 +63,31 @@ export function parseAmount(raw, gross, { capAtGross = true } = {}) {
   return { value: Math.round(n * 100) / 100 };
 }
 
+/**
+ * ยอดเงินเต็มที่พิมพ์ในหน้ายอดขาย — คืน { empty } | { value } | { error }
+ * ติดลบได้ (รอบที่คืนของ) · ทศนิยมเท่าเซิร์ฟเวอร์ — ตรวจตรงนี้ให้รู้ตั้งแต่ยังไม่กดบันทึก
+ * ยอดเต็มไม่มีเพดาน 100 ล้านแบบยอดที่กรอกเอง (MAX_AMOUNT) — เซิร์ฟเวอร์รับยอดเต็มเกินนั้น และหน้านี้ก่อนรุ่น 2.3.0 ก็ไม่กัน
+ * กันแค่เลขที่ใหญ่จนคิดเป็นสตางค์ไม่ตรงแล้ว (เกิน Number.MAX_SAFE_INTEGER สตางค์)
+ */
+const MAX_GROSS = Math.floor(Number.MAX_SAFE_INTEGER / 100);
+export function parseGross(raw) {
+  const s = String(raw ?? '').trim().replace(/,/g, '');
+  if (s === '') return { empty: true };
+  const n = Number(s);
+  if (!Number.isFinite(n)) return { error: 'ตัวเลขไม่ถูกต้อง' };
+  if (Math.abs(n) > MAX_GROSS) return { error: 'จำนวนเงินเกินกำหนด' };
+  if (Math.abs(n * 100 - Math.round(n * 100)) > 1e-6) return { error: 'ทศนิยมไม่เกิน 2 ตำแหน่ง' };
+  return { value: Math.round(n * 100) / 100 };
+}
+
+/**
+ * ยอดส่วนต่างที่ส่วนกลางกรอกไว้เองในหน้ายอดขาย (R21) — null = ไม่ได้กรอก ใช้ยอดเต็ม × %
+ * ไคลเอนต์ที่ได้ข้อมูลจากเซิร์ฟเวอร์รุ่นก่อน 2.3.0 ไม่มีช่องนี้ (undefined) ถือว่าไม่ได้กรอกเหมือนกัน
+ */
+export const presetOf = (entry) => (entry?.manualAmount === null || entry?.manualAmount === undefined
+  ? null
+  : Number(entry.manualAmount));
+
 /*
  * สินค้ากลุ่ม (ชุด) — ขายและคิดบิลเป็นบรรทัดเดียวด้วย % ของกลุ่ม ส่วนสินค้าย่อยเป็นแค่ข้อมูลว่าในชุดมีอะไร
  * ป้ายกับบรรทัด "ประกอบด้วย" อยู่ที่นี่ที่เดียว เพราะโผล่หลายหน้า (ออกบิล/เพิ่มรายการ/ดูบิล/หน้าจ่ายเงินของร้าน/ยอดขาย/สินค้า)
@@ -101,9 +126,17 @@ export function lineProductCell(line, { short = false } = {}) {
     componentsLine(components, { short }));
 }
 
-const BILL_MODES = [
-  { value: 'PCT', label: 'คิดตาม %' },
-  { value: 'MANUAL', label: 'กรอกยอดเอง' },
+/*
+ * ตัวเลือกวิธีคิดของบรรทัด — ค่ายังเป็น PCT / MANUAL สองแบบเท่าเดิม (เซิร์ฟเวอร์รู้จักแค่นี้)
+ * รายการที่กรอกยอดส่วนต่างไว้ในหน้ายอดขาย ตัวเลือก MANUAL พูดถึงยอดนั้นตรง ๆ พร้อมตัวเลข
+ * เจ้าของระบบขอ "เลือกได้ 2 กรณีตอนออกบิล" — ยอดที่กรอกไว้แล้ว หรือยอดเต็ม × % — จึงเห็นทั้งสองทางในช่องเดียว
+ */
+const billModes = (e) => [
+  { value: 'PCT', label: 'คิดจากยอดเต็ม × %' },
+  {
+    value: 'MANUAL',
+    label: presetOf(e) === null ? 'กรอกยอดเอง' : `ใช้ยอดส่วนต่างที่กรอกไว้ (${money(presetOf(e))})`,
+  },
 ];
 
 const numberInput = (cls, value, placeholder) => el('input', {
@@ -125,13 +158,18 @@ const numberInput = (cls, value, placeholder) => el('input', {
  * ช่องที่กำลังพิมพ์ถูกสร้างใหม่ เคอร์เซอร์หลุด พิมพ์ต่อไม่ได้ (เหตุผลเดียวกับแถวค่าใช้จ่าย/ส่วนลด)
  */
 export function billLineEditor({ entries, onChange = () => {} }) {
-  // สถานะของแต่ละบรรทัดอยู่นอกตาราง — ตั้งต้นจากค่าที่บันทึกไว้ (บิลที่ยกเลิกแล้วออกใหม่ได้วิธีคิดเดิมกลับมา)
+  /*
+   * สถานะของแต่ละบรรทัดอยู่นอกตาราง — ตั้งต้นจากค่าที่บันทึกไว้ (บิลที่ยกเลิกแล้วออกใหม่ได้วิธีคิดเดิมกลับมา)
+   * billMode ของรายการที่กรอกยอดส่วนต่างไว้ในหน้ายอดขายเป็น MANUAL อยู่แล้ว (เซิร์ฟเวอร์ตั้งให้ตอนบันทึก) — ตั้งต้นจึงใช้ยอดนั้น
+   * ช่องจำนวนเงิน: บรรทัดที่เป็น MANUAL อยู่ = ยอดของบรรทัด · นอกนั้นมียอดที่กรอกไว้ = ยอดนั้น (สลับมาแล้วได้เลขที่กรอกไว้ทันที)
+   */
   const state = new Map(entries.map((e) => [e.id, {
     mode: e.billMode === 'MANUAL' ? 'MANUAL' : 'PCT',
     pct: e.commissionPct === null || e.commissionPct === undefined ? '' : String(e.commissionPct),
-    amount: String(e.commissionAmount ?? ''),
+    amount: String(e.billMode !== 'MANUAL' && presetOf(e) !== null ? presetOf(e) : (e.commissionAmount ?? '')),
     // ยังไม่เคยพิมพ์ช่องจำนวนเงิน — สลับเป็น "กรอกยอดเอง" แล้วเติมยอดที่ % คิดได้ตอนนั้นให้ แก้ต่อจากเลขนั้นง่ายกว่า
-    amountTouched: e.billMode === 'MANUAL',
+    // (มียอดที่กรอกไว้ในหน้ายอดขาย = ถือว่ามีเลขในช่องแล้ว ไม่เอายอดจาก % มาทับ)
+    amountTouched: e.billMode === 'MANUAL' || presetOf(e) !== null,
   }]));
   const selected = new Set(entries.map((e) => e.id)); // ค่าเริ่มต้น: เลือกทั้งหมด
   const byId = new Map(entries.map((e) => [e.id, e]));
@@ -142,7 +180,7 @@ export function billLineEditor({ entries, onChange = () => {} }) {
     const s = state.get(e.id);
     if (s.mode === 'MANUAL') {
       const r = parseAmount(s.amount, e.grossAmount);
-      if (r.empty) return { amount: 0, error: `สินค้า ${e.sku}: เลือก "กรอกยอดเอง" ต้องใส่จำนวนเงิน` };
+      if (r.empty) return { amount: 0, error: `สินค้า ${e.sku}: ต้องใส่ยอดที่เรียกเก็บ (หรือเปลี่ยนเป็นคิดจากยอดเต็ม × %)` };
       if (r.error) return { amount: 0, error: `สินค้า ${e.sku}: ${r.error}` };
       return { amount: r.value };
     }
@@ -175,6 +213,14 @@ export function billLineEditor({ entries, onChange = () => {} }) {
     r.amountIn.classList.toggle('invalid', on && manual && Boolean(res.error));
     // บอกเหตุผลใต้ช่องเลย ไม่ต้องรอกดออกบิลแล้วค่อยเจอ error ด้านบน
     r.error.textContent = on && res.error ? res.error.replace(/^สินค้า [^:]+: /, '') : '';
+    /*
+     * ตัวเลือกบอกยอดที่กรอกไว้ แต่ช่องจำนวนเงินยังแก้ได้ — พิมพ์เป็นเลขอื่นแล้ว บอกไว้ใต้ช่องว่าไม่ใช่ยอดที่กรอกไว้แล้ว
+     * (ไม่งั้นตัวเลือกเขียนว่า "ใช้ยอดที่กรอกไว้ (8,000.00)" แต่บิลออกเป็นอีกเลขหนึ่ง)
+     */
+    const preset = presetOf(e);
+    r.note.textContent = manual && preset !== null && !res.error && res.amount !== preset
+      ? `ไม่ใช่ยอดที่กรอกไว้ (${money(preset)})`
+      : '';
     r.box.closest('tr')?.classList.toggle('line-off', !on);
   };
 
@@ -187,14 +233,24 @@ export function billLineEditor({ entries, onChange = () => {} }) {
     toggleAll.indeterminate = selected.size > 0 && selected.size < entries.length;
   };
 
+  /** บรรทัดนี้ใช้ยอดส่วนต่างที่กรอกไว้ในหน้ายอดขายตรงตัวหรือไม่ (ไม่ใช่แค่เลือก MANUAL แล้วพิมพ์เลขอื่น) */
+  const usesPreset = (e) => {
+    if (state.get(e.id).mode !== 'MANUAL' || presetOf(e) === null) return false;
+    const r = lineResult(e);
+    return !r.error && r.amount === presetOf(e);
+  };
+
   function totals() {
     const picked = entries.filter((e) => selected.has(e.id));
     const results = picked.map(lineResult);
+    const presetCount = picked.filter(usesPreset).length;
     return {
       count: picked.length,
       gross: sumBaht(picked.map((e) => e.grossAmount)),
       commission: sumBaht(results.map((r) => r.amount)),
-      manualCount: picked.filter((e) => state.get(e.id).mode === 'MANUAL').length,
+      // ใช้ยอดที่กรอกไว้ในหน้ายอดขาย / พิมพ์ยอดเองตอนออกบิล — นับแยกกัน คนออกบิลจะได้รู้ว่ายอดมาจากไหน
+      presetCount,
+      manualCount: picked.filter((e) => state.get(e.id).mode === 'MANUAL').length - presetCount,
       error: results.find((r) => r.error)?.error ?? null,
     };
   }
@@ -208,6 +264,45 @@ export function billLineEditor({ entries, onChange = () => {} }) {
     paintTotals();
     onChange('select');
   });
+
+  /*
+   * ปุ่มลัดเปลี่ยนวิธีคิดทีเดียวทุกบรรทัด — ร้านที่มี 30 สินค้าไม่ต้องไล่เปลี่ยนช่องทีละบรรทัด
+   * ใช้กับทุกบรรทัด (รวมที่ไม่ได้ติ๊ก — ติ๊กกลับมาทีหลังได้วิธีเดียวกับที่เหลือ)
+   * "ใช้ยอดที่กรอกไว้" แตะเฉพาะบรรทัดที่มียอดที่กรอกไว้ — บรรทัดอื่นไม่มีเลขให้ใช้ คงวิธีเดิมไว้
+   */
+  const setMode = (e, mode, amount) => {
+    const s = state.get(e.id);
+    const r = refs.get(e.id);
+    s.mode = mode;
+    r.mode.value = mode;
+    if (amount !== undefined) {
+      s.amount = String(amount);
+      s.amountTouched = true;
+      r.amountIn.value = s.amount;
+    }
+    paintRow(e);
+  };
+  const withPreset = entries.filter((e) => presetOf(e) !== null);
+  const usePresetAll = el('button', {
+    type: 'button',
+    class: 'btn ghost sm',
+    title: 'บรรทัดที่กรอกยอดส่วนต่างไว้ในหน้ายอดขาย ใช้ยอดนั้น (บรรทัดอื่นคงวิธีเดิม)',
+    onclick: () => {
+      for (const e of withPreset) setMode(e, 'MANUAL', presetOf(e));
+      paintTotals();
+      onChange('value');
+    },
+  }, `ใช้ยอดที่กรอกไว้ทุกรายการ (${withPreset.length})`);
+  const usePctAll = el('button', {
+    type: 'button',
+    class: 'btn ghost sm',
+    title: 'ทุกบรรทัดคิดจากยอดเงินเต็ม × % (ใช้ % ในช่องของแต่ละบรรทัด)',
+    onclick: () => {
+      for (const e of entries) setMode(e, 'PCT');
+      paintTotals();
+      onChange('value');
+    },
+  }, 'คิดจาก % ทุกรายการ');
 
   const grid = table([
     {
@@ -233,7 +328,7 @@ export function billLineEditor({ entries, onChange = () => {} }) {
       render: (e) => {
         const s = state.get(e.id);
         const mode = el('select', { class: 'line-mode', 'aria-label': `วิธีคิดยอดของ ${e.sku}` },
-          ...BILL_MODES.map((o) => el('option', { value: o.value, selected: o.value === s.mode }, o.label)));
+          ...billModes(e).map((o) => el('option', { value: o.value, selected: o.value === s.mode }, o.label)));
         mode.addEventListener('change', () => {
           if (mode.value === 'MANUAL' && !s.amountTouched) {
             const current = lineResult(e);
@@ -284,8 +379,9 @@ export function billLineEditor({ entries, onChange = () => {} }) {
         });
         const computed = el('span', { class: 'line-computed' });
         const error = el('span', { class: 'line-error' });
-        refs.set(e.id, { ...(refs.get(e.id) ?? {}), amountIn, computed, error });
-        return el('div', { class: 'line-cell' }, computed, amountIn, error);
+        const note = el('span', { class: 'line-note' });
+        refs.set(e.id, { ...(refs.get(e.id) ?? {}), amountIn, computed, error, note });
+        return el('div', { class: 'line-cell' }, computed, amountIn, error, note);
       },
     },
   ], entries, {
@@ -298,8 +394,11 @@ export function billLineEditor({ entries, onChange = () => {} }) {
   paintTotals();
 
   const node = el('div', { class: 'line-editor' },
-    // "เลือกทั้งหมด" อยู่เหนือตาราง ไม่ใช่ในหัวตาราง — บนมือถือหัวตารางถูกซ่อน ปุ่มนี้จะหายไปด้วย
-    el('label', { class: 'check-all' }, toggleAll, 'เลือกทั้งหมด', pickedCount),
+    // "เลือกทั้งหมด" + ปุ่มลัดอยู่เหนือตาราง ไม่ใช่ในหัวตาราง — บนมือถือหัวตารางถูกซ่อน ปุ่มพวกนี้จะหายไปด้วย
+    el('div', { class: 'line-tools' },
+      el('label', { class: 'check-all' }, toggleAll, 'เลือกทั้งหมด', pickedCount),
+      withPreset.length ? usePresetAll : '',
+      usePctAll),
     grid);
 
   return {

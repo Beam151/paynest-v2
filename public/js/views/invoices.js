@@ -8,7 +8,7 @@ import {
   accountCheckNotice, attachmentGrid, bankAccountBox, breakdownTable, currencyTag, payCenterView, payMoney, paymentTotals,
   receivedMoneyTab, slipReviewTab, slipStatusPicker, usdLine,
 } from './payments.js';
-import { billLineEditor, commissionOf, lineProductCell, parseAmount, parsePct } from './billLines.js';
+import { billLineEditor, commissionOf, lineProductCell, parseAmount, parsePct, presetOf } from './billLines.js';
 import { elevated } from '../elevation.js';
 import { hashParam, render } from '../app.js';
 import { activityButton } from './activity.js';
@@ -49,6 +49,19 @@ const lockReason = (inv) => {
   if (inv.paid > 0) return `ร้านจ่ายมาแล้ว ${money(inv.paid)} ฿ — แก้ยอดไม่ได้ ถ้าตัวเลขผิดต้องยกเลิกใบนี้แล้วออกใหม่`;
   if (inv.pendingSubmissions) return 'มีสลิปรอตรวจสอบอยู่ — ตรวจให้เสร็จก่อน หรือให้ร้านยกเลิกการแจ้งก่อนจึงจะแก้ได้';
   return 'ใบนี้แก้ไขไม่ได้';
+};
+
+/**
+ * บอกท้ายสรุปว่ายอดของบรรทัดที่เลือกมาจากไหน — ยอดที่กรอกไว้ในหน้ายอดขาย / พิมพ์เองตอนออกบิล (ที่เหลือคิดจาก %)
+ * ใช้ทั้งหน้าต่างออกบิลและเพิ่มรายการเข้าบิล ให้สองที่พูดคำเดียวกัน · wrap = ใส่ในวงเล็บ (ต่อท้ายประโยคยอดเงิน)
+ */
+const lineSourceNote = (t, { wrap = false } = {}) => {
+  const parts = [
+    t.presetCount ? `ใช้ยอดที่กรอกไว้ ${t.presetCount} รายการ` : '',
+    t.manualCount ? `กรอกยอดเอง ${t.manualCount} รายการ` : '',
+  ].filter(Boolean);
+  if (!parts.length) return '';
+  return wrap ? ` (${parts.join(' · ')})` : ` · ${parts.join(' · ')}`;
 };
 
 // แนบรูปประกอบได้ไม่เกินเท่านี้ต่อบิล (เซิร์ฟเวอร์ตรวจซ้ำ) — เตือนตั้งแต่ตอนเลือกไฟล์
@@ -320,6 +333,11 @@ export async function invoicesView() {
       !periodFilter
         ? el('div', { class: 'notice-box' }, `ตัวกรองเป็น "ทุกรอบ" — แสดงรอบที่กำลังทำงาน (${periodLabel(data.periodCode)}) · เลือกรอบอื่นได้ที่แถบรอบบิลด้านบน`)
         : '',
+      // ออกหลายร้านไม่มีที่ให้เลือกวิธีคิดรายสินค้า — บอกก่อนว่ายอดที่กรอกไว้ในหน้ายอดขายจะถูกใช้ และแก้ทีหลังได้ที่ไหน
+      readyRows.some((r) => r.manualCount > 0)
+        ? el('div', { class: 'notice-box info-box' },
+          'ร้านที่มีรายการกรอกยอดส่วนต่างไว้ จะใช้ยอดนั้น (แก้ทีหลังได้ที่บิล) · รายการอื่นคิดจากยอดเต็ม × %')
+        : '',
       card(null, table([
         {
           label: readyRows.length ? toggleAll : '',
@@ -354,7 +372,11 @@ export async function invoicesView() {
           sortValue: (r) => r.pendingCommission,
           render: (r) => (r.status === 'INVOICED' && !r.addedLater
             ? el('span', { class: 'muted' }, `${r.invoiceNo} · ${money(r.invoiceNetTotal)}`)
-            : r.pendingEntries ? el('strong', {}, money(r.pendingCommission)) : '—'),
+            : r.pendingEntries
+              ? el('div', {}, el('strong', {}, money(r.pendingCommission)),
+                // ยอดรวมนี้ใช้ยอดส่วนต่างที่กรอกไว้ในหน้ายอดขายแล้ว — บอกว่ากี่รายการ ไม่ให้งงว่าทำไมไม่เท่ายอดเต็ม × %
+                r.manualCount ? el('div', { class: 'sub-line' }, `ใช้ยอดที่กรอกไว้ ${int(r.manualCount)} รายการ`) : '')
+              : '—'),
         },
         {
           label: '',
@@ -707,7 +729,7 @@ export async function invoicesView() {
         const t = editor.totals();
         summaryLine.textContent = t.count
           ? `เลือก ${t.count}/${available.length} รายการ · ยอดเงินเต็ม ${money(t.gross)} ฿ → ส่วนต่างที่จะเรียกเก็บ ${money(t.commission)} ฿`
-            + (t.manualCount ? ` (กรอกยอดเอง ${t.manualCount} รายการ)` : '')
+            + lineSourceNote(t, { wrap: true })
             + (t.error ? ` · ⚠ ${t.error}` : '')
           : 'ยังไม่ได้เลือกรายการใดเลย';
         summaryLine.style.color = t.count && !t.error ? '' : 'var(--danger)';
@@ -723,7 +745,7 @@ export async function invoicesView() {
         el('div', { class: 'card-body', style: 'padding:12px 14px' },
           el('div', { class: 'sub-line', style: 'margin-bottom:8px' },
             `เลือกรายการที่จะเรียกเก็บในใบนี้ — ยอดมาจากที่บันทึกไว้ในรอบ ${periodLabel(v.periodCode)} (กรอกที่หน้า "ยอดขายรายรอบ")`
-            + ' · แต่ละสินค้าเลือกได้ว่าจะ "คิดตาม %" หรือ "กรอกยอดเอง"'),
+            + ' · แต่ละสินค้าเลือกได้ว่าจะ "คิดจากยอดเต็ม × %" หรือใช้ยอดส่วนต่างที่กรอกไว้ / กรอกยอดเอง'),
           editor.node,
           el('div', { class: 'mt-8' }, summaryLine),
           adjBox)));
@@ -778,7 +800,7 @@ export async function invoicesView() {
   const lineModeResult = (line, v) => {
     if (v.mode === 'MANUAL') {
       const r = parseAmount(v.amount, line.grossAmount);
-      if (r.empty) return { error: 'เลือก "กรอกยอดเอง" ต้องใส่จำนวนเงิน' };
+      if (r.empty) return { error: 'ต้องใส่ยอดที่เรียกเก็บ (หรือเปลี่ยนเป็นคิดจากยอดเต็ม × %)' };
       if (r.error) return { error: r.error };
       return { amount: r.value };
     }
@@ -793,60 +815,76 @@ export async function invoicesView() {
    * ยอดบิลและค่าใช้จ่ายที่คิดเป็น % เซิร์ฟเวอร์คิดใหม่ให้เองทั้งหมด
    * (ค่าคอมเซลไม่ขยับตาม — บิลค่าคอมคิดจากยอดขายเต็ม ซึ่งแก้ตรงนี้ไม่ได้)
    */
-  const lineModeModal = (inv, line, after) => formModal({
-    title: `วิธีคิดยอด — ${line.sku} · ${inv.invoiceNo}`,
-    submitLabel: 'บันทึก',
-    fields: [
-      {
-        name: 'mode',
-        label: 'วิธีคิด',
-        type: 'select',
-        value: line.billMode === 'MANUAL' ? 'MANUAL' : 'PCT',
-        options: [
-          { value: 'PCT', label: 'คิดตาม % ของยอดเงินเต็ม' },
-          { value: 'MANUAL', label: 'กรอกยอดเอง' },
-        ],
+  const lineModeModal = (inv, line, after) => {
+    /*
+     * มียอดส่วนต่างที่กรอกไว้ในหน้ายอดขาย (R21) — ตัวเลือก MANUAL พูดถึงยอดนั้นพร้อมตัวเลข และช่องจำนวนเงินเติมยอดนั้นให้
+     * (บรรทัดที่เป็น MANUAL อยู่แล้วเติมยอดปัจจุบันของบรรทัด — อาจเป็นเลขที่พิมพ์เองตอนออกบิล)
+     * แก้ตรงนี้ไม่แตะยอดที่กรอกไว้ในหน้ายอดขาย — เปลี่ยนแค่ยอดที่บิลใบนี้ใช้
+     */
+    const preset = presetOf(line);
+    return formModal({
+      title: `วิธีคิดยอด — ${line.sku} · ${inv.invoiceNo}`,
+      submitLabel: 'บันทึก',
+      fields: [
+        {
+          name: 'mode',
+          label: 'วิธีคิด',
+          type: 'select',
+          value: line.billMode === 'MANUAL' ? 'MANUAL' : 'PCT',
+          options: [
+            { value: 'PCT', label: 'คิดจากยอดเต็ม × %' },
+            { value: 'MANUAL', label: preset === null ? 'กรอกยอดเอง' : `ใช้ยอดส่วนต่างที่กรอกไว้ (${money(preset)})` },
+          ],
+        },
+        {
+          name: 'pct',
+          label: '% ของยอดเงินเต็ม',
+          type: 'number',
+          step: '0.01',
+          value: line.commissionPct ?? '',
+          showWhen: (v) => v.mode !== 'MANUAL',
+          hint: 'เว้นว่าง = ใช้ % เดิมของรายการ',
+        },
+        {
+          name: 'amount',
+          label: 'ยอดที่เรียกเก็บ (บาท)',
+          type: 'number',
+          step: '0.01',
+          value: line.billMode !== 'MANUAL' && preset !== null ? preset : line.commissionAmount,
+          showWhen: (v) => v.mode === 'MANUAL',
+          hint: `0 ถึง ${money(line.grossAmount)} ฿ (ยอดเงินเต็มของสินค้านี้)`
+            + (preset !== null ? ` · ยอดที่กรอกไว้ในหน้ายอดขาย ${money(preset)} ฿` : ''),
+        },
+      ],
+      preview: (v) => {
+        const res = lineModeResult(line, v);
+        if (res.error) return { node: el('div', { class: 'alert-box m-0' }, res.error), canSubmit: false };
+        const newTotal = Math.round((inv.commissionTotal - line.commissionAmount + res.amount) * 100) / 100;
+        return el('div', { class: 'notice-box m-0' },
+          el('div', {}, `ยอดเงินเต็ม ${money(line.grossAmount)} ฿ → เรียกเก็บ `, el('strong', {}, `${money(res.amount)} ฿`),
+            res.amount !== line.commissionAmount ? ` (เดิม ${money(line.commissionAmount)} ฿)` : ''),
+          /*
+           * ตัวเลือกเขียนว่า "ใช้ยอดส่วนต่างที่กรอกไว้ (…)" แต่ช่องจำนวนเงินเป็นเลขอื่น (พิมพ์แก้ หรือบรรทัดนี้กำหนดยอดตอนออกบิลไว้ก่อน)
+           * บอกให้ชัดว่าบิลจะใช้เลขในช่อง ไม่ใช่ยอดในวงเล็บ — แบบเดียวกับตัวแก้บรรทัดตอนออกบิล (billLines.js)
+           */
+          v.mode === 'MANUAL' && preset !== null && res.amount !== preset
+            ? el('div', { class: 'sub-line mt-4' }, `ไม่ใช่ยอดที่กรอกไว้ในหน้ายอดขาย (${money(preset)} ฿) — บิลจะใช้ยอดในช่องจำนวนเงิน`)
+            : '',
+          el('div', { class: 'sub-line mt-4' },
+            `ส่วนต่างทั้งบิล ${money(inv.commissionTotal)} → ${money(newTotal)} ฿ · ค่าใช้จ่าย/ส่วนลดที่คิดเป็น % คำนวณใหม่ให้อัตโนมัติ`));
       },
-      {
-        name: 'pct',
-        label: '% ของยอดเงินเต็ม',
-        type: 'number',
-        step: '0.01',
-        value: line.commissionPct ?? '',
-        showWhen: (v) => v.mode !== 'MANUAL',
-        hint: 'เว้นว่าง = ใช้ % เดิมของรายการ',
+      onSubmit: async (v) => {
+        const res = lineModeResult(line, v);
+        if (res.error) throw new Error(res.error);
+        await api.patch(`/api/invoices/${inv.id}/lines/${line.id}`, v.mode === 'MANUAL'
+          ? { mode: 'MANUAL', amount: res.amount }
+          // โหมด % ห้ามส่ง amount ไปด้วย — เซิร์ฟเวอร์ไม่รู้ว่าจะเชื่อตัวไหนจึงตอบ 400
+          : { mode: 'PCT', ...(res.pctTyped !== undefined ? { pct: res.pctTyped } : {}) });
+        toast(`แก้วิธีคิดยอด ${line.sku} แล้ว — ยอดบิลคำนวณใหม่ให้อัตโนมัติ`, 'success');
+        after();
       },
-      {
-        name: 'amount',
-        label: 'ยอดที่เรียกเก็บ (บาท)',
-        type: 'number',
-        step: '0.01',
-        value: line.commissionAmount,
-        showWhen: (v) => v.mode === 'MANUAL',
-        hint: `0 ถึง ${money(line.grossAmount)} ฿ (ยอดเงินเต็มของสินค้านี้)`,
-      },
-    ],
-    preview: (v) => {
-      const res = lineModeResult(line, v);
-      if (res.error) return { node: el('div', { class: 'alert-box m-0' }, res.error), canSubmit: false };
-      const newTotal = Math.round((inv.commissionTotal - line.commissionAmount + res.amount) * 100) / 100;
-      return el('div', { class: 'notice-box m-0' },
-        el('div', {}, `ยอดเงินเต็ม ${money(line.grossAmount)} ฿ → เรียกเก็บ `, el('strong', {}, `${money(res.amount)} ฿`),
-          res.amount !== line.commissionAmount ? ` (เดิม ${money(line.commissionAmount)} ฿)` : ''),
-        el('div', { class: 'sub-line mt-4' },
-          `ส่วนต่างทั้งบิล ${money(inv.commissionTotal)} → ${money(newTotal)} ฿ · ค่าใช้จ่าย/ส่วนลดที่คิดเป็น % คำนวณใหม่ให้อัตโนมัติ`));
-    },
-    onSubmit: async (v) => {
-      const res = lineModeResult(line, v);
-      if (res.error) throw new Error(res.error);
-      await api.patch(`/api/invoices/${inv.id}/lines/${line.id}`, v.mode === 'MANUAL'
-        ? { mode: 'MANUAL', amount: res.amount }
-        // โหมด % ห้ามส่ง amount ไปด้วย — เซิร์ฟเวอร์ไม่รู้ว่าจะเชื่อตัวไหนจึงตอบ 400
-        : { mode: 'PCT', ...(res.pctTyped !== undefined ? { pct: res.pctTyped } : {}) });
-      toast(`แก้วิธีคิดยอด ${line.sku} แล้ว — ยอดบิลคำนวณใหม่ให้อัตโนมัติ`, 'success');
-      after();
-    },
-  });
+    });
+  };
 
   /** แนบรูปประกอบเพิ่มเข้าบิลที่ออกไปแล้ว (แนบได้แม้ร้านจ่ายแล้ว — เป็นหลักฐาน ไม่แตะยอดเงิน) */
   const attachModal = (inv, after) => {
@@ -1029,11 +1067,20 @@ export async function invoicesView() {
     const attachments = inv.attachments ?? [];
 
     /*
-     * วิธีคิดยอดรายบรรทัด — ส่วนกลางเห็น "กรอกยอดเอง"
-     * ร้านเห็น "กำหนดยอด" (คำว่า "กรอกเอง" ร้านอ่านแล้วนึกว่าตัวเองเป็นคนกรอก)
+     * วิธีคิดยอดรายบรรทัด — ส่วนกลางเห็น "ยอดที่กรอกไว้" (ยอดส่วนต่างที่กรอกในหน้ายอดขาย · R21) หรือ "กรอกยอดเอง" (พิมพ์ตอนออกบิล)
+     * ร้านเห็น "กำหนดยอด" ทั้งสองแบบ (คำว่า "กรอกเอง" ร้านอ่านแล้วนึกว่าตัวเองเป็นคนกรอก · ที่มาของยอดเป็นเรื่องภายในของส่วนกลาง)
      * บรรทัดที่กำหนดยอด % ในระบบเป็นแค่ค่าเก่าที่ไม่ได้ใช้คิด จึงโชว์ "—" แทน ไม่ให้ใครเอาไปคูณเทียบ
      */
-    const manualLabel = isSuper ? 'กรอกยอดเอง' : 'กำหนดยอด';
+    const manualBadge = (l) => {
+      if (!isSuper) return el('span', { class: 'badge amber' }, 'กำหนดยอด');
+      const preset = presetOf(l);
+      return preset !== null && preset === l.commissionAmount
+        ? el('span', { class: 'badge blue', title: 'ยอดส่วนต่างที่กรอกไว้ในหน้ายอดขายรายรอบ' }, 'ยอดที่กรอกไว้')
+        : el('span', {
+          class: 'badge amber',
+          title: preset !== null ? `กำหนดตอนออกบิล (ยอดที่กรอกไว้ในหน้ายอดขาย ${money(preset)})` : 'กำหนดตอนออกบิล',
+        }, 'กรอกยอดเอง');
+    };
     const lineColumns = [
       // สินค้ากลุ่ม = บรรทัดเดียวด้วย % ของกลุ่ม · "ประกอบด้วย" มาจาก snapshot ตอนออกบิล แก้ชุดทีหลังบิลนี้ไม่เปลี่ยน
       { label: 'รายการ', render: (l) => lineProductCell(l) },
@@ -1041,7 +1088,7 @@ export async function invoicesView() {
       {
         label: 'วิธีคิด',
         render: (l) => (l.billMode === 'MANUAL'
-          ? el('span', { class: 'badge amber' }, manualLabel)
+          ? manualBadge(l)
           : el('span', { class: 'muted' }, 'ตาม %')),
       },
       { label: '%', num: true, render: (l) => (l.billMode === 'MANUAL' ? '—' : pct(l.commissionPct)) },
@@ -1094,7 +1141,7 @@ export async function invoicesView() {
       el('h3', { style: 'margin:6px 0 8px' }, 'รายการสินค้าในใบนี้'),
       editable
         ? el('div', { class: 'sub-line mb-8' },
-          'กด "แก้" ที่บรรทัดเพื่อเปลี่ยนเป็นคิดตาม % หรือกรอกยอดเอง — ค่าใช้จ่ายที่คิดเป็น % คำนวณใหม่ให้')
+          'กด "แก้" ที่บรรทัดเพื่อสลับระหว่างคิดจากยอดเต็ม × % กับยอดที่กรอกไว้ / กรอกยอดเอง — ค่าใช้จ่ายที่คิดเป็น % คำนวณใหม่ให้')
         : '',
       table(lineColumns, inv.lines, {
         footer: ['รวม', money(inv.grossTotal), '', '', money(inv.commissionTotal), ...(editable ? [''] : [])],
@@ -1366,7 +1413,7 @@ export async function invoicesView() {
               : 'ยังไม่ได้เลือกรายการใดเลย',
             el('div', { class: 'sub-line' },
               `เลือก ${t.count}/${pending.length} รายการ · ยอดขายเต็มรวมเพิ่มอีก ${money(t.gross)} ฿`
-              + (t.manualCount ? ` · กรอกยอดเอง ${t.manualCount} รายการ` : '')
+              + lineSourceNote(t)
               + ' · ค่าใช้จ่าย/ส่วนลดที่คิดเป็น % จะคำนวณใหม่ให้'),
             t.error ? el('div', { class: 'text-danger mt-4' }, `⚠ ${t.error}`) : '');
         };

@@ -8,7 +8,7 @@ import { activityButton } from './activity.js';
 import { usdRateChip } from './periodRate.js';
 import { viewState } from '../viewState.js';
 import { avatar } from '../charts.js';
-import { componentsLine, groupBadge } from './billLines.js';
+import { commissionOf, componentsLine, groupBadge, parseAmount, parseGross, presetOf, sumBaht } from './billLines.js';
 
 const FRANCHISE_KEY = 'franchise.salesFranchise';
 
@@ -16,8 +16,53 @@ const FRANCHISE_KEY = 'franchise.salesFranchise';
  * ตัวเลขที่พิมพ์ไว้แต่ยังไม่ได้บันทึก — เก็บนอกหน้า ไม่ให้หายตอนหน้าวาดใหม่
  * เดิมกดบันทึกแถวหนึ่ง หน้าวาดใหม่ทั้งหน้า แล้วตัวเลขที่พิมพ์ค้างในแถวอื่นหายเงียบ ๆ
  * key = รอบ|สินค้า — เปลี่ยนรอบไปดูแล้วกลับมา ตัวเลขของรอบนั้นยังอยู่
+ * value = { gross, manual } ข้อความในสองช่องของแถวนั้นทั้งคู่ (ไม่ใช่เฉพาะช่องที่เปลี่ยน)
+ *   — "บันทึกทั้งหมด" ส่งได้ครบทั้งที่แถวนั้นอาจไม่อยู่บนจอ (ตัวกรองร้านซ่อนไว้) และตรวจกติกาได้จากตัวมันเอง
  */
 const drafts = new Map();
+
+/**
+ * ตรวจตัวเลขของแถวก่อนส่ง — กติกาเดียวกับเซิร์ฟเวอร์ (เซิร์ฟเวอร์ตรวจซ้ำและเป็นคนตัดสิน)
+ * ยอดเต็มต้องมี · ยอดส่วนต่างที่กรอกเองไม่บังคับ แต่ถ้ามีต้องอยู่ระหว่าง 0 ถึงยอดเต็ม (เครื่องหมายเดียวกัน — รอบคืนของติดลบได้)
+ * คืน { gross, manual (ตัวเลข | null) } หรือ { error, field: 'gross' | 'manual' }
+ */
+function checkRow({ gross, manual }) {
+  const g = parseGross(gross);
+  if (g.empty) return { error: 'ใส่ยอดขายเต็มก่อน — ยอดส่วนต่างที่กรอกเองใช้คู่กับยอดเต็มเสมอ', field: 'gross' };
+  if (g.error) return { error: `ยอดขายเต็ม: ${g.error}`, field: 'gross' };
+  const m = parseAmount(manual, g.value);
+  if (m.error) {
+    return {
+      error: m.error.startsWith('ยอดที่เรียกเก็บ')
+        ? `ยอดส่วนต่างต้องอยู่ระหว่าง 0 ถึงยอดเต็ม (${money(g.value)} บาท)`
+        : `ยอดส่วนต่างที่กรอกเอง: ${m.error}`,
+      field: 'manual',
+    };
+  }
+  return { gross: g.value, manual: m.empty ? null : m.value };
+}
+
+/** ส่วนต่างที่ % ให้ (ยอดเต็ม × %) ของยอดที่บันทึกแล้ว — เซิร์ฟเวอร์ส่ง pctAmount มา (รุ่นก่อน 2.3.0 ไม่มี = คิดเองแบบเดียวกัน) */
+const pctAmountOf = (entry) => entry.pctAmount ?? commissionOf(entry.grossAmount, entry.commissionPct ?? 0);
+
+/**
+ * "ออกบิลจะใช้ยอดไหน" ของยอดที่บันทึกแล้ว — [คำอธิบาย, ยอด]
+ * MANUAL ที่ตรงกับยอดที่กรอกไว้ = ยอดจากหน้านี้ · MANUAL ที่ไม่ตรง = ยอดที่กำหนดตอนออกบิล (บิลเดิมถูกยกเลิก ยอดกลับมารอออกใหม่ หรือออกบิลไปแล้ว)
+ */
+function usedOf(entry) {
+  const preset = presetOf(entry);
+  if (entry.billMode === 'MANUAL') {
+    return preset !== null && preset === entry.commissionAmount
+      ? ['ยอดที่กรอกเอง', entry.commissionAmount, 'PRESET']
+      : ['ยอดที่กำหนดตอนออกบิล', entry.commissionAmount, 'BILL'];
+  }
+  return [`ยอดเต็ม × ${pct(entry.commissionPct)} =`, entry.commissionAmount, 'PCT'];
+}
+
+/** บรรทัดเล็ก "ออกบิลจะใช้: …" ใต้ช่องยอดส่วนต่าง — ตัวเลขที่บิลจะใช้ตัวหนา ให้กวาดตาเทียบกับคอลัมน์ข้าง ๆ ได้ */
+const usedLine = (prefix, [label, amount], { unsaved = false } = {}) => el('div',
+  { class: `sub-line used-line${unsaved ? ' unsaved' : ''}` },
+  `${prefix} ${label} `, el('strong', {}, money(amount)));
 
 // ปิดแท็บ/รีเฟรชขณะที่ยังมีตัวเลขไม่ได้บันทึก — ให้เบราว์เซอร์ถามก่อน
 window.addEventListener('beforeunload', (e) => {
@@ -132,19 +177,42 @@ export async function salesView() {
     saveAll.textContent = `💾 บันทึกทั้งหมด (${n})`;
   };
   syncSaveAll();
+  // ชื่อสินค้าไว้บอกในข้อความว่าแถวไหนยังบันทึกไม่ได้ (แถวที่ตัวกรองซ่อนไว้ไม่มีชื่อในหน้านี้ — ใช้เลขสินค้าแทน)
+  const skuOf = (productId) => activeRows.find((r) => r.product.id === productId)?.product.sku ?? `สินค้า #${productId}`;
   saveAll.addEventListener('click', async () => {
     const pending = draftsOfPeriod();
     if (!pending.length) return;
+    /*
+     * ตรวจทุกแถวก่อนส่ง — แถวที่ผิดกติกาไม่ส่ง (ค้างไว้ให้แก้พร้อมเหตุผลใต้ช่อง) แถวที่ถูกส่งไปก่อน
+     * ส่ง manualAmount ทุกแถวเสมอ (ตัวเลข หรือ null = ไม่ได้กรอก/ลบทิ้ง) — ไม่ส่งเลย เซิร์ฟเวอร์จะคงยอดเดิมไว้
+     * ช่องที่ผู้ใช้ลบเลขออกจึงต้องส่ง null ไปบอกตรง ๆ ไม่งั้นยอดเก่ากลับมาเงียบ ๆ
+     */
+    const items = [];
+    const invalid = [];
+    for (const [key, draft] of pending) {
+      const productId = Number(key.split('|')[1]);
+      const check = checkRow(draft);
+      if (check.error) invalid.push({ productId, message: check.error });
+      else items.push({ periodCode, productId, grossAmount: draft.gross, manualAmount: check.manual });
+    }
+    const invalidNote = invalid.length
+      ? `ยังบันทึกไม่ได้ ${invalid.length} แถว: ${skuOf(invalid[0].productId)} — ${invalid[0].message}`
+      : '';
+    if (!items.length) {
+      toast(invalidNote, 'error');
+      return;
+    }
     saveAll.disabled = true;
     try {
-      const res = await api.post('/api/sales-entries/bulk', {
-        items: pending.map(([key, raw]) => ({ periodCode, productId: Number(key.split('|')[1]), grossAmount: raw })),
-      });
+      const res = await api.post('/api/sales-entries/bulk', { items });
       // แถวที่บันทึกไม่ผ่านยังค้างไว้ให้แก้ — ไม่ทิ้งตัวเลขที่พิมพ์ไว้
-      const failed = new Set(res.errors.map((x) => x.productId));
+      const failed = new Set([...res.errors.map((x) => x.productId), ...invalid.map((x) => x.productId)]);
       for (const [key] of pending) if (!failed.has(Number(key.split('|')[1]))) drafts.delete(key);
       if (res.errors.length) {
-        toast(`บันทึก ${res.saved.length} แถว · ไม่ผ่าน ${res.errors.length} แถว: ${res.errors[0].message}`, 'error');
+        toast(`บันทึก ${res.saved.length} แถว · ไม่ผ่าน ${res.errors.length} แถว: ${res.errors[0].message}`
+          + (invalidNote ? ` · ${invalidNote}` : ''), 'error');
+      } else if (invalidNote) {
+        toast(`บันทึก ${res.saved.length} แถว · ${invalidNote}`, 'error');
       } else {
         toast(`บันทึกแล้ว ${res.saved.length} แถว`, 'success');
       }
@@ -168,11 +236,15 @@ export async function salesView() {
       : row.shopDeleted
         ? [`ร้าน ${row.entry.franchiseUsername} ถูกลบแล้ว — ยอดนี้แก้ไม่ได้ (บิลเก่ายังแสดงร้านนี้ตามเดิม)`, `ร้าน ${row.entry.franchiseUsername} ถูกลบแล้ว ลบยอดแล้วกรอกให้ร้านนี้ใหม่ไม่ได้อีก`]
         : ['สินค้านี้ถูกปิดใช้งานแล้ว — เปิดใช้งานที่หน้าสินค้าก่อนจึงจะกรอก/แก้ยอดได้', 'สินค้านี้ปิดใช้งานแล้ว ลบแล้วกรอกใหม่ไม่ได้จนกว่าจะเปิดใช้งาน'];
+    const preset = presetOf(row.entry);
     return {
       amount: el('div', { class: 'amount-cell', title: why }, el('strong', {}, money(row.entry.grossAmount))),
       commission: el('div', { class: 'commission-cell' },
-        el('strong', { style: negative ? 'color:var(--danger)' : '' }, money(row.entry.commissionAmount)),
+        el(preset === null ? 'strong' : 'span', { style: negative ? 'color:var(--danger)' : '' }, money(pctAmountOf(row.entry))),
         negative ? el('div', { class: 'sub-line' }, 'ยอดคืน') : ''),
+      manual: el('div', { class: 'commission-cell' },
+        preset === null ? el('span', { class: 'muted' }, '—') : el('strong', {}, money(preset)),
+        usedLine(invoiced ? 'ออกบิลแล้ว ใช้:' : 'ออกบิลจะใช้:', usedOf(row.entry))),
       actions: el('div', { class: 'btn-row' },
         invoiced
           ? ''
@@ -195,10 +267,15 @@ export async function salesView() {
       return cells;
     }
 
-    // entry ที่บันทึกแล้วใช้ % ที่ snapshot ไว้ ส่วนแถวที่ยังไม่กรอกใช้ % ปัจจุบันของสินค้า
-    const pctValue = row.entry?.commissionPct ?? row.product.commissionPct ?? 0;
+    /*
+     * % ของยอดที่บันทึกแล้วใช้ค่าที่ snapshot ไว้กับรายการ · ตัวเลขที่ยังไม่บันทึกใช้ % ปัจจุบันของสินค้า
+     * (บันทึกยอดใหม่ เซิร์ฟเวอร์คิดด้วย % ปัจจุบันของสินค้าเสมอ — พรีวิวต้องใช้ตัวเดียวกัน)
+     */
+    const savedPct = row.entry?.commissionPct ?? row.product.commissionPct ?? 0;
+    const draftPct = row.product.commissionPct ?? savedPct;
     const invoiced = row.entry?.status === 'INVOICED';
-    const savedAmount = row.entry ? row.entry.grossAmount : null;
+    const savedGross = row.entry ? row.entry.grossAmount : null;
+    const savedManual = row.entry ? presetOf(row.entry) : null;
 
     /*
      * ยอดที่บันทึกแล้วจะถูกล็อกไว้ ต้องกด "แก้ไข" ก่อนถึงจะพิมพ์ทับได้
@@ -211,12 +288,32 @@ export async function salesView() {
     const box = el('input', {
       type: 'number',
       step: '0.01',
+      inputmode: 'decimal',
       class: 'amount-input',   // ไม่ใส่ min เพราะยอดคืนสินค้าเป็นค่าติดลบได้
-      value: draft ?? (row.entry ? row.entry.grossAmount : ''),
+      value: draft?.gross ?? (row.entry ? row.entry.grossAmount : ''),
       placeholder: '0.00',
+      'aria-label': `ยอดขายเต็มของ ${row.product.sku}`,
       title: invoiced
         ? 'ออกบิลไปแล้ว แก้ไม่ได้ — ต้องยกเลิกบิลก่อน'
         : row.product.isGroup ? 'สินค้ากลุ่ม — กรอกยอดขายรวมของทั้งชุดเป็นยอดเดียว' : undefined,
+    });
+
+    /*
+     * ยอดส่วนต่างที่กรอกเอง (R21 · ไม่บังคับ) — ยอดบิลที่รู้อยู่แล้ว ไม่ต้องให้ระบบคิดจาก %
+     * ยอดเต็มยังต้องกรอกเสมอ (รายงาน อันดับร้าน และค่าคอมเซลคิดจากยอดเต็ม)
+     * ตอนออกบิลเลือกได้ทีละสินค้าว่าจะใช้ยอดนี้ หรือยอดเต็ม × % — ตั้งต้นใช้ยอดนี้ถ้ากรอกไว้
+     */
+    const manualBox = el('input', {
+      type: 'number',
+      step: '0.01',
+      inputmode: 'decimal',
+      class: 'amount-input manual-input',
+      value: draft ? draft.manual : (savedManual ?? ''),
+      placeholder: invoiced ? '—' : 'ถ้ามี',
+      'aria-label': `ยอดส่วนต่างที่กรอกเองของ ${row.product.sku}`,
+      title: invoiced
+        ? 'ออกบิลไปแล้ว แก้ไม่ได้ — ต้องยกเลิกบิลก่อน'
+        : 'ไม่บังคับ — กรอกเมื่อรู้ยอดที่จะเรียกเก็บอยู่แล้ว (0 ถึงยอดเต็ม) · เว้นว่าง = คิดจากยอดเต็ม × %',
     });
 
     const save = el('button', { class: 'btn sm' }, 'บันทึก');
@@ -225,48 +322,83 @@ export async function salesView() {
     const remove = el('button', { class: 'btn ghost sm danger' }, 'ลบ');
 
     /*
-     * ส่วนต่างที่คำนวณสด โชว์ในคอลัมน์ "ส่วนต่างที่ต้องจ่าย" เลย
-     * เดิมโชว์เป็นบรรทัดเล็กใต้ช่องกรอก ซึ่งพูดเรื่องเดียวกับคอลัมน์ข้าง ๆ
-     * เลยมีตัวเลขชุดเดียวกันอยู่สามที่ในแถวเดียว และดันแถวสูงขึ้นเท่าตัว
+     * ส่วนต่างที่ % ให้ คำนวณสดในคอลัมน์ "ส่วนต่างตาม %" · ยอดที่กรอกเองอยู่คอลัมน์ถัดไป
+     * ใต้ช่องกรอกเองบอกว่าออกบิลจะใช้ยอดไหน — ตัวที่ใช้ตัวหนา อีกตัวจาง
      */
     const commission = el('div', { class: 'commission-cell' });
+    const grossError = el('div', { class: 'line-error' });
+    const manualError = el('div', { class: 'line-error' });
+    const used = el('div');
 
     const refresh = () => {
-      const raw = box.value.trim();
-      const dirty = editing && raw !== '' && (savedAmount === null || Number(raw) !== savedAmount);
-      if (dirty) drafts.set(draftKey, raw); else drafts.delete(draftKey);
+      const rawGross = box.value.trim();
+      const rawManual = manualBox.value.trim();
+      // ช่องยอดเต็มว่างบนยอดที่บันทึกแล้ว = ยังไม่ได้แก้ (ลบยอดใช้ปุ่ม "ลบ") · ช่องกรอกเองว่าง = ล้างยอดที่กรอกไว้ (เปลี่ยนจริง)
+      const grossChanged = rawGross !== '' && (savedGross === null || Number(rawGross) !== savedGross);
+      const manualChanged = rawManual === '' ? savedManual !== null : (savedManual === null || Number(rawManual) !== savedManual);
+      const dirty = editing && (grossChanged || manualChanged);
+      if (dirty) drafts.set(draftKey, { gross: rawGross, manual: rawManual }); else drafts.delete(draftKey);
       syncSaveAll();
 
       box.disabled = !editing || invoiced;
-      box.classList.toggle('dirty', dirty);
+      manualBox.disabled = !editing || invoiced;
+      box.classList.toggle('dirty', dirty && grossChanged);
+      manualBox.classList.toggle('dirty', dirty && manualChanged);
+
+      const check = dirty ? checkRow({ gross: rawGross, manual: rawManual }) : null;
+      box.classList.toggle('invalid', Boolean(check?.error) && check.field === 'gross');
+      manualBox.classList.toggle('invalid', Boolean(check?.error) && check.field === 'manual');
+      grossError.textContent = check?.error && check.field === 'gross' ? check.error : '';
+      manualError.textContent = check?.error && check.field === 'manual' ? check.error : '';
 
       // ออกบิลแล้วแตะอะไรไม่ได้เลย · กำลังแก้ = บันทึก/ยกเลิก · ปกติ = แก้ไข/ลบ
       save.style.display = dirty ? '' : 'none';
+      save.disabled = Boolean(check?.error);
       cancel.style.display = editing && row.entry ? '' : 'none';
       edit.style.display = !editing && !invoiced ? '' : 'none';
       remove.style.display = row.entry && !invoiced && !editing ? '' : 'none';
 
-      if (dirty) {
-        const est = Math.round(Number(raw) * pctValue) / 100;
+      if (dirty && check && !check.error) {
+        const pctBaht = commissionOf(check.gross, draftPct);
+        const manualUsed = check.manual !== null;
         commission.replaceChildren(
-          el('strong', { class: 'unsaved' }, money(est)),
-          // บันทึกยอดใหม่ = เริ่มคิดตาม % ใหม่ ยอดที่เคยกำหนดเองตอนออกบิลไม่ติดมาด้วย
-          el('div', { class: 'sub-line' }, row.entry?.billMode === 'MANUAL' ? 'ยังไม่บันทึก · บันทึกแล้วกลับไปคิดตาม %' : 'ยังไม่บันทึก'));
+          el(manualUsed ? 'span' : 'strong', { class: 'unsaved' }, money(pctBaht)),
+          el('div', { class: 'sub-line' }, 'ยังไม่บันทึก'));
+        used.replaceChildren(usedLine('ออกบิลจะใช้:', manualUsed
+          ? ['ยอดที่กรอกเอง', check.manual]
+          : [`ยอดเต็ม × ${pct(draftPct)} =`, pctBaht], { unsaved: true }),
+        // บันทึกใหม่ = กลับไปใช้ค่าจากหน้านี้ ยอดที่เคยกำหนดตอนออกบิล (บิลเดิมถูกยกเลิก) ไม่ติดมาด้วย
+        row.entry && usedOf(row.entry)[2] === 'BILL'
+          ? el('div', { class: 'sub-line' }, `แทนยอดที่กำหนดตอนออกบิลครั้งก่อน (${money(row.entry.commissionAmount)})`)
+          : '');
+      } else if (dirty) {
+        // ตัวเลขยังผิดกติกา — ยังบอกไม่ได้ว่าบิลจะใช้ยอดไหน (เหตุผลอยู่ใต้ช่องที่ผิด) · ยอดเต็มถูกแล้วก็ยังโชว์ส่วนต่างตาม % ไว้เทียบ
+        const g = parseGross(rawGross);
+        commission.replaceChildren(g.value !== undefined
+          ? el('span', { class: 'unsaved' }, money(commissionOf(g.value, draftPct)))
+          : el('span', { class: 'muted' }, '—'));
+        used.replaceChildren();
       } else if (row.entry) {
         const negative = row.entry.grossAmount < 0;
         commission.replaceChildren(
-          el('strong', { style: negative ? 'color:var(--danger)' : '' }, money(row.entry.commissionAmount)),
+          el(row.entry.billMode === 'PCT' ? 'strong' : 'span', { style: negative ? 'color:var(--danger)' : '' },
+            money(pctAmountOf(row.entry))),
           negative ? el('div', { class: 'sub-line' }, 'ยอดคืน') : '');
+        used.replaceChildren(usedLine(invoiced ? 'ออกบิลแล้ว ใช้:' : 'ออกบิลจะใช้:', usedOf(row.entry)));
       } else {
         commission.replaceChildren(el('span', { class: 'muted' }, '—'));
+        used.replaceChildren();
       }
     };
 
     box.addEventListener('input', refresh);
-    // กด Enter = บันทึกแถวนี้ ไม่ต้องเอื้อมไปกดปุ่ม
-    box.addEventListener('keydown', (e) => {
+    manualBox.addEventListener('input', refresh);
+    // กด Enter ที่ช่องไหนก็ได้ = บันทึกแถวนี้ ไม่ต้องเอื้อมไปกดปุ่ม
+    const enterSaves = (e) => {
       if (e.key === 'Enter' && save.style.display !== 'none' && !save.disabled) save.click();
-    });
+    };
+    box.addEventListener('keydown', enterSaves);
+    manualBox.addEventListener('keydown', enterSaves);
 
     edit.addEventListener('click', () => {
       editing = true;
@@ -277,20 +409,30 @@ export async function salesView() {
 
     cancel.addEventListener('click', () => {
       editing = false;
-      box.value = savedAmount ?? '';   // คืนค่าที่บันทึกไว้ ทิ้งสิ่งที่เพิ่งพิมพ์
+      // คืนค่าที่บันทึกไว้ ทิ้งสิ่งที่เพิ่งพิมพ์
+      box.value = savedGross ?? '';
+      manualBox.value = savedManual ?? '';
       refresh();
     });
 
     save.addEventListener('click', async () => {
+      const check = checkRow({ gross: box.value, manual: manualBox.value });
+      if (check.error) {
+        toast(`${row.product.sku}: ${check.error}`, 'error');
+        return;
+      }
       save.disabled = true;
       try {
         const saved = await api.post('/api/sales-entries', {
           periodCode,
           productId: row.product.id,
           grossAmount: box.value,
+          // ส่งเสมอ — null = ไม่ได้กรอก/ลบยอดที่กรอกไว้ (ไม่ส่งเลย เซิร์ฟเวอร์จะคงยอดเดิมไว้)
+          manualAmount: check.manual,
         });
         drafts.delete(draftKey);
-        toast(`บันทึก ${row.product.sku} แล้ว — ส่วนต่าง ${money(saved.commissionAmount)} ฿`, 'success');
+        toast(`บันทึก ${row.product.sku} แล้ว — ออกบิลจะใช้ ${money(saved.commissionAmount)} ฿`
+          + (saved.billMode === 'MANUAL' ? ' (ยอดที่กรอกเอง)' : ` (ยอดเต็ม × ${pct(saved.commissionPct)})`), 'success');
         render();
       } catch (err) {
         toast(err.fullMessage ?? err.message, 'error');
@@ -310,9 +452,10 @@ export async function salesView() {
     refresh();
 
     const cells = {
-      amount: el('div', { class: 'amount-cell' }, box, save),
+      amount: el('div', { class: 'entry-cell' }, box, grossError),
       commission,
-      actions: el('div', { class: 'btn-row' }, edit, cancel, remove),
+      manual: el('div', { class: 'entry-cell' }, manualBox, manualError, used),
+      actions: el('div', { class: 'btn-row' }, save, edit, cancel, remove),
     };
     cellCache.set(row, cells);
     return cells;
@@ -327,12 +470,10 @@ export async function salesView() {
   }
 
   /*
-   * ช่อง % — ยอดที่กำหนดเองตอนออกบิล (กรอกยอดเอง) ไม่ได้มาจาก % แล้ว
-   * โชว์ % เดิมข้างยอดนั้นจะทำให้คนคูณตามแล้วงงว่าทำไมไม่ตรง จึงบอกว่ากรอกยอดเองแทน
+   * ช่อง % — โชว์ % เสมอ เพราะคอลัมน์ "ส่วนต่างตาม %" ข้าง ๆ คือยอดเต็ม × % นี้จริง ๆ (คูณตามแล้วตรง)
+   * ยอดที่ใช้ยอดอื่น (กรอกเองในหน้านี้ / กำหนดตอนออกบิล) บอกไว้ใต้ช่องกรอกเองว่า "ออกบิลจะใช้" ยอดไหน
    */
-  const pctCell = (r) => (r.entry?.billMode === 'MANUAL'
-    ? el('span', { class: 'badge blue', title: `กำหนดยอดตอนออกบิล (% ตั้งต้นของสินค้า ${pct(r.entry.commissionPct)})` }, 'กรอกยอดเอง')
-    : el('span', { class: 'muted' }, pct(r.entry?.commissionPct ?? r.product.commissionPct ?? 0)));
+  const pctCell = (r) => el('span', { class: 'muted' }, pct(r.entry?.commissionPct ?? r.product.commissionPct ?? 0));
 
   /*
    * สินค้ากลุ่ม (ชุด) = แถวเดียว กรอกยอดรวมของทั้งชุด คิด % ของกลุ่ม — รายการย่อยเป็นแค่ข้อมูลว่าในชุดมีอะไร
@@ -367,13 +508,15 @@ export async function salesView() {
         : avatar(r.product.currentAssignment.franchiseUsername, { sub: '' })),
     },
     { label: 'ยอดขายเต็ม (บาท)', num: true, sortValue: (r) => r.entry?.grossAmount ?? -Infinity, render: (r) => cellsOf(r).amount },
+    { label: '%', num: true, sortValue: (r) => r.entry?.commissionPct ?? r.product.commissionPct ?? 0, render: pctCell },
+    // ป้ายคอลัมน์เป็นข้อความทุกช่อง — บนมือถือตารางพลิกเป็นการ์ดแล้วใช้ป้ายนี้บอกว่าตัวเลขคืออะไร
+    { label: 'ส่วนต่างตาม %', num: true, sortValue: (r) => (r.entry ? pctAmountOf(r.entry) : -Infinity), render: (r) => cellsOf(r).commission },
     {
-      label: '%',
+      label: 'ยอดส่วนต่างที่กรอกเอง (ถ้ามี)',
       num: true,
-      sortValue: (r) => (r.entry?.billMode === 'MANUAL' ? '' : r.entry?.commissionPct ?? r.product.commissionPct ?? 0),
-      render: pctCell,
+      sortValue: (r) => presetOf(r.entry) ?? -Infinity,
+      render: (r) => cellsOf(r).manual,
     },
-    { label: 'ส่วนต่างที่ต้องจ่าย', num: true, sortValue: (r) => r.entry?.commissionAmount ?? -Infinity, render: (r) => cellsOf(r).commission },
     { label: 'สถานะ', render: statusCell, sortValue: (r) => r.entry?.status ?? '' },
     { label: '', sortable: false, render: (r) => cellsOf(r).actions },
   ];
@@ -420,19 +563,25 @@ export async function salesView() {
       el('h2', { class: 'section-title' }, `สินค้าที่ต้องกรอกยอดในรอบนี้ (${int(activeRows.length)})`,
         archivedCount ? el('span', { class: 'sub-line' }, ` + ปิดใช้งานแล้วแต่มียอด ${int(archivedCount)}`) : '',
         deletedCount ? el('span', { class: 'sub-line' }, ` + สินค้าที่ลบแล้วแต่มียอด ${int(deletedCount)}`) : '',
-        deletedShopCount ? el('span', { class: 'sub-line' }, ` + ยอดของร้านที่ลบแล้ว ${int(deletedShopCount)}`) : ''),
+        deletedShopCount ? el('span', { class: 'sub-line' }, ` + ยอดของร้านที่ลบแล้ว ${int(deletedShopCount)}`) : '',
+        // ช่องใหม่ (R21) ไม่บังคับ — บอกครั้งเดียวเหนือตารางว่าใช้เมื่อไร และไปเลือกตอนไหน
+        el('div', { class: 'sub-line' },
+          'ช่อง "ยอดส่วนต่างที่กรอกเอง" ไม่บังคับ — กรอกเมื่อรู้ยอดที่จะเรียกเก็บอยู่แล้ว · ตอนออกบิลเลือกได้ทีละสินค้าว่าจะใช้ยอดนั้น หรือยอดเต็ม × %')),
       el('div', { class: 'filters' },
         el('div', { class: 'field' }, el('label', {}, 'กรองตามร้านค้า'), franchisePicker),
         saveAll)),
 
-    card(null, table(columns, rows, {
+    el('div', { class: 'sales-grid' }, card(null, table(columns, rows, {
       rowClass: (r) => (r.entry ? '' : 'row-todo'),
       search: 'ค้นหาสินค้าหรือร้าน…',
       empty: 'รอบนี้ยังไม่มีสินค้าที่ถูกมอบหมายให้ร้านใด — ไปหน้า "สินค้า" เพื่อมอบหมายก่อน',
       // รวมเฉพาะยอดที่บันทึกแล้ว — ตัวเลขที่ยังพิมพ์ค้างอยู่ยังไม่ใช่ข้อมูลจริง
+      // "ส่วนต่างตาม %" รวมเฉพาะยอดเต็ม × % · ยอดที่บิลใช้จริง (ปนยอดที่กรอกเอง) รวมไว้ใต้คอลัมน์กรอกเอง ตรงกับการ์ดสรุปด้านบน
       footer: filled + retiredRows.length
         ? ['', `รวม ${int(filled + retiredRows.length)} รายการที่กรอกแล้ว`,
-          money(summary.grossTotal), '', money(summary.commissionTotal), '', '']
+          money(summary.grossTotal), '', money(sumBaht(entriesRes.items.map(pctAmountOf))),
+          el('div', {}, el('strong', {}, money(summary.commissionTotal)), el('div', { class: 'sub-line' }, 'รวมที่ออกบิลจะใช้')),
+          '', '']
         : undefined,
-    }), { tight: true }));
+    }), { tight: true })));
 }

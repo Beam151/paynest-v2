@@ -17,6 +17,11 @@ class SalesEntries extends BaseApiController
             'periodCode'  => V::periodCode(),
             'productId'   => V::id(),
             'grossAmount' => V::amount(), // ยอดเงินเต็มจากการขาย
+            /*
+             * ยอดส่วนต่างที่กรอกเอง (R21 · ไม่บังคับ) — ยอดบิลที่คิดมาแล้ว ออกบิลจะใช้ยอดนี้เป็นค่าตั้งต้น (เปลี่ยนเป็น % ได้ตอนออกบิล)
+             * ไม่ส่งคีย์ = ค่าเดิมของรายการ · null = ล้าง · ตัวเลข = ตั้งใหม่ (0 ถึงยอดเต็ม เครื่องหมายเดียวกัน · ไม่เกิน 100 ล้านบาท)
+             */
+            'manualAmount' => V::amount()->nullable()->optional(),
             'units'       => V::coerceNumber()->int()->min(0)->optional(),
             'note'        => V::string()->optional(),
             'franchiseId' => V::id()->optional(),

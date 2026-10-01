@@ -362,7 +362,7 @@ mysql -u paynest -p paynest -e "DELETE FROM app_settings WHERE name IN ('turnsti
 
 - `composer test:pentest` ลองโจมตีจริง 123 แบบ (SQL injection, XSS, ปลอม token, ข้ามสิทธิ์ร้าน, อัปโหลดไฟล์ปลอม,
   เปิด `.env`/`secrets.json` ตรง ๆ, เดารหัสรัว ๆ, เดา key ลิงก์เข้าระบบของร้าน ฯลฯ) ทุกข้อต้องผ่าน
-- `composer test:smoke` ตรวจทุกฟีเจอร์ 790 ข้อ (รวมสิทธิ์ 2FA ลิงก์เข้าระบบของร้าน เลขบัญชีในข้อความ Telegram และลบร้าน = ผู้ใช้หลุด + ลิงก์ตาย)
+- `composer test:smoke` ตรวจทุกฟีเจอร์ 827 ข้อ (รวมสิทธิ์ 2FA ลิงก์เข้าระบบของร้าน เลขบัญชีในข้อความ Telegram และลบร้าน = ผู้ใช้หลุด + ลิงก์ตาย)
 - `composer test:smoke` มี section "captcha หน้าเข้าสู่ระบบ" จำลอง botnet ด้วย `X-Forwarded-For` คนละ IP
   และใช้ Cloudflare จำลองใน `tests/e2e/lib/harness.mjs` (token `pass:<action>` ผ่าน · สั่งให้ล่มได้) จึงไม่ออกเน็ตจริง
 - แก้อะไรในไฟล์นี้ ให้รันทั้งสองชุดก่อนส่งงานทุกครั้ง

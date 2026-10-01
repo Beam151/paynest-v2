@@ -724,6 +724,22 @@ tr.row-expanded:hover > td { background: var(--primary-soft); }
 .commission-cell { font-variant-numeric: tabular-nums; }
 .commission-cell .unsaved { color: var(--warn); }
 
+/* ช่องกรอกยอดเต็ม / ยอดส่วนต่างที่กรอกเอง — ช่องอยู่บน เหตุผลที่ผิด + "ออกบิลจะใช้" อยู่ใต้ช่อง ชิดขวาตามตัวเลข */
+.entry-cell { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.amount-input.invalid { border-color: var(--danger); box-shadow: 0 0 0 2px var(--danger-soft); }
+.entry-cell .line-error { max-width: 240px; }
+/* บอกว่าออกบิลจะใช้ยอดไหน — ขึ้นบรรทัดใหม่ได้ ไม่ดันตารางกว้างจนต้องเลื่อนข้าง */
+.used-line { white-space: normal; text-align: right; max-width: 240px; line-height: 1.4; }
+.used-line strong { color: var(--text); font-variant-numeric: tabular-nums; }
+.used-line.unsaved strong { color: var(--warn); }
+/* หัวตารางยอดขายมีป้ายยาว ("ยอดส่วนต่างที่กรอกเอง (ถ้ามี)") — ให้ขึ้นบรรทัดใหม่ได้ แทนที่จะดันคอลัมน์ให้กว้างเท่าป้าย
+   ตารางนี้มีช่องกรอกสองช่องต่อแถว — รายการย่อยของสินค้ากลุ่มตัดสั้นลง ให้ทั้งแถวพอดีจอเดสก์ท็อปโดยไม่ต้องเลื่อนข้าง */
+.sales-grid th { white-space: normal; vertical-align: bottom; }
+@media (min-width: 861px) {
+  .sales-grid .components-line.short { max-width: 220px; }
+  .sales-grid th, .sales-grid td { padding-left: 10px; padding-right: 10px; }
+}
+
 /* แถวที่ยังไม่ได้กรอก — จาง ๆ พอให้กวาดตาหาได้ว่าเหลืออันไหน */
 tr.row-todo > td:first-child { box-shadow: inset 3px 0 0 var(--border); }
 
@@ -829,18 +845,21 @@ tr.row-flash > td { animation: row-flash 1.5s ease-out 1; }
    และหน้าค่าคอมเซล "แก้รายสินค้า" (ตามดีล / % ของยอดเต็ม / กรอกเอง)
    คลาสของช่องกรอก (.line-mode .line-pct .line-amount .line-computed) ใช้เดี่ยว ๆ ได้ ไม่ต้องอยู่ในตาราง */
 .line-editor { margin-bottom: 4px; }
+/* แถวเหนือตาราง: เลือกทั้งหมด + ปุ่มลัดเปลี่ยนวิธีคิดทุกบรรทัด */
+.line-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 8px; }
 .line-editor .check-all {
   display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
   margin: 0 0 8px; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-md);
   background: var(--surface); font-size: var(--fs-sm); font-weight: 600; color: var(--text-2);
 }
+.line-tools .check-all { margin: 0; }
 .line-editor .check-all input { width: auto; margin: 0; }
 .line-editor th, .line-editor td { padding: 8px 10px; vertical-align: middle; }
 .line-editor td input[type="checkbox"] { width: auto; }
 /* ชื่อสินค้ายาวให้ขึ้นบรรทัดใหม่ได้ ไม่ดันช่องกรอกตกขอบโมดัล */
 .line-editor td .sub-line { white-space: normal; }
 .line-editor tfoot td:empty { padding: 0; }
-.line-mode { width: auto; min-width: 132px; max-width: 260px; font-size: var(--fs-sm); padding: 6px 9px; }
+.line-mode { width: auto; min-width: 132px; max-width: 300px; font-size: var(--fs-sm); padding: 6px 9px; }
 input.line-pct, input.line-amount {
   font-size: var(--fs-sm); padding: 6px 9px; text-align: right; font-variant-numeric: tabular-nums;
 }
@@ -855,6 +874,9 @@ input.line-pct.invalid, input.line-amount.invalid { border-color: var(--danger);
 .line-cell { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 2px; }
 .line-error { display: block; color: var(--danger); font-size: var(--fs-xs); font-weight: 600; white-space: normal; text-align: right; max-width: 220px; }
 .line-error:empty { display: none; }
+/* ใช้ยอดที่กรอกไว้แต่พิมพ์เป็นเลขอื่น — บอกเบา ๆ ใต้ช่อง (ไม่ใช่ข้อผิดพลาด) */
+.line-note { display: block; color: var(--muted); font-size: var(--fs-xs); white-space: normal; text-align: right; max-width: 220px; }
+.line-note:empty { display: none; }
 .line-editor [hidden] { display: none !important; }
 /* บรรทัดที่ไม่ได้ติ๊ก — จางลงแต่ยังอ่านออก (ช่องติ๊กไม่จาง จะได้เห็นว่ากดกลับได้) */
 .line-editor tr.line-off > td:not(:first-child) { opacity: .45; }
