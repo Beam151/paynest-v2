@@ -4143,6 +4143,80 @@ section('ยอดส่วนต่างที่กรอกเองใน�
     mbill.status === 201 && mbill.body.lines?.[0]?.baseAmount === 90000 && mbill.body.totalAmount === 4500, mbill.body);
 }
 
+/* ── อ้างอิงค่าใช้จ่าย/ส่วนลดจากบิลเก่า ───────────────────────────
+ * หน้าออกบิลดึงรายการของบิลเก่ามาเป็นแถวในฟอร์ม (แก้ต่อได้) แล้วส่งไปกับ /generate ตามปกติ
+ * เซิร์ฟเวอร์ต้อง: บอกจำนวนรายการในรายการบิล (adjustmentCount) · ยกเลิกบิลแล้วรายการยังอ่านได้ · คิด % ใหม่จากส่วนต่างรอบใหม่
+ */
+section('อ้างอิงค่าใช้จ่าย/ส่วนลดจากบิลเก่า (ตอนออกบิลใหม่)');
+{
+  const rs = await api('POST', '/api/franchises', { token: admin, body: { username: 'refshop', password: 'refshop-pass-1' } });
+  const sfid = rs.body.franchise?.id;
+  const stok = (await shopLogin('refshop', 'refshop-pass-1', sfid)).body.token;
+  const rp = (await api('POST', '/api/products', {
+    token: admin, body: { sku: 'REF-OLD-1', name: 'สินค้าอ้างอิงบิลเก่า', commissionPct: 10, franchiseId: sfid, startDate: '2026-01-01' },
+  })).body.product;
+  const [P1, P2] = ['2029-11-H1', '2029-11-H2'];
+  const sell = (periodCode, grossAmount) => api('POST', '/api/sales-entries', { token: admin, body: { periodCode, productId: rp?.id, grossAmount } });
+  const mkt = (await api('GET', '/api/charge-items', { token: admin })).body.items.find((i) => i.name === 'ค่าการตลาดส่วนกลาง'); // 2%
+
+  await sell(P1, 100000); // ส่วนต่าง 10,000
+  const old = await api('POST', '/api/invoices/generate', {
+    token: admin,
+    body: {
+      franchiseId: sfid,
+      periodCode: P1,
+      adjustments: [
+        { chargeItemId: mkt?.id },
+        { kind: 'CHARGE', label: 'ค่าตกแต่งร้าน', amount: 300, note: 'ผ่อนงวด 2/5' },
+        { kind: 'DISCOUNT', label: 'ส่วนลดลูกค้าประจำ', amount: 100 },
+      ],
+    },
+  });
+  check('ตั้งฉาก: บิลเก่ามีค่าใช้จ่าย/ส่วนลด 3 รายการ (10,000 + 200 + 300 − 100 = 10,400)',
+    old.status === 201 && old.body.adjustments?.length === 3 && old.body.netTotal === 10400, old.body);
+
+  const listedOf = async (token) => (await api('GET', `/api/invoices?franchiseId=${sfid}`, { token })).body.items?.find((i) => i.id === old.body.id);
+  check('รายการบิลบอกจำนวนค่าใช้จ่าย/ส่วนลด (adjustmentCount = 3) — หน้าออกบิลใช้หาบิลที่มีรายการให้อ้างอิง',
+    (await listedOf(admin))?.adjustmentCount === 3);
+  const noAdj = (await api('GET', '/api/invoices', { token: admin })).body.items?.find((i) => i.adjustmentCount === 0);
+  check('บิลที่ไม่มีค่าใช้จ่าย/ส่วนลดนับเป็น 0 (ไม่โผล่ให้อ้างอิง)', Boolean(noAdj), noAdj);
+
+  // ยกเลิกแล้วออกใหม่ = กรณีที่อยากได้รายการเดิมกลับมามากที่สุด
+  const voided = await api('POST', `/api/invoices/${old.body.id}/void`, { token: admin, body: { reason: 'ออกใหม่พร้อมแก้ยอด' } });
+  const vlisted = await listedOf(admin);
+  const vdetail = await api('GET', `/api/invoices/${old.body.id}`, { token: admin });
+  check('ยกเลิกบิลแล้วยังอ้างอิงได้: รายการบิลยังนับ 3 และเปิดดูรายการเดิมได้ครบ',
+    voided.status === 200 && vlisted?.status === 'VOID' && vlisted.adjustmentCount === 3 && vdetail.body.adjustments?.length === 3,
+    { voided: voided.body, vlisted });
+
+  // ทำแบบเดียวกับหน้าออกบิล: % ยังเป็น % · จำนวนเงินคงที่ใช้ตัวเลขเดิม · หมายเหตุติดมา · แล้วแก้ตัวเลขต่อก่อนกดออกบิล
+  const copied = vdetail.body.adjustments.map((a) => ({
+    ...(a.chargeItemId ? { chargeItemId: a.chargeItemId } : { kind: a.kind, label: a.label }),
+    ...(a.pct === null ? { amount: a.amount } : { pct: a.pct }),
+    ...(a.note ? { note: a.note } : {}),
+  }));
+  const disc = copied.find((a) => a.label === 'ส่วนลดลูกค้าประจำ');
+  if (disc) disc.amount = 250;
+  await sell(P2, 50000); // ส่วนต่าง 5,000
+  const fresh = await api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: sfid, periodCode: P2, adjustments: copied } });
+  const adj = (label) => fresh.body.adjustments?.find((a) => a.label === label);
+  check('บิลใหม่: % คิดใหม่จากส่วนต่างรอบนี้ (5,000 × 2% = 100) · จำนวนเงินคงที่ตามเดิม (300) · หมายเหตุติดมา · ส่วนลดที่แก้แล้วใช้ค่าใหม่ (250)',
+    fresh.status === 201 && fresh.body.commissionTotal === 5000
+      && adj('ค่าการตลาดส่วนกลาง')?.amount === 100 && adj('ค่าการตลาดส่วนกลาง')?.pct === 2 && adj('ค่าการตลาดส่วนกลาง')?.chargeItemId === mkt?.id
+      && adj('ค่าตกแต่งร้าน')?.amount === 300 && adj('ค่าตกแต่งร้าน')?.note === 'ผ่อนงวด 2/5'
+      && adj('ส่วนลดลูกค้าประจำ')?.amount === 250 && fresh.body.netTotal === 5150, fresh.body);
+  check('ส่วนต่างไม่ได้ติดมาจากบิลเก่า — มีแค่บรรทัดยอดขายของรอบใหม่',
+    fresh.body.lines?.length === 1 && fresh.body.lines[0].grossAmount === 50000, fresh.body.lines);
+
+  const oldAfter = await api('GET', `/api/invoices/${old.body.id}`, { token: admin });
+  check('บิลเก่าไม่ถูกแตะ (รายการและยอดเดิม)',
+    oldAfter.body.adjustments?.find((a) => a.label === 'ส่วนลดลูกค้าประจำ')?.amount === 100
+      && oldAfter.body.netTotal === vdetail.body.netTotal && oldAfter.body.status === 'VOID', oldAfter.body);
+
+  check('ร้านค้าเห็นจำนวนรายการเฉพาะบิลของตัวเอง',
+    ((await api('GET', '/api/invoices', { token: stok })).body.items ?? []).every((i) => i.franchiseId === sfid));
+}
+
 section('captcha หน้าเข้าสู่ระบบ: หลาย IP ผลัดกันเดารหัสบัญชีเดียว (botnet)');
 {
   const botKeys = {};

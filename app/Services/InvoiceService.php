@@ -30,7 +30,9 @@ final class InvoiceService
                  WHERE se.franchise_id = i.franchise_id AND se.period_id = i.period_id
                    AND se.status <> 'INVOICED') AS pending_entries,
                (SELECT COUNT(*) FROM invoice_attachments ia
-                 WHERE ia.invoice_id = i.id AND ia.removed_at IS NULL) AS attachment_count
+                 WHERE ia.invoice_id = i.id AND ia.removed_at IS NULL) AS attachment_count,
+               (SELECT COUNT(*) FROM invoice_adjustments iadj
+                 WHERE iadj.invoice_id = i.id) AS adjustment_count
           FROM invoices i
           JOIN franchises f       ON f.id = i.franchise_id
           JOIN billing_periods bp ON bp.id = i.period_id
@@ -1240,6 +1242,8 @@ final class InvoiceService
             'note'        => $row['note'],
             // จำนวนรูปประกอบ — รายการบิลโชว์ 📎 N ได้โดยไม่ต้องเซ็นลิงก์ทุกรูปของทุกใบ
             'attachmentCount' => (int) ($row['attachment_count'] ?? 0),
+            // จำนวนค่าใช้จ่าย/ส่วนลดในบิล — ตอนออกบิลใหม่ใช้หาบิลเก่าที่มีรายการให้ดึงมาอ้างอิง (นับตามแถว รายการ 0 บาทก็นับ)
+            'adjustmentCount' => (int) ($row['adjustment_count'] ?? 0),
             /*
              * บัญชีที่บิลชี้อยู่ตรงกับที่ส่งเข้า Telegram ของร้านล่าสุดไหม (ไม่มีข้อมูลบัญชีในนี้ ร้านเห็นได้)
              *   MATCH ตรงกัน · NOT_SENT ยังไม่เคยส่ง · CHANGED บัญชีเปลี่ยนหลังส่ง → หน้าแจ้งชำระเตือนร้านห้ามโอน

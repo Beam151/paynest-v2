@@ -840,6 +840,23 @@ tr.row-flash > td { animation: row-flash 1.5s ease-out 1; }
   white-space: nowrap; min-width: 92px; text-align: right;
 }
 
+/* แผงอ้างอิงค่าใช้จ่าย/ส่วนลดจากบิลเก่า (ในฟอร์มออกบิล) */
+.adj-ref {
+  margin-bottom: 10px; padding: 10px 12px;
+  background: var(--surface); border: 1px dashed var(--primary); border-radius: var(--radius);
+}
+.adj-ref-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.adj-ref-pickers { display: flex; gap: 10px; flex-wrap: wrap; }
+.adj-ref-pickers .field { margin: 0; flex: 1 1 200px; min-width: 0; }
+.adj-ref-pickers .field:last-child { flex-basis: 300px; }
+.adj-ref-pickers select { width: 100%; max-width: 100%; }
+.adj-ref-list { margin-top: 10px; display: grid; gap: 6px; }
+.adj-ref-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 7px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.adj-ref-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+
 /* ── ตัวแก้วิธีคิดยอดรายสินค้า ─────────────────────────────
    ใช้ทั้งตอนออกบิล/เพิ่มรายการเข้าบิล (คิดตาม % / กรอกยอดเอง)
    และหน้าค่าคอมเซล "แก้รายสินค้า" (ตามดีล / % ของยอดเต็ม / กรอกเอง)

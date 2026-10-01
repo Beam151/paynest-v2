@@ -473,6 +473,133 @@ export async function invoicesView() {
     const kindOf = (a) => itemById(a.chargeItemId)?.kind ?? a.kind ?? 'CHARGE';
     const labelOfAdj = (a) => itemById(a.chargeItemId)?.name ?? (a.label || 'ยังไม่ได้ตั้งชื่อ');
 
+    /*
+     * อ้างอิงค่าใช้จ่าย/ส่วนลดจากบิลเก่า — ดึงมาเป็นแถวธรรมดาในฟอร์มนี้ แก้/ลบต่อได้เหมือนพิมพ์เอง
+     * ดึงเฉพาะค่าใช้จ่าย/ส่วนลด ไม่ดึงส่วนต่างหรือรายการสินค้าของบิลเก่า (ส่วนต่างมาจากยอดขายของรอบนี้เสมอ)
+     * นับใบที่ยกเลิกด้วย — ยกเลิกใบเดิมแล้วออกใหม่ คือกรณีที่อยากได้รายการเดิมกลับมามากที่สุด
+     */
+    let shopNow = '';        // ร้านที่กำลังออกบิลอยู่ (ตั้งจากพรีวิว)
+    let refNote = '';        // บอกว่าแถวที่มีอยู่ดึงมาจากบิลไหน
+    const ref = { open: false, shopId: '', invoiceId: '', error: '' };
+    const refAdjustments = new Map(); // id บิลเก่า -> รายการค่าใช้จ่าย/ส่วนลด (โหลดครั้งเดียวต่อหน้าต่าง)
+    const refBox = el('div');
+    const refCandidates = (shopId) => allInvoices.filter((i) => String(i.franchiseId) === String(shopId) && i.adjustmentCount > 0);
+    const hasAnyRef = allInvoices.some((i) => i.adjustmentCount > 0);
+
+    /** แถวในฟอร์มจากรายการของบิลเก่า — คิดเป็น % ก็ยังเป็น % (คิดใหม่จากส่วนต่างรอบนี้) จำนวนเงินคงที่ก็ใช้ตัวเลขเดิม */
+    const rowFromOld = (a) => {
+      // รายการตั้งต้นที่ถูกลบ/ปิดไปแล้วใช้อ้างไม่ได้ — ตกเป็นรายการพิมพ์เองด้วยชื่อและประเภทเดิมของบิลเก่า
+      const item = a.chargeItemId === null ? null : itemById(a.chargeItemId);
+      return {
+        chargeItemId: item ? String(item.id) : '',
+        kind: item ? item.kind : a.kind,
+        label: item ? '' : a.label,
+        amount: a.pct === null ? String(a.amount) : '',
+        pct: a.pct === null ? '' : String(a.pct),
+        note: a.note ?? '',
+        showNote: Boolean(a.note), // หมายเหตุร้านเห็นในบิล — ดึงมาแล้วต้องเห็นและแก้ได้ ไม่ใช่ติดไปเงียบ ๆ
+      };
+    };
+
+    async function pickRefBill(id) {
+      ref.invoiceId = id;
+      ref.error = '';
+      drawRef();
+      if (!id || refAdjustments.has(id)) return;
+      try {
+        const inv = await api.get(`/api/invoices/${id}`);
+        refAdjustments.set(id, inv.adjustments ?? []);
+      } catch (e) {
+        if (ref.invoiceId === id) ref.error = e.message || 'โหลดบิลไม่สำเร็จ';
+      }
+      // เลือกใบอื่นระหว่างรอ — ปล่อยให้ใบล่าสุดเป็นคนวาด
+      if (ref.invoiceId === id) drawRef();
+    }
+
+    const openRef = () => {
+      ref.open = true;
+      ref.shopId = shopNow;
+      const latest = refCandidates(ref.shopId)[0];
+      pickRefBill(latest ? String(latest.id) : '');
+    };
+
+    const applyRef = (replace) => {
+      const bill = allInvoices.find((i) => String(i.id) === ref.invoiceId);
+      const rows = (refAdjustments.get(ref.invoiceId) ?? []).map(rowFromOld);
+      if (!bill || !rows.length) return;
+      if (replace) adjustments.splice(0);
+      adjustments.push(...rows);
+      refNote = `ดึง ${rows.length} รายการจาก ${bill.invoiceNo} (รอบ ${periodLabel(bill.periodCode)}) — แก้ตัวเลข เปลี่ยนรายการ หรือลบทิ้งได้ตามปกติ`;
+      ref.open = false;
+      drawRef();
+      drawAdjustments();
+    };
+
+    function drawRef() {
+      if (!ref.open) {
+        refBox.replaceChildren();
+        return;
+      }
+      // ร้านนี้มาก่อนเสมอ (แม้ยังไม่มีบิลเก่า) ตามด้วยร้านอื่นที่มีบิลให้อ้างอิง
+      const names = new Map();
+      for (const i of allInvoices) {
+        if (i.adjustmentCount > 0 && String(i.franchiseId) !== shopNow) names.set(String(i.franchiseId), i.franchiseUsername);
+      }
+      const thisShop = franchises.find((f) => String(f.id) === shopNow)?.username ?? 'ร้านนี้';
+      const shopSel = el('select', {},
+        el('option', { value: shopNow, selected: ref.shopId === shopNow }, `ร้านนี้ — ${thisShop}`),
+        ...[...names].sort((a, b) => a[1].localeCompare(b[1], 'th'))
+          .map(([id, name]) => el('option', { value: id, selected: id === ref.shopId }, name)));
+      shopSel.addEventListener('change', () => {
+        ref.shopId = shopSel.value;
+        const latest = refCandidates(ref.shopId)[0];
+        pickRefBill(latest ? String(latest.id) : '');
+      });
+
+      const bills = refCandidates(ref.shopId);
+      const billSel = el('select', {},
+        ...bills.map((i) => el('option', { value: String(i.id), selected: String(i.id) === ref.invoiceId },
+          `รอบ ${periodLabel(i.periodCode)} · ${i.invoiceNo}${i.status === 'VOID' ? ' (ยกเลิกแล้ว)' : ''} · ${int(i.adjustmentCount)} รายการ`)));
+      billSel.addEventListener('change', () => pickRefBill(billSel.value));
+
+      const items = ref.invoiceId ? refAdjustments.get(ref.invoiceId) : null;
+      let body;
+      if (!bills.length) {
+        body = el('div', { class: 'sub-line' }, 'ร้านนี้ยังไม่มีบิลเก่าที่มีค่าใช้จ่าย/ส่วนลด — เลือกร้านอื่นด้านบนได้');
+      } else if (ref.error) {
+        body = el('div', { class: 'sub-line', style: 'color:var(--danger)' }, ref.error);
+      } else if (!items) {
+        body = el('div', { class: 'sub-line' }, 'กำลังโหลดรายการ…');
+      } else {
+        body = el('div', {},
+          el('div', { class: 'adj-ref-list' }, ...items.map((a) => el('div', { class: 'adj-ref-item' },
+            el('div', {},
+              el('strong', {}, a.label),
+              el('div', { class: 'sub-line' },
+                `${a.kindLabel} · ${a.pct === null ? 'จำนวนเงินคงที่' : `${a.pct}% ของส่วนต่าง`}${a.note ? ` · ${a.note}` : ''}`)),
+            el('span', { class: 'adj-amount', style: a.kind === 'DISCOUNT' ? 'color:var(--success)' : '' },
+              a.kind === 'DISCOUNT' ? `−${money(a.amount)}` : `+${money(a.amount)}`)))),
+          el('div', { class: 'sub-line mt-6' },
+            'ตัวเลขด้านบนคือยอดในบิลเก่า · รายการที่คิดเป็น % จะคิดใหม่จากส่วนต่างของบิลนี้ · ไม่ดึงส่วนต่างหรือรายการสินค้าของบิลเก่ามาด้วย'),
+          el('div', { class: 'adj-ref-actions' },
+            el('button', { class: 'btn sm', type: 'button', onclick: () => applyRef(false) },
+              adjustments.length ? `เพิ่มต่อท้าย ${int(items.length)} รายการ` : `ดึง ${int(items.length)} รายการมาใส่`),
+            adjustments.length
+              ? el('button', { class: 'btn ghost sm', type: 'button', onclick: () => applyRef(true) },
+                `แทนที่ ${int(adjustments.length)} รายการที่มีอยู่`)
+              : ''));
+      }
+
+      refBox.replaceChildren(el('div', { class: 'adj-ref' },
+        el('div', { class: 'adj-ref-head' },
+          el('strong', {}, '📋 อ้างอิงค่าใช้จ่าย/ส่วนลดจากบิลเก่า'),
+          el('button', { class: 'btn ghost sm', type: 'button', onclick: () => { ref.open = false; drawRef(); } }, 'ปิด')),
+        el('div', { class: 'adj-ref-pickers' },
+          field('จากร้าน', shopSel),
+          bills.length ? field('บิลรอบ', billSel) : ''),
+        body));
+    }
+
     function refreshTotals() {
       const commission = commissionOfSelected();
       let charge = 0;
@@ -510,6 +637,8 @@ export async function invoicesView() {
         const amountBox = el('input', { type: 'number', step: '0.01', placeholder: 'บาท', value: a.amount ?? '', style: 'width:110px' });
         const pctBox = el('input', { type: 'number', step: '0.01', placeholder: '% ของส่วนต่าง', value: a.pct ?? '', style: 'width:130px' });
         const amountLabel = el('span', { class: 'adj-amount' });
+        const noteBox = el('input', { type: 'text', placeholder: 'หมายเหตุ (ร้านเห็นในบิล)', value: a.note ?? '', style: 'min-width:180px;flex:1' });
+        noteBox.addEventListener('input', () => { a.note = noteBox.value; });
 
         /**
          * อัปเดตเฉพาะตัวเลขของแถวนี้ ไม่วาดทั้งบล็อกใหม่
@@ -545,6 +674,7 @@ export async function invoicesView() {
           amountBox,
           el('span', { class: 'muted', style: 'font-size:12px' }, 'หรือ'),
           pctBox,
+          a.showNote ? noteBox : '',
           amountLabel,
           el('button', {
             class: 'btn ghost sm danger',
@@ -563,11 +693,26 @@ export async function invoicesView() {
           el('div', {},
             el('h3', {}, '➕➖ ค่าใช้จ่ายอื่น / ส่วนลด'),
             el('div', { class: 'sub-line' }, 'บวกเพิ่มหรือหักออกจากส่วนต่าง ใส่ได้หลายรายการ')),
-          el('button', {
-            class: 'btn sm',
-            type: 'button',
-            onclick: () => { adjustments.push({ chargeItemId: '', kind: 'CHARGE', label: '', amount: '', pct: '' }); drawAdjustments(); },
-          }, '+ เพิ่มรายการ')),
+          el('div', { class: 'btn-row' },
+            hasAnyRef
+              ? el('button', {
+                class: 'btn ghost sm',
+                type: 'button',
+                title: 'ดึงค่าใช้จ่าย/ส่วนลดจากบิลที่เคยออกไปแล้ว มาเป็นตั้งต้นของบิลนี้',
+                onclick: () => {
+                  if (!ref.open) return openRef();
+                  ref.open = false;
+                  drawRef();
+                },
+              }, '📋 อ้างอิงบิลเก่า')
+              : '',
+            el('button', {
+              class: 'btn sm',
+              type: 'button',
+              onclick: () => { adjustments.push({ chargeItemId: '', kind: 'CHARGE', label: '', amount: '', pct: '' }); drawAdjustments(); },
+            }, '+ เพิ่มรายการ'))),
+        refBox,
+        refNote && adjustments.length ? el('div', { class: 'sub-line', style: 'margin-bottom:8px' }, `📋 ${refNote}`) : '',
         rows.length
           ? el('div', {}, ...rows)
           : el('div', { class: 'sub-line' }, 'ยังไม่มี — กด "+ เพิ่มรายการ" เพื่อใส่ค่าใช้จ่ายหรือส่วนลดในบิลนี้'),
@@ -723,6 +868,12 @@ export async function invoicesView() {
       }
 
       available = billable;
+      // เปลี่ยนร้าน = บิลเก่าที่เปิดดูค้างไว้เป็นของร้านเดิม ปิดแผงอ้างอิงไปก่อน
+      if (shopNow !== String(v.franchiseId)) {
+        shopNow = String(v.franchiseId);
+        ref.open = false;
+        drawRef();
+      }
 
       const summaryLine = el('div', { class: 'sub-line' });
       const updateSummary = () => {
@@ -766,12 +917,14 @@ export async function invoicesView() {
             chargeItemId: Number(a.chargeItemId),
             ...(a.amount !== '' ? { amount: Number(a.amount) } : {}),
             ...(a.pct !== '' ? { pct: Number(a.pct) } : {}),
+            ...(a.note?.trim() ? { note: a.note.trim() } : {}),
           }
           : {
             kind: a.kind ?? 'CHARGE',
             label: a.label,
             ...(a.amount !== '' ? { amount: Number(a.amount) } : {}),
             ...(a.pct !== '' ? { pct: Number(a.pct) } : {}),
+            ...(a.note?.trim() ? { note: a.note.trim() } : {}),
           }));
 
       if (v.currency === 'USD-disabled') {
