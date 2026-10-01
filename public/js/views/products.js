@@ -244,6 +244,14 @@ export async function productsView() {
           hint: 'ตัดจากยอดขายของสินค้าชิ้นนี้ · สินค้าคนละชิ้นตั้งคนละ % ได้',
         },
         { name: 'franchiseId', label: 'มอบหมายให้ร้าน', type: 'select', options: franchiseOptions, hint: 'สินค้า 1 ชิ้นมอบหมายได้ร้านเดียว' },
+        {
+          name: 'startDate',
+          label: 'เริ่มสัญญาวันที่',
+          type: 'date',
+          value: todayIso(),
+          showWhen: (v) => Boolean(v.franchiseId),
+          hint: 'จะบันทึกยอดของรอบก่อนหน้า ให้ตั้งวันเริ่มย้อนไปถึงรอบนั้น · แก้ทีหลังได้ที่ "แก้ไข"',
+        },
         { name: 'description', label: 'รายละเอียด', type: 'textarea', rows: 3, maxlength: 1000, placeholder: 'เช่น ขนาด สเปก เงื่อนไขการขาย' },
       ],
       onSubmit: async (v) => {
@@ -251,6 +259,7 @@ export async function productsView() {
         await api.post('/api/products', {
           ...v,
           franchiseId: v.franchiseId ? Number(v.franchiseId) : undefined,
+          startDate: v.franchiseId && v.startDate ? v.startDate : undefined,
           ...picker.payload(),
         });
         toast(picker.isGroup()
@@ -277,8 +286,28 @@ export async function productsView() {
     },
   });
 
-  const editModal = (product) => {
+  /**
+   * สัญญากับร้านที่หน้าแก้ไขสินค้าให้แก้วันที่ — ที่ใช้อยู่วันนี้ก่อน ไม่มีก็ที่ยังไม่ถึงวันเริ่ม (ใกล้สุด) แล้วค่อยสัญญาล่าสุดที่จบไปแล้ว
+   * สัญญาของร้านที่ถูกลบเป็นประวัติ แก้ไม่ได้ (เซิร์ฟเวอร์ก็ไม่ยอม) จึงไม่เอามาให้เลือก
+   */
+  const contractToEdit = (assignments) => {
+    const live = assignments.filter((a) => a.franchiseStatus !== 'DELETED');
+    const today = todayIso();
+    return live.find((a) => a.isActive)
+      ?? live.filter((a) => a.startDate > today).sort((a, b) => a.startDate.localeCompare(b.startDate))[0]
+      ?? live.slice().sort((a, b) => b.startDate.localeCompare(a.startDate))[0]
+      ?? null;
+  };
+  const contractState = (a) => {
+    const today = todayIso();
+    if (a.startDate > today) return 'ยังไม่ถึงวันเริ่ม';
+    return a.endDate !== null && a.endDate < today ? 'จบไปแล้ว' : 'ใช้อยู่';
+  };
+
+  const editModal = async (product) => {
     const picker = groupPicker({ product, allProducts });
+    // วันที่อยู่ที่สัญญากับร้าน (ไม่ใช่ตัวสินค้า) — โหลดสัญญาทั้งหมดของสินค้านี้ เพราะรายการสินค้ามีแค่สัญญาที่ใช้อยู่วันนี้
+    const contract = contractToEdit((await api.get(`/api/products/${product.id}`)).assignments ?? []);
     return formModal({
       title: `แก้ไข ${product.sku}`,
       width: 640,
@@ -294,6 +323,23 @@ export async function productsView() {
           value: product.commissionPct,
           hint: 'แก้แล้วมีผลกับยอดที่บันทึกใหม่เท่านั้น ยอดเก่าไม่เปลี่ยน',
         },
+        ...(contract ? [
+          {
+            name: 'contractStart',
+            label: `เริ่มสัญญากับร้าน ${contract.franchiseUsername} (${contractState(contract)})`,
+            type: 'date',
+            required: true,
+            value: contract.startDate,
+            hint: 'ย้อนวันเริ่มได้ ถ้าต้องบันทึกยอดของรอบก่อนหน้า · ห้ามทับช่วงที่ร้านอื่นถือสินค้านี้',
+          },
+          {
+            name: 'contractEnd',
+            label: 'สิ้นสุดสัญญา',
+            type: 'date',
+            value: contract.endDate ?? '',
+            hint: 'เว้นว่าง = ไม่กำหนด · รอบที่บันทึกยอดไว้แล้วต้องยังอยู่ในช่วงสัญญา',
+          },
+        ] : []),
         {
           name: 'status',
           label: 'สถานะ',
@@ -314,14 +360,28 @@ export async function productsView() {
       ],
       onSubmit: async (v) => {
         picker.validate();
+        const { contractStart, contractEnd, ...fields } = v;
+        if (contract && contractEnd && contractEnd < contractStart) {
+          throw new Error('วันสิ้นสุดสัญญาต้องไม่ก่อนวันเริ่ม');
+        }
         // ลบข้อความจนว่าง = ล้างรายละเอียดจริง (ส่ง null) ไม่ใช่เก็บสตริงว่างไว้ในฐานข้อมูล
-        const description = (v.description ?? '').trim();
+        const description = (fields.description ?? '').trim();
         const group = picker.payload();
-        await api.patch(`/api/products/${product.id}`, { ...v, description: description === '' ? null : description, ...group });
+        // ส่งวันที่ไปเฉพาะเมื่อเปลี่ยนจริง — เซิร์ฟเวอร์บันทึกพร้อมตัวสินค้าในครั้งเดียว ติดข้อไหนก็ไม่มีอะไรถูกบันทึก
+        const datesChanged = contract && (contractStart !== contract.startDate || (contractEnd || null) !== contract.endDate);
+        await api.patch(`/api/products/${product.id}`, {
+          ...fields,
+          description: description === '' ? null : description,
+          ...group,
+          ...(datesChanged ? { assignment: { id: contract.id, startDate: contractStart, endDate: contractEnd || null } } : {}),
+        });
         const note = group.isGroup === false
           ? ` — ${product.sku} เลิกเป็นสินค้ากลุ่มแล้ว`
           : group.itemProductIds ? ` — สินค้ากลุ่ม ${product.sku} มี ${group.itemProductIds.length} รายการย่อย` : '';
-        toast(`บันทึกแล้ว${note}`, 'success');
+        const dateNote = datesChanged
+          ? ` — สัญญากับ ${contract.franchiseUsername} ${dateTh(contractStart)} → ${contractEnd ? dateTh(contractEnd) : 'ไม่กำหนด'}`
+          : '';
+        toast(`บันทึกแล้ว${note}${dateNote}`, 'success');
         render();
       },
     });

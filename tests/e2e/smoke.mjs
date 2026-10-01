@@ -4217,6 +4217,65 @@ section('อ้างอิงค่าใช้จ่าย/ส่วนลด�
     ((await api('GET', '/api/invoices', { token: stok })).body.items ?? []).every((i) => i.franchiseId === sfid));
 }
 
+/* ── แก้วันที่สัญญาจากหน้าแก้ไขสินค้า ──────────────────────────
+ * PATCH /api/products/:id รับ assignment { id, startDate?, endDate? } บันทึกพร้อมตัวสินค้าในทรานแซกชันเดียว
+ * กติกา: รอบที่บันทึกยอดไว้แล้วต้องยังอยู่ในช่วงสัญญา · ห้ามทับสัญญาร้านอื่น · id สัญญาต้องเป็นของสินค้านี้
+ */
+section('แก้วันที่สัญญาจากหน้าแก้ไขสินค้า');
+{
+  const mkShop = async (u) => (await api('POST', '/api/franchises', { token: admin, body: { username: u, password: `${u}-pass-1` } })).body.franchise?.id;
+  const d1 = await mkShop('dateshop1');
+  const d2 = await mkShop('dateshop2');
+  const dtok = (await shopLogin('dateshop1', 'dateshop1-pass-1', d1)).body.token;
+  const made = await api('POST', '/api/products', {
+    token: admin, body: { sku: 'DATE-1', name: 'สินค้าแก้วันที่', commissionPct: 10, franchiseId: d1, startDate: '2030-03-01' },
+  });
+  const pid = made.body.product?.id;
+  const aid = made.body.assignment?.id;
+  const sell = (periodCode) => api('POST', '/api/sales-entries', { token: admin, body: { periodCode, productId: pid, grossAmount: 1000 } });
+  const patch = (body, token = admin) => api('PATCH', `/api/products/${pid}`, { token, body });
+  const productOf = async (id = pid) => (await api('GET', `/api/products/${id}`, { token: admin })).body;
+  const contract = async () => (await productOf()).assignments?.find((a) => a.id === aid);
+  const msg = (r) => r.body?.error?.message ?? '';
+
+  check('ตั้งฉาก: สัญญาเริ่ม 1 มี.ค. → บันทึกยอดรอบ 1–15 ก.พ. ไม่ได้',
+    made.status === 201 && made.body.assignment?.startDate === '2030-03-01' && (await sell('2030-02-H1')).status === 400, made.body);
+
+  const back = await patch({ name: 'สินค้าแก้วันที่ (ย้อน)', assignment: { id: aid, startDate: '2030-02-01' } });
+  check('ย้อนวันเริ่มสัญญาจากหน้าแก้ไขสินค้าได้ พร้อมแก้ชื่อในคำขอเดียว',
+    back.status === 200 && back.body.name === 'สินค้าแก้วันที่ (ย้อน)' && (await contract())?.startDate === '2030-02-01', back.body);
+  check('ย้อนแล้วบันทึกยอดรอบ 1–15 ก.พ. ได้', (await sell('2030-02-H1')).status === 201);
+
+  const late = await patch({ name: 'ไม่ควรถูกบันทึก', assignment: { id: aid, startDate: '2030-02-20' } });
+  check('ย้ายวันเริ่มจนรอบที่มียอดแล้วหลุดจากสัญญาไม่ได้ (409 บอกรอบ) · ชื่อที่ส่งมาพร้อมกันไม่ถูกบันทึก',
+    late.status === 409 && msg(late).includes('2030-02-H1')
+      && (await productOf()).name === 'สินค้าแก้วันที่ (ย้อน)' && (await contract())?.startDate === '2030-02-01', late.body);
+
+  check('ตั้งฉาก: บันทึกยอดรอบ 1–15 มี.ค.', (await sell('2030-03-H1')).status === 201);
+  const cut = await patch({ assignment: { id: aid, endDate: '2030-02-28' } });
+  check('ตั้งวันสิ้นสุดก่อนรอบที่มียอดแล้วไม่ได้ (409 บอกรอบ)', cut.status === 409 && msg(cut).includes('2030-03-H1'), cut.body);
+  const endOk = await patch({ assignment: { id: aid, endDate: '2030-03-31' } });
+  check('ตั้งวันสิ้นสุดที่ยังครอบรอบที่มียอดได้', endOk.status === 200 && (await contract())?.endDate === '2030-03-31', endOk.body);
+
+  const next = await api('POST', '/api/assignments', { token: admin, body: { productId: pid, franchiseId: d2, startDate: '2030-04-01' } });
+  const overlap = await patch({ assignment: { id: aid, endDate: null } });
+  check('ล้างวันสิ้นสุดจนทับสัญญาของร้านถัดไปไม่ได้ (409 บอกชื่อร้าน) · วันเดิมยังอยู่',
+    next.status === 201 && overlap.status === 409 && msg(overlap).includes('dateshop2') && (await contract())?.endDate === '2030-03-31', overlap.body);
+
+  const other = await api('POST', '/api/products', {
+    token: admin, body: { sku: 'DATE-2', name: 'สินค้าอีกชิ้น', commissionPct: 5, franchiseId: d2, startDate: '2030-01-01' },
+  });
+  const wrong = await patch({ name: 'ไม่ควรถูกบันทึก', assignment: { id: other.body.assignment?.id, startDate: '2029-12-01' } });
+  check('ส่ง id สัญญาของสินค้าอื่นมาไม่ได้ (404) · ไม่มีอะไรถูกบันทึก',
+    wrong.status === 404 && (await productOf()).name === 'สินค้าแก้วันที่ (ย้อน)'
+      && (await productOf(other.body.product?.id)).assignments?.[0]?.startDate === '2030-01-01', wrong.body);
+  check('ร้านค้าแก้วันที่สัญญาไม่ได้', (await patch({ assignment: { id: aid, startDate: '2030-01-01' } }, dtok)).status === 403);
+
+  const log = JSON.parse(db.prepare("SELECT detail FROM audit_logs WHERE action = 'assignment.update' AND entity_id = ? ORDER BY id DESC LIMIT 1").get(aid)?.detail ?? '{}');
+  check('ประวัติจดวันเดิมกับวันใหม่ (ย้ายจากไหนไปไหน)',
+    log.endDate === '2030-03-31' && log.from?.endDate === null && log.from?.startDate === '2030-02-01' && log.productId === pid, log);
+}
+
 section('captcha หน้าเข้าสู่ระบบ: หลาย IP ผลัดกันเดารหัสบัญชีเดียว (botnet)');
 {
   const botKeys = {};

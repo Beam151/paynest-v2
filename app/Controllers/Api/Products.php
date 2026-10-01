@@ -117,9 +117,27 @@ class Products extends BaseApiController
             // false = เลิกเป็นกลุ่ม (ล้างรายการย่อย) · itemProductIds ส่งมา = แทนที่รายการย่อยทั้งชุด
             'isGroup'        => V::boolean()->optional(),
             'itemProductIds' => self::itemIdsSchema(),
+            // วันที่ของสัญญากับร้าน (หน้าแก้ไขสินค้า) — บันทึกพร้อมกับตัวสินค้าในทรานแซกชันเดียว ผิดข้อไหนก็ไม่มีอะไรถูกบันทึก
+            'assignment' => V::object([
+                'id'        => V::id(),
+                'startDate' => V::date()->optional(),
+                'endDate'   => V::date()->nullable()->optional(),
+            ])->optional(),
         ]), $this->body());
+        $productId  = V::parseId($id);
+        $actor      = (int) $this->user()['id'];
+        $assignment = $body['assignment'] ?? null;
+        unset($body['assignment']);
 
-        return $this->json(ProductService::update(V::parseId($id), $body, (int) $this->user()['id']));
+        return $this->json(Db::tx(static function () use ($productId, $body, $assignment, $actor) {
+            if ($assignment !== null) {
+                $assignmentId = $assignment['id'];
+                unset($assignment['id']);
+                AssignmentService::update($assignmentId, $assignment, $actor, $productId);
+            }
+
+            return ProductService::update($productId, $body, $actor);
+        }));
     }
 
     /**

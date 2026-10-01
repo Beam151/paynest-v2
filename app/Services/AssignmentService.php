@@ -167,9 +167,16 @@ final class AssignmentService
         return self::get($id);
     }
 
-    public static function update(int $id, array $patch, int $actorUserId): array
+    /**
+     * แก้วันเริ่ม/วันสิ้นสุดของสัญญา (หน้าแก้ไขสินค้า หรือ PATCH /api/assignments/:id)
+     * $productId = ผู้เรียกบอกว่าสัญญานี้ต้องเป็นของสินค้าไหน (หน้าแก้ไขสินค้าส่ง id สัญญามาเอง — กันส่ง id ของสินค้าอื่น)
+     */
+    public static function update(int $id, array $patch, int $actorUserId, ?int $productId = null): array
     {
         $row       = Db::one('SELECT * FROM product_assignments WHERE id = ?', [$id]) ?? throw ApiException::notFound('ไม่พบข้อมูลการมอบหมายสินค้า');
+        if ($productId !== null && (int) $row['product_id'] !== $productId) {
+            throw ApiException::notFound('ไม่พบสัญญานี้ในสินค้าที่กำลังแก้');
+        }
         self::assertLive($row);
         $startDate = ! empty($patch['startDate']) ? Period::assertDate($patch['startDate'], 'startDate') : $row['start_date'];
         $endDate   = ! array_key_exists('endDate', $patch)
@@ -178,20 +185,46 @@ final class AssignmentService
         if ($endDate !== null && $endDate < $startDate) {
             throw ApiException::badRequest('endDate ต้องไม่น้อยกว่า startDate');
         }
+        /*
+         * ยอดขายที่บันทึกไว้แล้วผูกกับสัญญานี้ — รอบของยอดเหล่านั้นต้องยังอยู่ในช่วงสัญญาใหม่ (แบบเดียวกับตอนปิดสัญญา)
+         * ไม่งั้นมียอดของรอบที่ร้านไม่ได้ถือสินค้า: บันทึกยอดรอบนั้นซ้ำ/ออกบิลรอบนั้นจะหาสัญญาไม่เจอหรือเจอของร้านอื่น
+         */
+        $outside = Db::one(
+            'SELECT bp.code
+               FROM sales_entries se
+               JOIN billing_periods bp ON bp.id = se.period_id
+              WHERE se.assignment_id = ? AND (bp.end_date < ? OR bp.start_date > ?)
+              ORDER BY bp.start_date LIMIT 1',
+            [$id, $startDate, $endDate ?? self::OPEN_END],
+        );
+        if ($outside !== null) {
+            throw ApiException::conflict('แก้วันที่แบบนี้ไม่ได้ เพราะมียอดขายของสัญญานี้บันทึกไว้แล้วในรอบ ' . Period::text($outside['code'])
+                . " ({$outside['code']}) — ช่วงสัญญาต้องยังครอบรอบนั้นอยู่");
+        }
         $clash = self::overlapping((int) $row['product_id'], $startDate, $endDate, $id);
         if ($clash !== []) {
-            throw ApiException::conflict('ช่วงวันที่ใหม่ทับกับสัญญาอื่นของสินค้าชิ้นนี้', array_map(static fn ($a) => [
+            $c = $clash[0];
+            throw ApiException::conflict(
+                "ช่วงวันที่ใหม่ทับกับสัญญาของร้าน {$c['franchise_username']} (" . Period::thDate($c['start_date']) . ' ถึง '
+                    . ($c['end_date'] === null ? 'ไม่กำหนด' : Period::thDate($c['end_date'])) . ') — สินค้าชิ้นเดียวมีเจ้าของได้ทีละร้าน',
+                array_map(static fn ($a) => [
                 'assignmentId'      => (int) $a['id'],
                 'franchiseUsername' => $a['franchise_username'],
                 'startDate'         => $a['start_date'],
                 'endDate'           => $a['end_date'],
-            ], $clash));
+            ], $clash),
+            );
         }
         Db::exec(
             'UPDATE product_assignments SET start_date = ?, end_date = ?, note = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?',
             [$startDate, $endDate, array_key_exists('note', $patch) ? $patch['note'] : $row['note'], $id],
         );
-        Audit::write($actorUserId, 'assignment.update', 'assignment', $id, $patch);
+        // จดค่าเดิมไว้ด้วย — หน้า "ประวัติรายการ" ต้องบอกได้ว่าย้ายวันจากไหนไปไหน
+        Audit::write($actorUserId, 'assignment.update', 'assignment', $id, [
+            ...$patch,
+            'productId' => (int) $row['product_id'],
+            'from'      => ['startDate' => $row['start_date'], 'endDate' => $row['end_date']],
+        ]);
 
         return self::get($id);
     }
