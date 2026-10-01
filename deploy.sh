@@ -343,30 +343,79 @@ code_version() {
     sed -n "/const VERSION = /{s/.*const VERSION = '\([^']*\)'.*/\1/p;q;}" "$APP_DIR/app/Config/Paynest.php" 2>/dev/null || true
 }
 
+# ทุกคำสั่ง git ของสคริปต์: ปิด hook และ fsmonitor เสมอ (ค่าจาก -c ชนะค่าใน .git/config)
+# อัปเดตไม่ต้องใช้ hook อยู่แล้ว — ปิดไว้อีกชั้น กันโปรแกรมที่ใครแอบวางใน .git ถูกรันด้วยสิทธิ์ root
 # ไม่ใส่ -c safe.directory: root ห้ามรัน git ใน repo ที่ผู้ใช้อื่นแก้ได้ (ดู check_repo_owner)
-g() { git -C "$APP_DIR" "$@"; }
+g() { git -c core.hooksPath=/dev/null -c core.fsmonitor=false -C "$APP_DIR" "$@"; }
 
 is_git_repo() { [ -e "$APP_DIR/.git" ] && have git; }
 
 uid_of() { ls -lnd "$1" 2>/dev/null | awk '{ print $3; exit }'; }
 
-# รันด้วย root: โฟลเดอร์โค้ด/.git ต้องไม่ใช่ของผู้ใช้เว็บ — ถ้าผู้ใช้เว็บแก้ .git ได้ (core.fsmonitor / hooks /
-# core.sshCommand) git ที่ root รันจะรันโปรแกรมของเขาด้วยสิทธิ์ root = เว็บโดนเจาะแล้วยึดเครื่องได้
-check_repo_owner() {
-    [ "$IS_ROOT" = 1 ] || return 0
-    local p web_uid bad=''
+# สิ่งใน .git ที่สั่งให้ git รันโปรแกรมได้ (คืนทีละบรรทัด · ว่าง = สะอาด)
+# อ่าน config เป็นข้อความด้วย --file (ไม่รันอะไรจากในไฟล์) · hook ตัวอย่างของ git (*.sample) ไม่นับ
+# credential helper ชื่อธรรมดา (store / cache / manager) ไม่นับ — นับเฉพาะแบบ "!คำสั่ง"
+git_dir_findings() {
+    local gd="$APP_DIR/.git" f
+    if [ -d "$gd/hooks" ]; then
+        for f in "$gd/hooks"/*; do
+            [ -e "$f" ] || continue
+            case $f in *.sample) ;; *) printf '%s\n' "hook: ${f#"$APP_DIR"/}" ;; esac
+        done
+    fi
+    if [ -f "$gd/config" ]; then
+        git config --file "$gd/config" --list 2>/dev/null | awk '
+            { i = index($0, "="); k = tolower(i ? substr($0, 1, i - 1) : $0); v = i ? substr($0, i + 1) : "" }
+            (k ~ /^core\.(hookspath|sshcommand|askpass|gitproxy)$/) ||
+            (k == "core.fsmonitor" && v != "false" && v != "0" && v != "") ||
+            (k ~ /^include(if\..*)?\.path$/) || (k ~ /^filter\./) || (k ~ /^merge\..*\.driver$/) ||
+            (k ~ /^diff\..*\.(textconv|command)$/) || (k ~ /^remote\..*\.(uploadpack|receivepack)$/) ||
+            (k ~ /helper$/ && v ~ /^!/) { print "config: " k }' || true
+    fi
+    if [ -s "$gd/info/attributes" ]; then printf '%s\n' 'attributes: .git/info/attributes'; fi
+    return 0
+}
+
+# รันด้วย root แล้วโค้ด/.git เป็นของผู้ใช้เว็บ (aaPanel ตั้งโฟลเดอร์เว็บเป็นของ www เป็นค่าตั้งต้น):
+# ถ้าผู้ใช้เว็บแก้ .git ได้ (hooks / core.fsmonitor / core.sshCommand) git ที่ root รันจะรันโปรแกรมของเขาด้วยสิทธิ์ root
+# = เว็บโดนเจาะแล้วยึดเครื่องได้ — จึงตรวจ .git ก่อน: สะอาด → เปลี่ยนเจ้าของโค้ดเป็น root ให้เอง แล้วทำงานต่อ (เจ้าของระบบ: "รันจบในตัว")
+# เจอของแปลกปลอม → หยุด ให้คนตรวจเอง (ไม่แตะอะไร)
+repo_owned_by_web() { # → พาธแรกที่เป็นของผู้ใช้เว็บ (ว่าง = ไม่มี)
+    local p web_uid
     web_uid=$(id -u "$WEB_USER")
     for p in "$APP_DIR" "$APP_DIR/.git" "$APP_DIR/.git/config" "$APP_DIR/.git/hooks"; do
         [ -e "$p" ] || continue
-        if [ "$(uid_of "$p")" = "$web_uid" ]; then bad=$p && break; fi
+        if [ "$(uid_of "$p")" = "$web_uid" ]; then printf '%s\n' "$p" && return 0; fi
     done
+    return 0
+}
+
+check_repo_owner() {
+    [ "$IS_ROOT" = 1 ] || return 0
+    local bad findings manual
+    bad=$(repo_owned_by_web)
     [ -z "$bad" ] && return 0
-    fail "โค้ด ($bad) เป็นของผู้ใช้เว็บ $WEB_USER — ไม่รัน git ด้วยสิทธิ์ root ในโฟลเดอร์ที่ผู้ใช้เว็บแก้ได้" \
-        "(ถ้าเว็บโดนเจาะ คนร้ายแก้ .git แล้วได้สิทธิ์ root ตอนสคริปต์รัน git) — เลือกทางใดทางหนึ่ง:" \
-        "  ให้ root เป็นเจ้าของโค้ด (เว็บยังอ่านได้ตามปกติ — ต้องเขียนได้แค่ writable/ และอ่าน .env):" \
-        "    chown -R root:root $APP_DIR; chown -R $WEB_USER:$WEB_GROUP $APP_DIR/writable $APP_DIR/.env" \
-        "    (aaPanel: .user.ini ขึ้น Operation not permitted — ไม่เป็นไร) แล้วรัน sudo ./$SCRIPT_NAME ใหม่" \
-        "  หรือรันในนามผู้ใช้เว็บแทน root: sudo -u $WEB_USER WEB_USER=$WEB_USER ./$SCRIPT_NAME"
+    manual="chown -R root:root $APP_DIR; chown -R $WEB_USER:$WEB_GROUP $APP_DIR/writable $APP_DIR/.env"
+    findings=$(git_dir_findings)
+    if [ -n "$findings" ]; then
+        fail "โค้ด ($bad) เป็นของผู้ใช้เว็บ $WEB_USER และใน .git มีสิ่งที่สั่งให้ git รันโปรแกรมได้ — ไม่รัน git ด้วยสิทธิ์ root:" \
+            "$findings" \
+            "ตรวจว่าเป็นของที่ตั้งใจใส่ไว้เองหรือไม่ (ถ้าไม่ใช่ = เว็บอาจโดนเจาะ) ลบออก แล้วรันใหม่ — หรือเปลี่ยนเจ้าของเอง:" \
+            "  $manual" \
+            "  หรือรันในนามผู้ใช้เว็บแทน root: sudo -u $WEB_USER WEB_USER=$WEB_USER ./$SCRIPT_NAME"
+    fi
+    if [ "$DRY_RUN" = 1 ]; then
+        plan "โค้ดเป็นของผู้ใช้เว็บ $WEB_USER (ค่าตั้งต้นของ aaPanel) — .git ไม่มีสิ่งแปลกปลอม จะเปลี่ยนเจ้าของโค้ดเป็น root (writable/ และ .env ยังเป็นของ $WEB_USER · ข้าม .user.ini)"
+        return 0
+    fi
+    # เว็บอ่านโค้ดได้ตามเดิม (สิทธิ์อ่านไม่เปลี่ยน) · ที่ต้องเขียน (writable/) และอ่าน (.env) ยังเป็นของผู้ใช้เว็บ
+    # .user.ini ของ aaPanel ถูกล็อกไว้ (chattr +i) เปลี่ยนเจ้าของไม่ได้อยู่แล้ว — ข้าม · -h = ไม่ตามลิงก์
+    find "$APP_DIR" \( -path "$APP_DIR/writable" -o -path "$APP_DIR/.env" \) -prune -o ! -name .user.ini -exec chown -h root:root {} + 2>/dev/null || true
+    if [ -d "$APP_DIR/writable" ] && [ ! -L "$APP_DIR/writable" ]; then chown -R "$WEB_USER:$WEB_GROUP" "$APP_DIR/writable"; fi
+    if [ -f "$APP_DIR/.env" ] && [ ! -L "$APP_DIR/.env" ]; then chown "$WEB_USER:$WEB_GROUP" "$APP_DIR/.env"; fi
+    bad=$(repo_owned_by_web)
+    [ -z "$bad" ] || fail "เปลี่ยนเจ้าของ $bad เป็น root ไม่ได้" "รันเอง: $manual แล้วรัน sudo ./$SCRIPT_NAME ใหม่"
+    ok "โค้ดเคยเป็นของ $WEB_USER (ค่าตั้งต้นของ aaPanel) — ตรวจ .git แล้วไม่พบสิ่งแปลกปลอม เปลี่ยนเจ้าของโค้ดเป็น root แล้ว (writable/ และ .env ยังเป็นของ $WEB_USER)"
 }
 
 # รันในนามผู้ใช้เว็บ: root → runuser / sudo / su · ไม่ใช่ root → รันตรง (ตรวจแล้วว่าเป็นผู้ใช้เดียวกัน)
