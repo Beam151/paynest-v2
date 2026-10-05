@@ -9,6 +9,7 @@ use App\Libraries\Json;
 use App\Libraries\Money;
 use App\Libraries\Period;
 use App\Libraries\SignedUrl;
+use App\Libraries\Usd;
 
 /**
  * แจ้งชำระเงิน — ร้านโอนแล้วแนบสลิป → รอตรวจ → ส่วนกลางยืนยัน (ตัดยอดทันที) หรือตีกลับพร้อมเหตุผล
@@ -19,8 +20,9 @@ final class PaymentSubmissionService
     private const SELECT = '
         SELECT ps.*,
                i.invoice_no, i.net_total_satang, i.paid_satang, i.status AS invoice_status,
+               i.usd_rate_satang AS invoice_usd_rate_satang,
                f.username AS franchise_username,
-               bp.code AS period_code,
+               bp.code AS period_code, bp.usd_rate_satang AS period_usd_rate_satang,
                su.username AS submitted_by, ru.username AS reviewed_by
           FROM payment_submissions ps
           JOIN invoices i         ON i.id = ps.invoice_id
@@ -162,15 +164,19 @@ final class PaymentSubmissionService
             . " ORDER BY CASE ps.status WHEN 'PENDING' THEN 0 ELSE 1 END, ps.created_at DESC, ps.id DESC",
             $params,
         ));
-        $sumOf = static fn (string $status) => array_sum(array_column(array_filter($rows, static fn ($r) => $r['status'] === $status), 'amount'));
+        $of    = static fn (string $status) => array_filter($rows, static fn ($r) => $r['status'] === $status);
+        $sumOf = static fn (string $status) => array_sum(array_column($of($status), 'amount'));
 
         return [
             'items'   => $rows,
             'summary' => [
                 'count'          => count($rows),
-                'pendingCount'   => count(array_filter($rows, static fn ($r) => $r['status'] === 'PENDING')),
+                'pendingCount'   => count($of('PENDING')),
                 'pendingAmount'  => Money::round2($sumOf('PENDING')),
                 'approvedAmount' => Money::round2($sumOf('APPROVED')),
+                // ยอดเทียบดอลลาร์ของสองยอดบน — รวมจาก fxRate ของแต่ละสลิป (null = ยังไม่เคยตั้งอัตรา)
+                'pendingAmountUsd'  => Usd::sum($of('PENDING'), 'amount'),
+                'approvedAmountUsd' => Usd::sum($of('APPROVED'), 'amount'),
             ],
         ];
     }
@@ -304,6 +310,8 @@ final class PaymentSubmissionService
         return [
             'outstandingInvoices' => $invoices,
             'totalOutstanding'    => Money::round2(array_sum(array_column($invoices, 'outstanding'))),
+            // บิล USD: ผลบวกนี้เท่ากับยอดดอลลาร์ที่ต้องโอนของทุกใบรวมกัน (ปัดทีละบิลตามอัตราที่ตรึงไว้)
+            'totalOutstandingUsd' => Usd::sum($invoices, 'outstanding'),
             'submissions'         => $submissions['items'],
             'summary'             => $submissions['summary'],
         ];
@@ -322,6 +330,8 @@ final class PaymentSubmissionService
             'franchiseId'        => (int) $row['franchise_id'],
             'franchiseUsername'  => $row['franchise_username'],
             'amount'             => Money::toBaht($row['amount_satang']),
+            // บาทต่อ 1 ดอลลาร์ที่ใช้เทียบยอดของสลิปนี้ในสรุป = อัตราของบิลที่แจ้งชำระ (ตรึงไว้ → ของรอบ → ล่าสุด)
+            'fxRate'             => Usd::rate($row['invoice_usd_rate_satang'] ?? null, $row['period_usd_rate_satang'] ?? null),
             'paidAt'             => $row['paid_at'],
             'paidTime'           => $row['paid_time'] ?? null,
             'method'             => $row['method'],

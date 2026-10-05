@@ -1,5 +1,5 @@
 import { api, qs, session } from '../api.js';
-import { dateTh, card, delta, el, int, money, monthTh, pct, stat, table } from '../ui.js';
+import { dateTh, card, delta, el, int, money, monthTh, pct, stat, table, totalCell } from '../ui.js';
 import { monthOptions, periodLabel, periodOf, periodOptions, periodShort, shiftMonth, shiftPeriod, todayIso } from '../period.js';
 import { render } from '../app.js';
 import { viewState } from '../viewState.js';
@@ -40,13 +40,20 @@ function saveState(patch) {
   render();
 }
 
-/** การ์ดส่วนต่าง — เขียว/แดงตามทิศทาง */
-const diffStat = (label, amount, growthPct, sub) => stat(
+/** การ์ดส่วนต่าง — เขียว/แดงตามทิศทาง · ยอดดอลลาร์ไม่มีเครื่องหมาย (ลูกศรบอกทิศแล้ว เหมือนยอดบาท) */
+const diffStat = (label, amount, growthPct, sub, usd) => stat(
   label,
   delta(amount, growthPct),
   sub,
-  { tone: amount >= 0 ? 'income' : 'warn', icon: amount >= 0 ? '▲' : '▼' },
+  { tone: amount >= 0 ? 'income' : 'warn', icon: amount >= 0 ? '▲' : '▼', usd: Math.abs(usd ?? 0) },
 );
+
+/** แถวรวมท้ายตารางรายเดือน/รายรอบ — ยอดบาทพร้อมบรรทัดเทียบดอลลาร์ */
+const totalFooter = (total) => ['รวมทั้งช่วง',
+  totalCell(total.grossAmount, total.grossAmountUsd),
+  totalCell(total.commissionAmount, total.commissionAmountUsd),
+  totalCell(total.netAmount, total.netAmountUsd),
+  '', int(total.entryCount)];
 
 const TOTAL_COLUMNS = [
   { label: 'ยอดขายเต็ม', num: true, render: (r) => money(r.grossAmount) },
@@ -107,8 +114,10 @@ async function monthTab(state, scope) {
       monthField('ถึงเดือน', state.toMonth, (v) => saveState({ toMonth: v }))),
 
     el('div', { class: 'stat-grid' },
-      stat('ยอดขายเต็มรวม', money(data.total.grossAmount) + ' ฿', `${int(data.total.entryCount)} รายการ`, { tone: 'sales', icon: '🛒' }),
-      stat('ส่วนต่างรวม', money(data.total.commissionAmount) + ' ฿', null, { tone: 'income', icon: '💰' }),
+      stat('ยอดขายเต็มรวม', money(data.total.grossAmount) + ' ฿', `${int(data.total.entryCount)} รายการ`,
+        { tone: 'sales', icon: '🛒', usd: data.total.grossAmountUsd }),
+      stat('ส่วนต่างรวม', money(data.total.commissionAmount) + ' ฿', null,
+        { tone: 'income', icon: '💰', usd: data.total.commissionAmountUsd }),
       stat('% เฉลี่ยทั้งช่วง', pct(data.total.effectiveCommissionPct),
         null, { tone: 'muted', icon: '📊' })),
 
@@ -126,9 +135,7 @@ async function monthTab(state, scope) {
           render: (r) => (r._bold ? el('strong', {}, r._label) : el('span', { class: 'muted' }, r._label)),
         },
         ...TOTAL_COLUMNS,
-      ], rows, {
-        footer: ['รวมทั้งช่วง', money(data.total.grossAmount), money(data.total.commissionAmount), money(data.total.netAmount), '', int(data.total.entryCount)],
-      }), { tight: true }));
+      ], rows, { footer: totalFooter(data.total) }), { tight: true }));
 }
 
 /* ── รายรอบบิล ────────────────────────────────── */
@@ -141,8 +148,9 @@ async function periodTab(state, scope) {
       periodField('ถึงรอบ', state.toPeriod, (v) => saveState({ toPeriod: v }))),
 
     el('div', { class: 'stat-grid' },
-      stat('ยอดขายเต็มรวม', money(data.total.grossAmount) + ' ฿', null, { tone: 'sales', icon: '🛒' }),
-      stat('ส่วนต่างรวม', money(data.total.commissionAmount) + ' ฿', null, { tone: 'income', icon: '💰' }),
+      stat('ยอดขายเต็มรวม', money(data.total.grossAmount) + ' ฿', null, { tone: 'sales', icon: '🛒', usd: data.total.grossAmountUsd }),
+      stat('ส่วนต่างรวม', money(data.total.commissionAmount) + ' ฿', null,
+        { tone: 'income', icon: '💰', usd: data.total.commissionAmountUsd }),
       stat('จำนวนรอบ', String(data.rows.length), `${int(data.total.entryCount)} รายการ`, { tone: 'muted', icon: '🗓' })),
 
     card('แนวโน้มยอดขายรายรอบบิล',
@@ -159,9 +167,7 @@ async function periodTab(state, scope) {
           render: (r) => el('strong', {}, periodLabel(r.bucket)),
         },
         ...TOTAL_COLUMNS,
-      ], data.rows, {
-        footer: ['รวมทั้งช่วง', money(data.total.grossAmount), money(data.total.commissionAmount), money(data.total.netAmount), '', int(data.total.entryCount)],
-      }), { tight: true }));
+      ], data.rows, { footer: totalFooter(data.total) }), { tight: true }));
 }
 
 /* ── เทียบเดือนต่อเดือน / รอบต่อรอบ ───────────── */
@@ -190,11 +196,13 @@ async function compareTab(state, scope) {
     controls,
 
     el('div', { class: 'stat-grid' },
-      stat(`ยอดขาย ${label(data.current)}`, money(data.current.grossAmount) + ' ฿', `${int(data.current.entryCount)} รายการ`, { tone: 'sales', icon: '🛒' }),
-      stat(`ยอดขาย ${label(data.previous)}`, money(data.previous.grossAmount) + ' ฿', `${int(data.previous.entryCount)} รายการ`, { tone: 'muted', icon: '🕓' }),
-      diffStat('เปลี่ยนแปลงยอดขาย', data.diff.grossAmount, data.diff.grossGrowthPct, 'เทียบกับช่วงก่อน'),
+      stat(`ยอดขาย ${label(data.current)}`, money(data.current.grossAmount) + ' ฿', `${int(data.current.entryCount)} รายการ`,
+        { tone: 'sales', icon: '🛒', usd: data.current.grossAmountUsd }),
+      stat(`ยอดขาย ${label(data.previous)}`, money(data.previous.grossAmount) + ' ฿', `${int(data.previous.entryCount)} รายการ`,
+        { tone: 'muted', icon: '🕓', usd: data.previous.grossAmountUsd }),
+      diffStat('เปลี่ยนแปลงยอดขาย', data.diff.grossAmount, data.diff.grossGrowthPct, 'เทียบกับช่วงก่อน', data.diff.grossAmountUsd),
       diffStat('เปลี่ยนแปลงส่วนต่าง', data.diff.commissionAmount, data.diff.commissionGrowthPct,
-        `${data.diff.entryCount >= 0 ? '+' : ''}${int(data.diff.entryCount)} รายการ`)),
+        `${data.diff.entryCount >= 0 ? '+' : ''}${int(data.diff.entryCount)} รายการ`, data.diff.commissionAmountUsd)),
 
     card('เทียบตัวเลขแบบเคียงกัน',
       table([
@@ -262,10 +270,12 @@ async function rangeTab(state, scope) {
     warnings,
 
     el('div', { class: 'stat-grid' },
-      stat('ช่วง A (ที่เลือก)', money(data.current.grossAmount) + ' ฿', rangeText(data.current), { tone: 'sales', icon: 'A' }),
-      stat('ช่วง B (ที่เทียบ)', money(data.previous.grossAmount) + ' ฿', rangeText(data.previous), { tone: 'muted', icon: 'B' }),
-      diffStat('เปลี่ยนแปลงยอดขาย', data.diff.grossAmount, data.diff.grossGrowthPct, 'A เทียบ B'),
-      diffStat('เปลี่ยนแปลงส่วนต่าง', data.diff.commissionAmount, data.diff.commissionGrowthPct, 'A เทียบ B')),
+      stat('ช่วง A (ที่เลือก)', money(data.current.grossAmount) + ' ฿', rangeText(data.current),
+        { tone: 'sales', icon: 'A', usd: data.current.grossAmountUsd }),
+      stat('ช่วง B (ที่เทียบ)', money(data.previous.grossAmount) + ' ฿', rangeText(data.previous),
+        { tone: 'muted', icon: 'B', usd: data.previous.grossAmountUsd }),
+      diffStat('เปลี่ยนแปลงยอดขาย', data.diff.grossAmount, data.diff.grossGrowthPct, 'A เทียบ B', data.diff.grossAmountUsd),
+      diffStat('เปลี่ยนแปลงส่วนต่าง', data.diff.commissionAmount, data.diff.commissionGrowthPct, 'A เทียบ B', data.diff.commissionAmountUsd)),
 
     card('รายละเอียดสองช่วง',
       table([

@@ -370,7 +370,15 @@ tfoot td {
 }
 .stat .sub { font-size: var(--fs-xs); color: var(--muted); margin-top: 3px; }
 
-.stat.tone-sales  { --tone: var(--primary); --tone-soft: var(--primary-soft); --tone-text: var(--primary-dark); }
+/* บรรทัด "≈ $…" ใต้ยอดบาท (ui.js usdNote) — ตัวรองของยอดบาท: เล็กกว่า สีเทา ตัวเลขกว้างเท่ากัน */
+.usd-note { font-size: var(--fs-sm); font-weight: 600; color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.stat .usd-note { margin-top: 1px; }
+tfoot .usd-note { font-size: var(--fs-xs); color: var(--muted); }
+.shop-hero .usd-note { color: inherit; opacity: .85; }
+.shop-hero-main > .usd-note { font-size: var(--fs-base); margin-bottom: 4px; }
+.shop-hero-fig .usd-note { font-size: var(--fs-xs); font-weight: 400; text-align: right; }
+
+.stat.tone-sales { --tone: var(--primary); --tone-soft: var(--primary-soft); --tone-text: var(--primary-dark); }
 .stat.tone-income { --tone: var(--success); --tone-soft: var(--success-soft); --tone-text: var(--success); }
 .stat.tone-due    { --tone: var(--amber);        --tone-soft: var(--warn-soft);    --tone-text: #b45309; }
 .stat.tone-warn   { --tone: var(--danger);  --tone-soft: var(--danger-soft);  --tone-text: var(--danger); }
@@ -1689,6 +1697,7 @@ tr.bill-group-head > td, tr.bill-group-head > th {
   .shop-hero-value { font-size: 32px; }
   .shop-hero-side { grid-template-columns: repeat(3, 1fr); min-width: 0; gap: 8px; }
   .shop-hero-fig { flex-direction: column; gap: 0; padding: 8px 10px; }
+  .shop-hero-fig .usd-note { text-align: left; }
   .thanks-card { flex-wrap: wrap; }
   .thanks-card .btn { flex-basis: 100%; justify-content: center; }
   .ann-body { padding-left: 14px; }

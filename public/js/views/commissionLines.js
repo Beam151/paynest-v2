@@ -1,4 +1,4 @@
-import { commBadge, dateTh, el, money, pct, stat, table } from '../ui.js';
+import { commBadge, dateTh, el, money, pct, stat, table, totalCell, usdOf } from '../ui.js';
 import { periodLabel } from '../period.js';
 
 /*
@@ -120,7 +120,7 @@ export function commissionLinesTable(r) {
   ], lines, {
     sortable: false,
     empty: 'ไม่มีรายการ',
-    footer: ['', '', '', '', 'รวม', money(r.totalAmount)],
+    footer: ['', '', '', '', 'รวม', totalCell(r.totalAmount, usdOf(r.totalAmount, r.fxRate))],
   });
 }
 
@@ -132,7 +132,8 @@ export function commissionDetail(r, { forAgent = false } = {}) {
   const bill = isBill(r);
   return el('div', {},
     el('div', { class: 'stat-grid' },
-      stat('ยอดรวม', money(r.totalAmount) + ' ฿', bill ? commissionSubtitle(r) : null, { tone: 'sales', icon: '🎯' }),
+      stat('ยอดรวม', money(r.totalAmount) + ' ฿', bill ? commissionSubtitle(r) : null,
+        { tone: 'sales', icon: '🎯', usd: usdOf(r.totalAmount, r.fxRate) }),
       stat('สถานะ', commBadge(r.status, { forAgent }),
         r.status === 'PAID' && r.paidAt ? `${forAgent ? 'ได้รับ' : 'จ่าย'}เมื่อ ${dateTh(r.paidAt)}` : null,
         { tone: r.status === 'PENDING' ? 'due' : r.status === 'PAID' ? 'income' : 'muted', icon: r.status === 'PAID' ? '✓' : '⏳' }),

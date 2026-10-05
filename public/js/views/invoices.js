@@ -1,12 +1,12 @@
 import { api, qs, session } from '../api.js';
 import {
   alertBanner, badge, card, confirmAction, dateTh, dateTimeTh, el, field, flashRows, formModal, infoModal,
-  int, money, pct, periodBar, stat, table, toast,
+  int, money, pct, periodBar, stat, sumUsd, table, toast, usdOf, usdText,
 } from '../ui.js';
 import { periodLabel, periodOf, periodOptions, setWorkingPeriod, storedWorkingPeriod, workingPeriod } from '../period.js';
 import {
-  accountCheckNotice, attachmentGrid, bankAccountBox, breakdownTable, currencyTag, payCenterView, payMoney, paymentTotals,
-  receivedMoneyTab, slipReviewTab, slipStatusPicker, usdLine,
+  accountCheckNotice, attachmentGrid, bankAccountBox, breakdownTable, currencyTag, fxLine, payCenterView, payMoney, paymentTotals,
+  receivedMoneyTab, slipReviewTab, slipStatusPicker,
 } from './payments.js';
 import { billLineEditor, commissionOf, lineProductCell, parseAmount, parsePct, presetOf } from './billLines.js';
 import { elevated } from '../elevation.js';
@@ -426,6 +426,9 @@ export async function invoicesView() {
     netTotal: Number(active.reduce((sum, r) => sum + r.netTotal, 0).toFixed(2)),
     outstanding: Number(active.reduce((sum, r) => sum + r.outstanding, 0).toFixed(2)),
     overdueCount: active.filter((r) => r.isOverdue).length,
+    // ยอดเทียบดอลลาร์ของสองยอดบน — แต่ละบิลใช้ fxRate ของตัวเอง (บิล USD = อัตราที่ตรึงไว้ ผลรวมจึงเท่ากับที่ร้านต้องโอนจริง)
+    netTotalUsd: sumUsd(active, (r) => r.netTotal),
+    outstandingUsd: sumUsd(active, (r) => r.outstanding),
   };
 
   const statusPicker = el('select', {
@@ -1259,14 +1262,16 @@ export async function invoicesView() {
 
     modal.body.append(
       el('div', { class: 'stat-grid' },
-        stat('ยอดขายเต็ม', money(inv.grossTotal) + ' ฿', null, { tone: 'sales', icon: '🛒' }),
+        stat('ยอดขายเต็ม', money(inv.grossTotal) + ' ฿', null, { tone: 'sales', icon: '🛒', usd: usdOf(inv.grossTotal, inv.fxRate) }),
+        // บิล USD โชว์ดอลลาร์เป็นตัวหลักอยู่แล้ว (ยอดบาทอยู่บรรทัดรอง) — บรรทัดเทียบดอลลาร์มีเฉพาะบิลบาท
         stat('ยอดที่ต้องจ่าย', payMoney(inv, inv.payAmount),
           inv.isUsd
             ? `= ${money(inv.netTotal)} ฿ · อัตรา ${money(inv.usdRate)} ฿/USD`
-            : `ส่วนต่าง ${money(inv.commissionTotal)} + ค่าใช้จ่าย ${money(inv.chargeTotal)} − ส่วนลด ${money(inv.discountTotal)}`),
+            : `ส่วนต่าง ${money(inv.commissionTotal)} + ค่าใช้จ่าย ${money(inv.chargeTotal)} − ส่วนลด ${money(inv.discountTotal)}`,
+          { usd: inv.isUsd ? null : usdOf(inv.netTotal, inv.fxRate) }),
         stat(isSuper ? 'ยังไม่ได้รับ' : 'คงเหลือต้องชำระ', money(inv.outstanding) + ' ฿', `ครบกำหนด ${dateTh(inv.dueDate)}`,
-          { tone: inv.outstanding > 0 ? 'due' : 'income', icon: inv.outstanding > 0 ? '⏳' : '✓' })),
-      usdLine(inv),
+          { tone: inv.outstanding > 0 ? 'due' : 'income', icon: inv.outstanding > 0 ? '⏳' : '✓', usd: usdOf(inv.outstanding, inv.fxRate) })),
+      fxLine(inv),
 
       // ร้าน: เล่าบิลเป็นประโยคเดียวก่อนเจอตาราง — ขายได้เท่าไร จ่ายเราเท่าไร เหลือเป็นของร้านเท่าไร
       isSuper ? '' : el('div', { class: 'notice-box info-box', style: 'display:block' },
@@ -1699,24 +1704,26 @@ export async function invoicesView() {
     const billedInPeriod = Number(inPeriod
       .filter((r) => r.status !== 'VOID')
       .reduce((t, r) => t + r.netTotal, 0).toFixed(2));
+    const outstandingUsd = sumUsd(inPeriod, (r) => r.outstanding);
+    const billedUsd = sumUsd(inPeriod.filter((r) => r.status !== 'VOID'), (r) => r.netTotal);
 
     if (superTab === 'slips') {
       return [
         stat('สลิปรอตรวจ', money(totals.pendingAmount) + ' ฿', `${int(totals.pendingCount)} ใบ · ${scope}`,
-          { tone: totals.pendingCount ? 'warn' : 'muted', icon: '👀' }),
+          { tone: totals.pendingCount ? 'warn' : 'muted', icon: '👀', usd: totals.pendingAmountUsd }),
         stat('ได้รับเงินแล้ว', money(totals.receivedTotal) + ' ฿', `${int(totals.receivedCount)} ครั้ง · ${scope}`,
-          { tone: 'income', icon: '🏦' }),
+          { tone: 'income', icon: '🏦', usd: totals.receivedTotalUsd }),
         stat('ยังไม่ได้รับ', money(outstandingInPeriod) + ' ฿', scope,
-          { tone: outstandingInPeriod > 0 ? 'due' : 'income', icon: outstandingInPeriod > 0 ? '⏳' : '✓' }),
+          { tone: outstandingInPeriod > 0 ? 'due' : 'income', icon: outstandingInPeriod > 0 ? '⏳' : '✓', usd: outstandingUsd }),
       ];
     }
     if (superTab === 'received') {
       return [
         stat('ได้รับเงินแล้ว', money(totals.receivedTotal) + ' ฿', `${int(totals.receivedCount)} ครั้ง · ${scope}`,
-          { tone: 'income', icon: '🏦' }),
+          { tone: 'income', icon: '🏦', usd: totals.receivedTotalUsd }),
         stat('ยังไม่ได้รับ', money(outstandingInPeriod) + ' ฿', `${int(billsInPeriod)} ใบใน${scope}`,
-          { tone: outstandingInPeriod > 0 ? 'due' : 'income', icon: outstandingInPeriod > 0 ? '⏳' : '✓' }),
-        stat('ยอดเรียกเก็บรวม', money(billedInPeriod) + ' ฿', scope, { tone: 'muted', icon: '💰' }),
+          { tone: outstandingInPeriod > 0 ? 'due' : 'income', icon: outstandingInPeriod > 0 ? '⏳' : '✓', usd: outstandingUsd }),
+        stat('ยอดเรียกเก็บรวม', money(billedInPeriod) + ' ฿', scope, { tone: 'muted', icon: '💰', usd: billedUsd }),
       ];
     }
 
@@ -1729,10 +1736,10 @@ export async function invoicesView() {
         ].filter(Boolean).join(' · ') || null,
         { tone: 'muted', icon: '🧾' }),
       stat('ยอดเรียกเก็บรวม', money(shown.netTotal) + ' ฿', 'รวมค่าใช้จ่ายและหักส่วนลดแล้ว',
-        { tone: 'income', icon: '💰' }),
+        { tone: 'income', icon: '💰', usd: shown.netTotalUsd }),
       stat(isSuper ? 'ยังไม่ได้รับ' : 'ยังค้างชำระ', money(shown.outstanding) + ' ฿',
         shown.overdueCount ? `เลยกำหนดแล้ว ${int(shown.overdueCount)} ใบ` : null,
-        { tone: shown.outstanding > 0 ? 'due' : 'income', icon: shown.outstanding > 0 ? '⏳' : '✓' }),
+        { tone: shown.outstanding > 0 ? 'due' : 'income', icon: shown.outstanding > 0 ? '⏳' : '✓', usd: shown.outstandingUsd }),
     ];
   }
 
@@ -1808,7 +1815,7 @@ export async function invoicesView() {
            * แต่พอตัวเลขไม่ตรงกับตารางข้างล่าง ต้องกระทบไหล่บอกในบรรทัดเดียวกันเลย
            * ไม่ใช่ซ่อนไว้ใน tooltip ให้ต้องเอาเมาส์ไปชี้ถึงจะรู้ว่าทำไมไม่ตรง
            */
-          title: `⚠ สลิปรอตรวจ ${int(totals.pendingAllCount)} ใบ · ${money(totals.pendingAllAmount)} ฿`
+          title: `⚠ สลิปรอตรวจ ${int(totals.pendingAllCount)} ใบ · ${money(totals.pendingAllAmount)} ฿${usdText(totals.pendingAllAmountUsd)}`
             + (periodFilter && totals.pendingAllCount > totals.pendingCount
               ? ` — ทุกรอบ (รอบนี้ ${int(totals.pendingCount)} ใบ)` : ''),
           detail: 'ยอดจะถูกตัดออกจากบิลเมื่อกดยืนยันรับเงินเท่านั้น',
@@ -1824,7 +1831,7 @@ export async function invoicesView() {
         : alertBanner({
           compact: true,
           // นับข้ามรอบเช่นกัน จึงบอกในบรรทัดเดียวกันว่าต่างจากตารางข้างล่างตรงไหน
-          title: `⚠ บิลเลยกำหนด ${overdueInvoices.length} ใบ · ${money(overdueTotal)} ฿`
+          title: `⚠ บิลเลยกำหนด ${overdueInvoices.length} ใบ · ${money(overdueTotal)} ฿${usdText(sumUsd(overdueInvoices, (r) => r.outstanding))}`
             + (periodFilter && overdueInvoices.length > shown.overdueCount
               ? ` — ทุกรอบ (รอบนี้ ${int(shown.overdueCount)} ใบ)` : ''),
           detail: isSuper

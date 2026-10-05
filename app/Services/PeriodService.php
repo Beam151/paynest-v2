@@ -6,6 +6,7 @@ use App\Libraries\ApiException;
 use App\Libraries\Db;
 use App\Libraries\Money;
 use App\Libraries\Period;
+use App\Libraries\Usd;
 
 final class PeriodService
 {
@@ -74,6 +75,7 @@ final class PeriodService
             throw ApiException::badRequest('usdRate: อัตราแลกเปลี่ยนต้องมากกว่า 0');
         }
         Db::exec('UPDATE billing_periods SET usd_rate_satang = ? WHERE id = ?', [$satang, $period['id']]);
+        Usd::forget();
         Audit::write($actorUserId, 'period.usd_rate', 'billing_period', (int) $period['id'], [
             'periodCode' => $period['code'],
             'usdRate'    => $satang === null ? null : Money::toBaht($satang),
@@ -99,6 +101,8 @@ final class PeriodService
             'status'    => $row['status'],
             // บาทต่อ 1 ดอลลาร์ — null = รอบนี้ยังไม่ได้ตั้งอัตรา
             'usdRate'   => $row['usd_rate_satang'] === null ? null : Money::toBaht($row['usd_rate_satang']),
+            // อัตราที่ใช้เทียบยอดของรอบนี้เป็นดอลลาร์ในสรุป: ของรอบเอง ไม่มี = อัตราล่าสุดที่ตั้งไว้ (null = ยังไม่เคยตั้งเลย)
+            'fxRate'    => Usd::rate($row['usd_rate_satang']),
         ];
     }
 }

@@ -1,7 +1,7 @@
 import { api, qs, session } from '../api.js';
 import {
   badge, card, commBadge, confirmAction, copyText, dateTh, dateTimeTh, el, field, formModal, infoModal, int,
-  loginSetModal, loginSetText, loginUrl, money, pct, randomPassword, resetPasswordModal, stat, table, toast,
+  loginSetModal, loginSetText, loginUrl, money, pct, randomPassword, resetPasswordModal, stat, table, toast, totalCell, usdText,
 } from '../ui.js';
 import { periodLabel, todayIso } from '../period.js';
 import { render } from '../app.js';
@@ -1202,7 +1202,8 @@ function agentsTab(agents, { createAgentModal, commissionModal }) {
           list.error
             ? ''
             : el('div', { class: 'sub-line' },
-              `รอจ่าย ${money(list.summary?.pending)} ฿ · จ่ายแล้ว ${money(list.summary?.paid)} ฿`)),
+              `รอจ่าย ${money(list.summary?.pending)} ฿${usdText(list.summary?.pendingUsd)}`
+              + ` · จ่ายแล้ว ${money(list.summary?.paid)} ฿${usdText(list.summary?.paidUsd)}`)),
         el('button', { class: 'btn sm', onclick: openSettings },
           `ตั้งค่าคอม${data.uncommissionedCount ? ` (${int(data.uncommissionedCount)} รอจ่าย)` : ''}`)),
       list.error
@@ -1235,8 +1236,8 @@ function agentsTab(agents, { createAgentModal, commissionModal }) {
       modal.body.replaceChildren(
         el('div', { class: 'stat-grid' },
           stat('สินค้าที่ถือดีลอยู่', int(data.activeProductCount), null, { tone: 'sales', icon: '📦' }),
-          stat('คอมค้างจ่าย', money(data.pendingCommission) + ' ฿', null, { tone: 'due', icon: '⏳' }),
-          stat('จ่ายไปแล้วสะสม', money(data.paidCommission) + ' ฿', null, { tone: 'income', icon: '✓' })),
+          stat('คอมค้างจ่าย', money(data.pendingCommission) + ' ฿', null, { tone: 'due', icon: '⏳', usd: data.pendingCommissionUsd }),
+          stat('จ่ายไปแล้วสะสม', money(data.paidCommission) + ' ฿', null, { tone: 'income', icon: '✓', usd: data.paidCommissionUsd })),
         commissionsSection(data, list),
         el('h3', { style: 'margin:18px 0 4px' }, 'ดีลที่ถืออยู่'),
         el('div', { class: 'sub-line mb-8' }, `${EDIT_EFFECT} · ปิดดีลกดครั้งเดียว ไม่ต้องเลือกวันที่`),
@@ -1503,8 +1504,8 @@ async function commissionsTab(agents, { commissionModal }) {
     el('div', { class: 'stat-grid' },
       stat('บิลค่าคอม', int(res.summary.count), 'ตามตัวกรองที่เลือก', { tone: 'muted', icon: '🧾' }),
       stat('ค้างจ่าย', money(res.summary.pending) + ' ฿', null,
-        { tone: res.summary.pending > 0 ? 'due' : 'muted', icon: '⏳' }),
-      stat('จ่ายแล้ว', money(res.summary.paid) + ' ฿', null, { tone: 'income', icon: '✓' })),
+        { tone: res.summary.pending > 0 ? 'due' : 'muted', icon: '⏳', usd: res.summary.pendingUsd }),
+      stat('จ่ายแล้ว', money(res.summary.paid) + ' ฿', null, { tone: 'income', icon: '✓', usd: res.summary.paidUsd })),
 
     el('div', { class: 'btn-row', style: 'margin-bottom:12px' },
       el('button', {
@@ -1550,7 +1551,8 @@ async function commissionsTab(agents, { commissionModal }) {
         detail: 'กด "ตั้งค่าคอม / ทำบิลค่าคอม" แล้วติ๊กรายการจากบิลร้านที่ออกแล้ว (หรือใส่ค่าคอมอื่น ๆ) ให้เซล',
       },
       footer: res.items.length
-        ? ['', '', '', 'รวม (ไม่นับที่ยกเลิก)', money(res.summary.total ?? sumBaht([res.summary.pending, res.summary.paid])), '', '']
+        ? ['', '', '', 'รวม (ไม่นับที่ยกเลิก)',
+          totalCell(res.summary.total ?? sumBaht([res.summary.pending, res.summary.paid]), res.summary.totalUsd), '', '']
         : undefined,
     }), { tight: true }));
 }

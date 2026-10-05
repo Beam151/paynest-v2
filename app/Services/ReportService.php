@@ -7,6 +7,7 @@ use App\Libraries\Clock;
 use App\Libraries\Db;
 use App\Libraries\Money;
 use App\Libraries\Period;
+use App\Libraries\Usd;
 
 /** รายงาน: รายรอบ · รายเดือน · เทียบช่วง · จัดอันดับ · หน้าแรก · ภาพของร้าน */
 final class ReportService
@@ -58,12 +59,17 @@ final class ReportService
             $where[]  = 'se.product_id = ?';
             $params[] = (int) $productId;
         }
-        $metrics = '
+        // ยอดเทียบดอลลาร์: แต่ละรอบแปลงด้วยอัตราของรอบนั้นแล้วค่อยรวม (ช่วงหลายรอบจึงไม่ใช่ ยอดบาทรวม ÷ อัตราเดียว)
+        $grossUsd      = Usd::sqlCents('se.gross_amount_satang', 'bp.usd_rate_satang');
+        $commissionUsd = Usd::sqlCents('se.commission_amount_satang', 'bp.usd_rate_satang');
+        $metrics       = "
             COUNT(*)                                       AS entry_count,
             COUNT(DISTINCT se.product_id)                  AS product_count,
             COUNT(DISTINCT se.franchise_id)                AS franchise_count,
             COALESCE(SUM(se.gross_amount_satang), 0)       AS gross_satang,
-            COALESCE(SUM(se.commission_amount_satang), 0)  AS commission_satang';
+            COALESCE(SUM(se.commission_amount_satang), 0)  AS commission_satang,
+            SUM({$grossUsd})                               AS gross_usd_cents,
+            SUM({$commissionUsd})                          AS commission_usd_cents";
         $from = '
             FROM sales_entries se
             JOIN billing_periods bp ON bp.id = se.period_id
@@ -87,8 +93,10 @@ final class ReportService
 
     private static function toTotals(?array $row): array
     {
-        $gross      = (int) ($row['gross_satang'] ?? 0);
-        $commission = (int) ($row['commission_satang'] ?? 0);
+        $gross         = (int) ($row['gross_satang'] ?? 0);
+        $commission    = (int) ($row['commission_satang'] ?? 0);
+        $grossUsd      = Usd::fromCents($row['gross_usd_cents'] ?? null);
+        $commissionUsd = Usd::fromCents($row['commission_usd_cents'] ?? null);
 
         return [
             'entryCount'             => (int) ($row['entry_count'] ?? 0),
@@ -98,6 +106,10 @@ final class ReportService
             'commissionAmount'       => Money::toBaht($commission),
             'netAmount'              => Money::toBaht($gross - $commission),
             'effectiveCommissionPct' => $gross > 0 ? Money::round2(($commission / $gross) * 100) : null,
+            // ยอดเทียบดอลลาร์ของสามตัวบน (null = ยังไม่เคยตั้งอัตรา) — ดู App\Libraries\Usd
+            'grossAmountUsd'         => $grossUsd,
+            'commissionAmountUsd'    => $commissionUsd,
+            'netAmountUsd'           => $grossUsd === null ? null : Money::round2($grossUsd - $commissionUsd),
         ];
     }
 
@@ -109,6 +121,7 @@ final class ReportService
     private static function diffOf(array $current, array $previous): array
     {
         $growth = static fn ($a, $b) => $b == 0 ? null : Money::round2((($a - $b) / $b) * 100);
+        $usd    = static fn (string $key) => $current[$key] === null || $previous[$key] === null ? null : Money::round2($current[$key] - $previous[$key]);
 
         return [
             'grossAmount'         => Money::round2($current['grossAmount'] - $previous['grossAmount']),
@@ -116,6 +129,8 @@ final class ReportService
             'entryCount'          => $current['entryCount'] - $previous['entryCount'],
             'grossGrowthPct'      => $growth($current['grossAmount'], $previous['grossAmount']),
             'commissionGrowthPct' => $growth($current['commissionAmount'], $previous['commissionAmount']),
+            'grossAmountUsd'      => $usd('grossAmountUsd'),
+            'commissionAmountUsd' => $usd('commissionAmountUsd'),
         ];
     }
 
@@ -283,17 +298,23 @@ final class ReportService
         $prevTotals = self::aggregate($prev['startDate'], $prev['endDate'], $franchiseId);
         $where      = $franchiseId ? 'AND i.franchise_id = ?' : '';
         $params     = $franchiseId ? [$franchiseId] : [];
-        // ยอดค้างคิดจาก net_total (รวมค่าใช้จ่ายอื่นและหักส่วนลดแล้ว)
+        // ยอดค้างคิดจาก net_total (รวมค่าใช้จ่ายอื่นและหักส่วนลดแล้ว) · ดอลลาร์ปัดทีละบิลตามอัตราของบิลนั้น
+        $owedUsd     = Usd::sqlCents('i.net_total_satang - i.paid_satang', 'i.usd_rate_satang', 'bp.usd_rate_satang');
         $outstanding = Db::one(
-            "SELECT COALESCE(SUM(i.net_total_satang - i.paid_satang), 0) AS amount, COUNT(*) AS invoices
+            "SELECT COALESCE(SUM(i.net_total_satang - i.paid_satang), 0) AS amount, COUNT(*) AS invoices,
+                    SUM(ROUND({$owedUsd})) AS usd_cents
                FROM invoices i
+               JOIN billing_periods bp ON bp.id = i.period_id
               WHERE i.status IN ('OPEN', 'PARTIAL') {$where}",
             $params,
         );
+        $slipUsd = Usd::sqlCents('ps.amount_satang', 'i.usd_rate_satang', 'bp.usd_rate_satang');
         $pending = Db::one(
-            "SELECT COUNT(*) AS n, COALESCE(SUM(ps.amount_satang), 0) AS amount
+            "SELECT COUNT(*) AS n, COALESCE(SUM(ps.amount_satang), 0) AS amount,
+                    SUM(ROUND({$slipUsd})) AS usd_cents
                FROM payment_submissions ps
-               JOIN invoices i ON i.id = ps.invoice_id
+               JOIN invoices i         ON i.id = ps.invoice_id
+               JOIN billing_periods bp ON bp.id = i.period_id
               WHERE ps.status = 'PENDING' {$where}",
             $params,
         );
@@ -305,8 +326,16 @@ final class ReportService
             'current'         => $curTotals,
             'previousPeriod'  => ['key' => $prev['code'], ...$prevTotals],
             'diff'            => self::diffOf($curTotals, $prevTotals),
-            'outstanding'     => ['amount' => Money::toBaht((int) $outstanding['amount']), 'invoices' => (int) $outstanding['invoices']],
-            'pendingPayments' => ['count' => (int) $pending['n'], 'amount' => Money::toBaht((int) $pending['amount'])],
+            'outstanding'     => [
+                'amount'    => Money::toBaht((int) $outstanding['amount']),
+                'invoices'  => (int) $outstanding['invoices'],
+                'amountUsd' => Usd::fromCents($outstanding['usd_cents']),
+            ],
+            'pendingPayments' => [
+                'count'     => (int) $pending['n'],
+                'amount'    => Money::toBaht((int) $pending['amount']),
+                'amountUsd' => Usd::fromCents($pending['usd_cents']),
+            ],
             'topProducts'     => array_slice($top, 0, 5),
         ];
     }

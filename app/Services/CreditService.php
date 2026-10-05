@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Libraries\ApiException;
 use App\Libraries\Db;
 use App\Libraries\Money;
+use App\Libraries\Usd;
 
 /**
  * ยอดที่ส่วนกลางติดค้างร้าน แล้วยกไปหักบิลรอบถัดไป
@@ -170,6 +171,8 @@ final class CreditService
             'used'            => Money::toBaht((int) $row['amount_satang'] - (int) $row['remaining_satang']),
             'sourceInvoiceId' => $row['source_invoice_id'] === null ? null : (int) $row['source_invoice_id'],
             'sourceInvoiceNo' => $row['source_invoice_no'] ?? null,
+            // บาทต่อ 1 ดอลลาร์ที่ใช้เทียบยอดนี้ในสรุป = อัตราของบิลต้นทาง (ไม่มีบิลต้นทาง = อัตราล่าสุด)
+            'fxRate'          => Usd::rate($row['invoice_usd_rate_satang'] ?? null, $row['period_usd_rate_satang'] ?? null),
             'status'          => $row['status'],
             'note'            => $row['note'],
             'createdAt'       => $row['created_at'],
@@ -180,19 +183,24 @@ final class CreditService
     public static function list(int $franchiseId): array
     {
         $rows = array_map([self::class, 'serialize'], Db::all(
-            'SELECT c.*, i.invoice_no AS source_invoice_no
+            'SELECT c.*, i.invoice_no AS source_invoice_no,
+                    i.usd_rate_satang AS invoice_usd_rate_satang, bp.usd_rate_satang AS period_usd_rate_satang
                FROM franchise_credits c
-               LEFT JOIN invoices i ON i.id = c.source_invoice_id
+               LEFT JOIN invoices i         ON i.id = c.source_invoice_id
+               LEFT JOIN billing_periods bp ON bp.id = i.period_id
               WHERE c.franchise_id = ?
               ORDER BY c.id DESC',
             [$franchiseId],
         ));
+        $open = array_filter($rows, static fn ($r) => $r['status'] === 'OPEN');
 
         return [
             'items'   => $rows,
             'summary' => [
-                'open'  => Money::toBaht(self::openTotal($franchiseId)),
-                'count' => count(array_filter($rows, static fn ($r) => $r['status'] === 'OPEN')),
+                'open'    => Money::toBaht(self::openTotal($franchiseId)),
+                'count'   => count($open),
+                // ยอดเทียบดอลลาร์ของ open — รวมจาก fxRate ของแต่ละก้อน (null = ยังไม่เคยตั้งอัตรา)
+                'openUsd' => Usd::sum($open, 'remaining'),
             ],
         ];
     }

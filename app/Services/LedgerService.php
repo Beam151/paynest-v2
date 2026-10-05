@@ -6,6 +6,7 @@ use App\Libraries\ApiException;
 use App\Libraries\Db;
 use App\Libraries\Money;
 use App\Libraries\Period;
+use App\Libraries\Usd;
 
 /**
  * สมุดรายรับ-รายจ่ายของส่วนกลาง แยกตามรอบบิล
@@ -16,7 +17,7 @@ use App\Libraries\Period;
 final class LedgerService
 {
     private const SELECT = '
-        SELECT l.*, bp.code AS period_code, u.username AS created_by
+        SELECT l.*, bp.code AS period_code, bp.usd_rate_satang AS period_usd_rate_satang, u.username AS created_by
           FROM ledger_entries l
           JOIN billing_periods bp ON bp.id = l.period_id
           LEFT JOIN users u       ON u.id = l.created_by_user_id';
@@ -132,20 +133,33 @@ final class LedgerService
             self::SELECT . ($where ? ' WHERE ' . implode(' AND ', $where) : '') . ' ORDER BY COALESCE(l.spent_on, l.created_at) DESC, l.id DESC',
             $params,
         ));
-        $expense   = array_sum(array_column(array_filter($items, static fn ($i) => $i['kind'] === 'EXPENSE'), 'amount'));
-        $income    = array_sum(array_column(array_filter($items, static fn ($i) => $i['kind'] === 'INCOME'), 'amount'));
+        $expenses  = array_filter($items, static fn ($i) => $i['kind'] === 'EXPENSE');
+        $incomes   = array_filter($items, static fn ($i) => $i['kind'] === 'INCOME');
+        $expense   = array_sum(array_column($expenses, 'amount'));
+        $income    = array_sum(array_column($incomes, 'amount'));
         $billed    = 0;
         $collected = 0;
+        $row       = null;
         if ($period !== null) {
-            $row = Db::one(
-                "SELECT COALESCE(SUM(commission_total_satang), 0) AS billed,
-                        COALESCE(SUM(paid_satang), 0)             AS collected
-                   FROM invoices WHERE period_id = ? AND status <> 'VOID'",
+            // ดอลลาร์ของเงินจากบิล: ปัดทีละบิลตามอัตราที่ตรึงไว้กับบิลนั้น (ไม่มี = อัตราของรอบ) — ตรงกับยอดที่หน้าบิลรวม
+            $billedCents    = Usd::sqlCents('i.commission_total_satang', 'i.usd_rate_satang', 'bp.usd_rate_satang');
+            $collectedCents = Usd::sqlCents('i.paid_satang', 'i.usd_rate_satang', 'bp.usd_rate_satang');
+            $row            = Db::one(
+                "SELECT COALESCE(SUM(i.commission_total_satang), 0) AS billed,
+                        COALESCE(SUM(i.paid_satang), 0)             AS collected,
+                        SUM(ROUND({$billedCents}))                  AS billed_usd_cents,
+                        SUM(ROUND({$collectedCents}))               AS collected_usd_cents
+                   FROM invoices i
+                   JOIN billing_periods bp ON bp.id = i.period_id
+                  WHERE i.period_id = ? AND i.status <> 'VOID'",
                 [$period['id']],
             );
             $billed    = Money::toBaht((int) $row['billed']);
             $collected = Money::toBaht((int) $row['collected']);
         }
+        $expenseUsd   = Usd::sum($expenses, 'amount');
+        $incomeUsd    = Usd::sum($incomes, 'amount');
+        $collectedUsd = Usd::fromCents($row['collected_usd_cents'] ?? null);
 
         return [
             'items'   => $items,
@@ -156,6 +170,12 @@ final class LedgerService
                 'collected' => $collected,
                 // กำไรจริง = เงินที่เก็บเข้ามาได้จริง + รายรับอื่น − รายจ่าย
                 'net' => Money::round2($collected + $income - $expense),
+                // ยอดเทียบดอลลาร์ของห้าตัวบน (null = ยังไม่เคยตั้งอัตรา) — ดู App\Libraries\Usd
+                'expenseUsd'   => $expenseUsd,
+                'incomeUsd'    => $incomeUsd,
+                'billedUsd'    => Usd::fromCents($row['billed_usd_cents'] ?? null),
+                'collectedUsd' => $collectedUsd,
+                'netUsd'       => $collectedUsd === null ? null : Money::round2($collectedUsd + $incomeUsd - $expenseUsd),
             ],
         ];
     }
@@ -172,6 +192,8 @@ final class LedgerService
             'label'        => $row['label'],
             'amount'       => Money::toBaht($amount),
             'signedAmount' => Money::toBaht($row['kind'] === 'INCOME' ? $amount : -$amount),
+            // บาทต่อ 1 ดอลลาร์ที่ใช้เทียบยอดนี้ในสรุป: อัตราของรอบ ไม่มี = อัตราล่าสุด
+            'fxRate'       => Usd::rate($row['period_usd_rate_satang'] ?? null),
             'spentOn'      => $row['spent_on'],
             'note'         => $row['note'],
             'createdBy'    => $row['created_by'],

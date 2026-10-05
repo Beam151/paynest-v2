@@ -117,6 +117,33 @@ const pctFmt = new Intl.NumberFormat('th-TH', { maximumFractionDigits: 2 });
 
 export const money = (n) => moneyFmt.format(Number(n ?? 0));
 export const int = (n) => intFmt.format(Number(n ?? 0));
+
+/*
+ * ── ยอดเทียบดอลลาร์ของการ์ดสรุป (รุ่น 2.6.0) ──
+ * เงินในระบบเป็นบาททุกที่ ดอลลาร์เป็นบรรทัดเทียบ "≈ $…" ใต้ยอดบาท
+ * เซิร์ฟเวอร์เป็นคนเลือกอัตรา (App\Libraries\Usd): อัตราที่ตรึงกับบิล → อัตราของรอบ → อัตราล่าสุดที่ตั้งไว้
+ *   ยอดที่เซิร์ฟเวอร์รวมมาให้แล้วมีช่อง …Usd คู่กัน · แถวที่หน้าเว็บต้องรวมเอง (กรองตามรอบ/สถานะ) มี fxRate ของแถวนั้น
+ * ยังไม่เคยตั้งอัตรา (null) หรือยอดเป็นศูนย์ = ไม่มีบรรทัดดอลลาร์
+ */
+const USD_HINT = 'ยอดเทียบเป็นดอลลาร์ — คิดตามอัตราของแต่ละรอบ (บิลใช้อัตราที่ตรึงไว้ตอนออก) รอบที่ยังไม่ได้ตั้งอัตราใช้อัตราล่าสุด';
+
+/** "$1,234.56" · ติดลบ "−$1,234.56" */
+export const dollars = (n) => `${Number(n) < 0 ? '−' : ''}$${money(Math.abs(Number(n ?? 0)))}`;
+
+/** บาท → ดอลลาร์ตาม fxRate ของแถว (บาทต่อ 1 ดอลลาร์) — ไม่มีอัตรา = null */
+export const usdOf = (baht, fxRate) => (fxRate ? Number((Number(baht ?? 0) / fxRate).toFixed(2)) : null);
+
+/** รวมยอดเทียบดอลลาร์ของหลายแถว — แต่ละแถวใช้ fxRate ของตัวเอง ปัดทีละแถวก่อนรวม (แบบเดียวกับที่เซิร์ฟเวอร์รวม) */
+export const sumUsd = (rows, pick) => Number(rows.reduce((t, r) => t + (usdOf(pick(r), r.fxRate) ?? 0), 0).toFixed(2));
+
+/** บรรทัด "≈ $…" — วางใต้ยอดบาทในการ์ดสรุป หัวหน้าแรกของร้าน และแถวรวมท้ายตาราง */
+export const usdNote = (usd) => (usd ? el('div', { class: 'usd-note', title: USD_HINT }, `≈ ${dollars(usd)}`) : '');
+
+/** ข้อความต่อท้ายยอดบาทในประโยค " ≈ $…" — แถบเตือน/บรรทัดอธิบายที่มียอดรวม */
+export const usdText = (usd) => (usd ? ` ≈ ${dollars(usd)}` : '');
+
+/** เซลล์ยอดรวมท้ายตาราง: ยอดบาท + บรรทัดเทียบดอลลาร์ */
+export const totalCell = (baht, usd) => (usd ? el('div', {}, money(baht), usdNote(usd)) : money(baht));
 export const pct = (n) => (n === null || n === undefined ? '—' : `${pctFmt.format(Number(n))}%`);
 
 const THAI_MONTHS = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
@@ -504,10 +531,12 @@ export function periodBar(selectNode, { label = 'รอบบิล', extra } = 
     extra ?? '');
 }
 
-export function stat(label, value, sub, { tone = 'muted', icon } = {}) {
+/** usd = ยอดเทียบดอลลาร์ของตัวเลขในการ์ด (ดู usdNote) — การ์ดที่ไม่ใช่ยอดเงินไม่ต้องส่ง */
+export function stat(label, value, sub, { tone = 'muted', icon, usd } = {}) {
   return el('div', { class: `stat tone-${tone}` },
     el('div', { class: 'label' }, icon && el('span', { class: 'stat-ico' }, iconFor(icon)), label),
     el('div', { class: 'value' }, value),
+    usdNote(usd),
     sub && el('div', { class: 'sub' }, sub));
 }
 

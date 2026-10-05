@@ -1,6 +1,6 @@
 import { periodLabel } from '../period.js';
 import { api, qs, session } from '../api.js';
-import { badge, card, dateTh, el, int, money, stat, table } from '../ui.js';
+import { badge, card, dateTh, el, int, money, stat, sumUsd, table, usdText } from '../ui.js';
 import { render } from '../app.js';
 import { avatar } from '../charts.js';
 
@@ -24,6 +24,9 @@ export async function statementView(franchiseId) {
   const overdueAmount = Number(overdue.reduce((t, r) => t + r.outstanding, 0).toFixed(2));
   const oldestOverdue = overdue.length ? Math.max(...overdue.map((r) => r.daysOverdue)) : 0;
   const billedTotal = Number(live.reduce((t, r) => t + r.netTotal, 0).toFixed(2));
+  // ยอดเทียบดอลลาร์: บิลรวมจาก fxRate ของแต่ละใบ · เงินรับ/ยอดยกไป เซิร์ฟเวอร์รวมมาให้
+  const owedUsd = sumUsd(live, (r) => r.outstanding);
+  const overdueUsd = sumUsd(overdue, (r) => r.outstanding);
 
   const back = el('a', { class: 'btn ghost', href: '#/franchises' }, '← รายชื่อร้าน');
   const viewAs = el('button', {
@@ -45,14 +48,15 @@ export async function statementView(franchiseId) {
 
     el('div', { class: 'stat-grid' },
       stat('ค้างชำระทั้งหมด', money(owed) + ' ฿', `${int(live.filter((r) => r.outstanding > 0).length)} ใบ`,
-        { tone: owed > 0 ? 'due' : 'income', icon: owed > 0 ? '⏳' : '✓' }),
+        { tone: owed > 0 ? 'due' : 'income', icon: owed > 0 ? '⏳' : '✓', usd: owedUsd }),
       stat('เลยกำหนด', money(overdueAmount) + ' ฿',
         overdue.length ? `${int(overdue.length)} ใบ · นานสุด ${int(oldestOverdue)} วัน` : 'ไม่มี ✓',
-        { tone: overdue.length ? 'warn' : 'income', icon: '⏰' }),
-      stat('ได้รับเงินแล้วทั้งหมด', money(received.summary.total) + ' ฿', `จากที่เรียกเก็บ ${money(billedTotal)} ฿`,
-        { tone: 'income', icon: '💰' }),
+        { tone: overdue.length ? 'warn' : 'income', icon: '⏰', usd: overdueUsd }),
+      stat('ได้รับเงินแล้วทั้งหมด', money(received.summary.total) + ' ฿',
+        `จากที่เรียกเก็บ ${money(billedTotal)} ฿${usdText(sumUsd(live, (r) => r.netTotal))}`,
+        { tone: 'income', icon: '💰', usd: received.summary.totalUsd }),
       stat('ยอดยกไปหักรอบหน้า', money(credits.summary.open) + ' ฿', 'เราติดค้างร้าน (คืนของมากกว่าขาย)',
-        { tone: credits.summary.open > 0 ? 'sales' : 'muted', icon: '↩' })),
+        { tone: credits.summary.open > 0 ? 'sales' : 'muted', icon: '↩', usd: credits.summary.openUsd })),
 
     card('บิลทุกรอบ', table([
       { label: 'รอบ', sortValue: (r) => r.periodCode, render: (r) => periodLabel(r.periodCode) },

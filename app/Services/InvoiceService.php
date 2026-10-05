@@ -8,6 +8,7 @@ use App\Libraries\Db;
 use App\Libraries\Money;
 use App\Libraries\Period;
 use App\Libraries\SignedUrl;
+use App\Libraries\Usd;
 use Config\Paynest;
 use Throwable;
 
@@ -22,6 +23,7 @@ final class InvoiceService
                ba.bank_name, ba.account_name, ba.account_number, ba.branch AS bank_branch,
                ba.currency AS bank_currency, ba.qr_url AS bank_qr_url, ba.chain AS bank_chain,
                bp.code AS period_code, bp.start_date AS period_start, bp.end_date AS period_end,
+               bp.usd_rate_satang AS period_usd_rate_satang,
                (SELECT COALESCE(SUM(fc.amount_satang), 0) FROM franchise_credits fc
                  WHERE fc.source_invoice_id = i.id AND fc.status <> 'CANCELLED') AS credit_created,
                (SELECT COUNT(*) FROM payment_submissions ps
@@ -1015,6 +1017,9 @@ final class InvoiceService
                 'netTotal'           => Money::round2(array_sum(array_column($live, 'netTotal'))),
                 'outstanding'        => Money::round2(array_sum(array_column($live, 'outstanding'))),
                 'pendingSubmissions' => array_sum(array_column($rows, 'pendingSubmissions')),
+                // ยอดเทียบดอลลาร์ของสองยอดบน — รวมจาก fxRate ของแต่ละบิล (null = ยังไม่เคยตั้งอัตรา)
+                'netTotalUsd'    => Usd::sum($live, 'netTotal'),
+                'outstandingUsd' => Usd::sum($live, 'outstanding'),
             ],
         ];
     }
@@ -1048,8 +1053,11 @@ final class InvoiceService
             'reference'         => $r['reference'],
             'note'              => $r['note'],
             'recordedBy'        => $r['recorded_by'],
+            // เงินที่รับเทียบดอลลาร์ด้วยอัตราของบิลที่เงินก้อนนั้นตัดยอด
+            'fxRate'            => Usd::rate($r['invoice_usd_rate_satang'], $r['period_usd_rate_satang']),
         ], Db::all(
             'SELECT p.*, i.invoice_no, i.net_total_satang, f.username AS franchise_username,
+                    i.usd_rate_satang AS invoice_usd_rate_satang, bp.usd_rate_satang AS period_usd_rate_satang,
                     bp.code AS period_code, u.username AS recorded_by
                FROM invoice_payments p
                JOIN invoices i         ON i.id = p.invoice_id
@@ -1063,7 +1071,11 @@ final class InvoiceService
 
         return [
             'items'   => $items,
-            'summary' => ['count' => count($items), 'total' => Money::round2(array_sum(array_column($items, 'amount')))],
+            'summary' => [
+                'count'    => count($items),
+                'total'    => Money::round2(array_sum(array_column($items, 'amount'))),
+                'totalUsd' => Usd::sum($items, 'amount'),
+            ],
         ];
     }
 
@@ -1262,6 +1274,11 @@ final class InvoiceService
             'payOutstanding' => $currency === 'USD' && $rate
                 ? ($void ? 0 : $usd($net - $paid))
                 : ($void ? 0 : Money::toBaht($net - $paid)),
+            /*
+             * บาทต่อ 1 ดอลลาร์ที่ใช้เทียบยอดของบิลนี้ในการ์ดสรุป: อัตราที่ตรึงไว้ → อัตราของรอบ → อัตราล่าสุด (App\Libraries\Usd)
+             * คนละตัวกับ usdRate ด้านบน ซึ่งมีเฉพาะบิลที่ตรึงอัตราไว้ตอนออก (ตัวที่ร้านจ่ายจริงเมื่อบิลเป็น USD)
+             */
+            'fxRate' => Usd::rate($rate, $row['period_usd_rate_satang'] ?? null),
             // บัญชีที่ให้ร้านโอนเข้า ตรึงไว้ตั้งแต่ตอนออกบิล ถึงเปลี่ยนบัญชีหลักทีหลังก็ไม่กระทบใบเก่า
             'bankAccount' => $row['bank_account_id'] ? self::serializeBank($row, $currency) : null,
         ];

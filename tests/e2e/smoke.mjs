@@ -1662,6 +1662,16 @@ check('เปลี่ยนไปใช้บัญชีที่ปิดใ�
  */
 section('อัตราแลกเปลี่ยน USD ต่อรอบบิล');
 
+// ก่อนตั้งอัตราครั้งแรก: สรุปยอดไม่มีค่าเทียบดอลลาร์ให้โชว์ (หน้าเว็บจึงไม่มีบรรทัด ≈ $) — ไม่ใช่ 0 และไม่ใช่ error
+{
+  const dash = await api('GET', '/api/reports/dashboard', { token: admin });
+  const bills = await api('GET', '/api/invoices', { token: admin });
+  check('ยังไม่เคยตั้งอัตรา: สรุปยอดไม่มีค่าเทียบดอลลาร์ (null) และบิลไม่มี fxRate',
+    dash.status === 200 && dash.body.current.grossAmountUsd === null && dash.body.outstanding.amountUsd === null
+      && bills.body.items.length > 0 && bills.body.summary.netTotalUsd === null && bills.body.items.every((i) => i.fxRate === null),
+    { current: dash.body.current, summary: bills.body.summary });
+}
+
 const rateSet = await api('POST', '/api/periods/2027-04-H1/usd-rate', { token: admin, body: { usdRate: 36.25 } });
 check('ตั้งอัตราแลกเปลี่ยนของรอบได้', rateSet.status === 200 && rateSet.body.usdRate === 36.25, rateSet.body);
 check('อัตราติดลบหรือศูนย์ไม่ได้',
@@ -4331,6 +4341,126 @@ section('หน้าเว็บติดป้ายรุ่น — อัป
   } finally {
     fs.utimesSync(target, atime, mtime);
   }
+}
+
+/* ── ยอดเทียบดอลลาร์ในสรุปยอด (รุ่น 2.6.0) ──────────────────────
+ * ทุกการ์ดสรุปโชว์บาทคู่กับดอลลาร์ — เซิร์ฟเวอร์เป็นคนเลือกอัตราของแต่ละยอด (App\Libraries\Usd):
+ *   อัตราที่ตรึงกับบิล → อัตราของรอบ → อัตราล่าสุดที่ตั้งไว้ · แถวมี fxRate · ยอดรวมมีช่อง …Usd คู่กัน
+ * ฉาก: Z = บิล USD (36) · A = บิลตรึง 40 แล้วรอบถูกแก้เป็น 50 · B = ออกบิลก่อนตั้งอัตรา แล้วตั้ง 25 · C = ไม่เคยตั้ง
+ */
+section('ยอดเทียบดอลลาร์ในสรุปยอด (บาท + USD)');
+{
+  const fid = (await api('POST', '/api/franchises', { token: admin, body: { username: 'fxshop', password: 'fxshop-pass-1' } })).body.franchise?.id;
+  const ftok = (await shopLogin('fxshop', 'fxshop-pass-1', fid)).body.token;
+  const fp = (await api('POST', '/api/products', {
+    token: admin, body: { sku: 'FX-1', name: 'สินค้าเทียบดอลลาร์', commissionPct: 10, franchiseId: fid, startDate: '2026-01-01' },
+  })).body.product;
+  const [Z, A, B, C] = ['2030-12-H2', '2031-01-H1', '2031-01-H2', '2031-02-H1'];
+  const sell = (periodCode, grossAmount) => api('POST', '/api/sales-entries', { token: admin, body: { periodCode, productId: fp?.id, grossAmount } });
+  const setRate = (code, usdRate) => api('POST', `/api/periods/${code}/usd-rate`, { token: admin, body: { usdRate } });
+  const bill = (periodCode, extra = {}) => api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: fid, periodCode, ...extra } });
+  const billOf = async (id) => (await api('GET', `/api/invoices/${id}`, { token: admin })).body;
+  const billsOf = async (token = admin) => (await api('GET', `/api/invoices?franchiseId=${fid}`, { token })).body;
+
+  await setRate(Z, 36);
+  await sell(Z, 12345);                       // ส่วนต่าง 1,234.50 ÷ 36 = 34.2916… → $34.29
+  const billZ = await bill(Z, { currency: 'USD' });
+  await setRate(A, 40);
+  await sell(A, 100000);                      // ส่วนต่าง 10,000
+  const billA = await bill(A);
+  await setRate(A, 50);                       // บิล A ตรึง 40 ไว้แล้ว — ยอดขายของรอบ A เทียบที่ 50
+  await sell(B, 50000);                       // ส่วนต่าง 5,000
+  const billB = await bill(B);                // รอบ B ยังไม่มีอัตรา → บิลไม่ตรึงอัตรา
+  check('บิล USD: fxRate = อัตราที่ตรึงไว้ และยอดที่ต้องโอนปัดเป็นเซนต์ ($34.29)',
+    billZ.status === 201 && billZ.body.fxRate === 36 && billZ.body.payAmount === 34.29, billZ.body);
+  check('บิลที่ตรึงอัตราไว้: เปลี่ยนอัตราของรอบแล้ว fxRate ยังเป็นอัตราเดิม (40)',
+    (await billOf(billA.body.id)).fxRate === 40, billA.body.fxRate);
+  check('บิลของรอบที่ยังไม่ได้ตั้งอัตรา: fxRate = อัตราล่าสุดที่ตั้งไว้ (50) — usdRate ของบิลยังว่าง',
+    billB.body.usdRate === null && billB.body.netTotalUsd === null && billB.body.fxRate === 50,
+    { usdRate: billB.body.usdRate, fxRate: billB.body.fxRate });
+  await setRate(B, 25);
+  check('ตั้งอัตราของรอบทีหลัง: บิลที่ไม่ได้ตรึงอัตราใช้อัตราของรอบ (25) แทนอัตราล่าสุด',
+    (await billOf(billB.body.id)).fxRate === 25);
+  await sell(C, 20000);                       // ส่วนต่าง 2,000 · รอบ C ไม่ตั้งอัตราเลย → อัตราล่าสุด = ของรอบ B (25)
+  const billC = await bill(C);
+  const periodC = (await api('GET', `/api/periods/${C}`, { token: admin })).body;
+  check('รอบที่ไม่เคยตั้งอัตรา: usdRate ว่าง แต่ fxRate = อัตราล่าสุด (รอบใหม่สุดที่ตั้งไว้ = 25) ทั้งรอบและบิล',
+    periodC.usdRate === null && periodC.fxRate === 25 && billC.body.fxRate === 25, { periodC, billC: billC.body.fxRate });
+
+  // บิล: Z $34.29 + A 10,000÷40 = $250 + B 5,000÷25 = $200 + C 2,000÷25 = $80
+  const all = await billsOf();
+  check('รายการบิล: ยอดรวมดอลลาร์ = ผลบวกของบิลทีละใบตาม fxRate ของตัวเอง ($564.29)',
+    all.summary.netTotal === 18234.5 && all.summary.netTotalUsd === 564.29 && all.summary.outstandingUsd === 564.29, all.summary);
+
+  // ยอดขาย: เทียบด้วยอัตราของรอบ (ไม่ใช่ของบิล) — A 100,000÷50 · B 50,000÷25 · C 20,000÷25
+  const byPeriod = (await api('GET', `/api/reports/by-period?from=${A}&to=${C}&franchiseId=${fid}`, { token: admin })).body;
+  check('รายงานหลายรอบ: แต่ละรอบแปลงด้วยอัตราของรอบนั้นแล้วค่อยรวม ($2,000 + $2,000 + $800)',
+    byPeriod.total.grossAmountUsd === 4800 && byPeriod.total.commissionAmountUsd === 480 && byPeriod.total.netAmountUsd === 4320
+      && byPeriod.rows.map((r) => r.grossAmountUsd).join() === '2000,2000,800', { total: byPeriod.total, rows: byPeriod.rows.map((r) => r.grossAmountUsd) });
+  const oneZ = (await api('GET', `/api/reports/by-period?from=${Z}&to=${Z}&franchiseId=${fid}`, { token: admin })).body;
+  check('ยอดขายปัดเป็นเซนต์ครั้งเดียวหลังรวม (12,345÷36 = $342.92 · ส่วนต่าง $34.29)',
+    oneZ.total.grossAmountUsd === 342.92 && oneZ.total.commissionAmountUsd === 34.29, oneZ.total);
+  const cmp = (await api('GET', `/api/reports/compare?granularity=period&current=${C}&previous=${B}&franchiseId=${fid}`, { token: admin })).body;
+  check('เทียบรอบ: ส่วนต่างดอลลาร์ = ดอลลาร์ของสองช่วงลบกัน (800 − 2,000)',
+    cmp.diff.grossAmountUsd === -1200 && cmp.diff.commissionAmountUsd === -120, cmp.diff);
+
+  const dash = (await api('GET', `/api/reports/dashboard?periodCode=${A}&franchiseId=${fid}`, { token: admin })).body;
+  check('หน้าแรก: ยอดของรอบและยอดค้างทุกรอบมีค่าเทียบดอลลาร์',
+    dash.current.grossAmountUsd === 2000 && dash.current.netAmountUsd === 1800 && dash.outstanding.amountUsd === 564.29,
+    { current: dash.current, outstanding: dash.outstanding });
+  const shopDash = (await api('GET', `/api/reports/dashboard?periodCode=${A}`, { token: ftok })).body;
+  check('ร้านเห็นค่าเทียบดอลลาร์ของร้านตัวเองแบบเดียวกัน',
+    shopDash.current?.grossAmountUsd === 2000 && shopDash.outstanding?.amountUsd === 564.29, shopDash);
+
+  // สลิป/เงินรับใช้อัตราของบิลที่จ่าย: 4,000 ÷ 40 = $100
+  const pay = await api('POST', '/api/payments', { token: ftok, body: { invoiceId: billA.body.id, amount: 4000, paidAt: '2026-09-21', slipUrl: slip } });
+  const pendingSlips = (await api('GET', `/api/payments?franchiseId=${fid}&status=PENDING`, { token: admin })).body;
+  const dashPending = (await api('GET', `/api/reports/dashboard?periodCode=${A}&franchiseId=${fid}`, { token: admin })).body.pendingPayments;
+  check('สลิปรอตรวจ: เทียบดอลลาร์ด้วยอัตราของบิลที่แจ้งชำระ (4,000 ÷ 40 = $100)',
+    pay.status === 201 && pendingSlips.items[0]?.fxRate === 40 && pendingSlips.summary.pendingAmountUsd === 100 && dashPending.amountUsd === 100,
+    { pay: pay.body, summary: pendingSlips.summary, dashPending });
+  await api('POST', `/api/payments/${pay.body.id}/approve`, { token: admin, body: {} });
+  const received = (await api('GET', `/api/payments/received?franchiseId=${fid}`, { token: admin })).body;
+  const center = (await api('GET', '/api/payments/center', { token: ftok })).body;
+  check('เงินที่รับแล้ว + ยอดที่ต้องจ่ายของร้าน: ดอลลาร์รวมตามอัตราของแต่ละบิล ($100 · เหลือ $464.29)',
+    received.summary.totalUsd === 100 && received.items[0]?.fxRate === 40
+      && center.totalOutstandingUsd === 464.29 && center.summary.approvedAmountUsd === 100 && (await billsOf(ftok)).summary.outstandingUsd === 464.29,
+    { received: received.summary, center: { total: center.totalOutstandingUsd, summary: center.summary } });
+  check('ยอดที่ต้องจ่ายรวมของร้าน = ผลบวกของยอดดอลลาร์ทีละใบ (บิล USD ใช้ยอดที่ต้องโอนจริง)',
+    center.totalOutstandingUsd === Number(center.outstandingInvoices
+      .reduce((t, i) => t + (i.isUsd ? i.payOutstanding : Number((i.outstanding / i.fxRate).toFixed(2))), 0).toFixed(2)),
+    center.outstandingInvoices.map((i) => [i.invoiceNo, i.outstanding, i.fxRate, i.payOutstanding]));
+  const credits = (await api('GET', `/api/franchises/${fid}/credits`, { token: admin })).body;
+  check('ยอดยกไปหักรอบหน้า: ไม่มีก้อนค้าง = $0 (ไม่ใช่ null เมื่อตั้งอัตราไว้แล้ว)', credits.summary.open === 0 && credits.summary.openUsd === 0, credits.summary);
+
+  // สมุดรายรับ-รายจ่าย: รายการใช้อัตราของรอบ (C ไม่ได้ตั้ง = 25) · เงินจากบิลใช้อัตราของบิล
+  await api('POST', '/api/ledger', { token: admin, body: { periodCode: C, kind: 'EXPENSE', label: 'ค่าขนส่งเทียบดอลลาร์', amount: 500 } });
+  await api('POST', '/api/ledger', { token: admin, body: { periodCode: C, kind: 'INCOME', label: 'เงินคืนเทียบดอลลาร์', amount: 250 } });
+  const ledC = (await api('GET', `/api/ledger?periodCode=${C}`, { token: admin })).body;
+  check('รายรับ-รายจ่าย: ทุกการ์ดมีค่าเทียบดอลลาร์ และ เหลือจริง = เก็บได้ + รายรับ − รายจ่าย ทั้งสองสกุล',
+    ledC.summary.expenseUsd === 20 && ledC.summary.incomeUsd === 10 && ledC.summary.billedUsd === 80 && ledC.summary.collectedUsd === 0
+      && ledC.summary.net === -250 && ledC.summary.netUsd === -10 && ledC.items.every((i) => i.fxRate === 25), ledC.summary);
+  const ledA = (await api('GET', `/api/ledger?periodCode=${A}`, { token: admin })).body;
+  check('เก็บเงินได้จริงของรอบ: เทียบด้วยอัตราที่ตรึงกับบิล (4,000 ÷ 40 = $100 จากที่เรียกเก็บ $250) ไม่ใช่อัตราปัจจุบันของรอบ (50)',
+    ledA.summary.collected === 4000 && ledA.summary.collectedUsd === 100 && ledA.summary.billedUsd === 250, ledA.summary);
+
+  // บิลค่าคอมไม่มีรอบ: ใช้อัตราของรอบที่วันทำบิลตกอยู่ (ตั้ง 20) — ไม่ใช่อัตราล่าสุด (25)
+  const today = (await api('GET', '/api/periods/current', { token: admin })).body;
+  await setRate(today.code, 20);
+  const agent = (await api('POST', '/api/sales-agents', { token: admin, body: { username: 'fxsale', password: 'fxsale-pass-1', name: 'เซลเทียบดอลลาร์' } })).body.agent;
+  const comm = await api('POST', `/api/sales-agents/${agent?.id}/commission-bills`, { token: admin, body: { others: [{ label: 'ค่าแนะนำ', amount: 1000 }] } });
+  const commList = (await api('GET', `/api/sales-agents/commissions?salesAgentId=${agent?.id}`, { token: admin })).body;
+  const agentRow = (await api('GET', `/api/sales-agents/${agent?.id}`, { token: admin })).body;
+  check('บิลค่าคอม: fxRate = อัตราของรอบที่วันทำบิลตกอยู่ (1,000 ÷ 20 = $50) ทั้งในรายการ สรุป และยอดของเซล',
+    comm.status === 201 && comm.body.fxRate === 20 && commList.summary.pendingUsd === 50 && commList.summary.totalUsd === 50
+      && commList.summary.paidUsd === 0 && (agentRow.agent ?? agentRow).pendingCommissionUsd === 50,
+    { fxRate: comm.body.fxRate, summary: commList.summary, agent: agentRow.agent ?? agentRow });
+  await api('POST', `/api/sales-agents/commissions/${comm.body.id}/pay`, { token: admin, body: {} });
+  const saleTok = (await api('POST', '/api/auth/login', { body: { username: 'fxsale', password: 'fxsale-pass-1' } })).body.token;
+  const me = (await api('GET', '/api/sales-agents/me', { token: saleTok })).body;
+  check('เซลเห็นยอดรอรับ/ได้รับแล้วเป็นดอลลาร์คู่กับบาท (จ่ายแล้ว $50 · รอรับ $0)',
+    me.summary?.paid === 1000 && me.summary?.paidUsd === 50 && me.summary?.pendingUsd === 0, me.summary);
+  await setRate(today.code, null);
 }
 
 section('captcha หน้าเข้าสู่ระบบ: หลาย IP ผลัดกันเดารหัสบัญชีเดียว (botnet)');

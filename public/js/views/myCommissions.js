@@ -60,10 +60,11 @@ export async function myCommissionsView() {
 
     el('div', { class: 'stat-grid' },
       stat('รอรับ', money(me.summary.pending) + ' ฿', 'ส่วนกลางยังไม่ได้จ่าย',
-        { tone: me.summary.pending > 0 ? 'due' : 'muted', icon: '⏳' }),
-      stat('ได้รับแล้วสะสม', money(me.summary.paid) + ' ฿', 'ตั้งแต่เริ่มทำ', { tone: 'income', icon: '✓' }),
+        { tone: me.summary.pending > 0 ? 'due' : 'muted', icon: '⏳', usd: me.summary.pendingUsd }),
+      stat('ได้รับแล้วสะสม', money(me.summary.paid) + ' ฿', 'ตั้งแต่เริ่มทำ', { tone: 'income', icon: '✓', usd: me.summary.paidUsd }),
       stat('รวมทั้งหมด', money(Number((me.summary.pending + me.summary.paid).toFixed(2))) + ' ฿',
-        `จาก ${int(liveCount)} บิลค่าคอม`, { tone: 'sales', icon: '🎯' }),
+        `จาก ${int(liveCount)} บิลค่าคอม`,
+        { tone: 'sales', icon: '🎯', usd: Number(((me.summary.pendingUsd ?? 0) + (me.summary.paidUsd ?? 0)).toFixed(2)) }),
       stat('สินค้าที่ถือดีลอยู่', int(me.summary.activeProducts),
         el('a', { href: '#/my-deals' }, 'ดูเงื่อนไขคอม →'), { tone: 'muted', icon: '📦' })),
 
@@ -141,7 +142,7 @@ export async function myDealsView() {
         'ร้านที่ขายสินค้าของคุณอยู่', { tone: 'muted', icon: '🏪' }),
       stat('รอรับ', money(me.summary.pending) + ' ฿',
         el('a', { href: '#/my-sales' }, 'ดูบิลค่าคอม →'),
-        { tone: me.summary.pending > 0 ? 'due' : 'muted', icon: '⏳' })),
+        { tone: me.summary.pending > 0 ? 'due' : 'muted', icon: '⏳', usd: me.summary.pendingUsd })),
 
     card(null, table([
       {

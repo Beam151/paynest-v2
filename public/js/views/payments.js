@@ -1,6 +1,7 @@
 import { api, qs, session } from '../api.js';
 import {
-  alertBanner, badge, card, confirmAction, copyButton, dateTh, dateTimeTh, el, flashRows, formModal, infoModal, int, money, pct, slipBadge, stat, table, toast,
+  alertBanner, badge, card, confirmAction, copyButton, dateTh, dateTimeTh, el, flashRows, formModal, infoModal, int, money, pct, slipBadge, stat, sumUsd,
+  table, toast, totalCell, usdOf, usdText,
 } from '../ui.js';
 import { periodLabel, todayIso } from '../period.js';
 import { render } from '../app.js';
@@ -335,15 +336,19 @@ export async function payCenterView({ embedded = false } = {}) {
 
     modal.body.append(
       el('div', { class: 'stat-grid' },
-        // บิลดอลลาร์โชว์ดอลลาร์เป็นตัวหลัก แล้วต่อท้ายด้วยยอดบาทที่ระบบใช้คิดจริง
+        // บิลดอลลาร์โชว์ดอลลาร์เป็นตัวหลัก แล้วต่อท้ายด้วยยอดบาทที่ระบบใช้คิดจริง — บรรทัดเทียบดอลลาร์จึงมีเฉพาะยอดที่ตัวหลักเป็นบาท
         stat('ยอดที่ต้องจ่าย', payMoney(inv, inv.payAmount),
           inv.isUsd ? `= ${money(inv.netTotal)} ฿ · ออก ${dateTh(inv.issuedAt)}` : `ออก ${dateTh(inv.issuedAt)}`,
-          { tone: 'sales', icon: '🧾' }),
-        stat('จ่ายไปแล้ว', money(inv.paid) + ' ฿', null, { tone: 'income', icon: '✓' }),
+          { tone: 'sales', icon: '🧾', usd: inv.isUsd ? null : usdOf(inv.netTotal, inv.fxRate) }),
+        stat('จ่ายไปแล้ว', money(inv.paid) + ' ฿', null, { tone: 'income', icon: '✓', usd: usdOf(inv.paid, inv.fxRate) }),
         stat('คงเหลือ', payMoney(inv, inv.payOutstanding),
           inv.isUsd ? `= ${money(inv.outstanding)} ฿ · ครบกำหนด ${dateTh(inv.dueDate)}` : `ครบกำหนด ${dateTh(inv.dueDate)}`,
-          { tone: inv.outstanding > 0 ? 'due' : 'income', icon: inv.outstanding > 0 ? '⏳' : '✓' })),
-      inv.isUsd ? usdLine(inv) : '',
+          {
+            tone: inv.outstanding > 0 ? 'due' : 'income',
+            icon: inv.outstanding > 0 ? '⏳' : '✓',
+            usd: inv.isUsd ? null : usdOf(inv.outstanding, inv.fxRate),
+          })),
+      fxLine(inv),
       el('h3', { style: 'margin:6px 0 8px' }, 'รายการในบิล'),
       breakdownTable(inv),
       billLinesDetails(inv),
@@ -449,7 +454,7 @@ export async function payCenterView({ embedded = false } = {}) {
      * ค้างหลายใบ → เลื่อนไปกะพริบแถวที่เลยกำหนด ให้ร้านเลือกเองว่าจะจ่ายใบไหนก่อน
      */
     overdue.length ? alertBanner({
-      title: `⚠ มีบิลเลยกำหนดชำระ ${overdue.length} ใบ รวม ${money(overdueTotal)} บาท`,
+      title: `⚠ มีบิลเลยกำหนดชำระ ${overdue.length} ใบ รวม ${money(overdueTotal)} บาท${usdText(sumUsd(overdue, (r) => r.outstanding))}`,
       detail: `ใบที่ค้างนานที่สุดเลยกำหนดมาแล้ว ${int(Math.max(...overdue.map((r) => r.daysOverdue)))} วัน`,
       // ผู้ช่วยที่ไม่มีสิทธิ์จ่าย: ชี้ไปดูบิลแทน — เดิมเปิดฟอร์มให้กรอกจนจบแล้วค่อยโดนปฏิเสธตอนแนบสลิป
       actionLabel: overdue.length === 1 && !session.viewAs && canPay ? 'จ่ายบิลนี้เลย' : 'ดูบิลที่เลยกำหนด',
@@ -461,14 +466,20 @@ export async function payCenterView({ embedded = false } = {}) {
 
     el('div', { class: 'stat-grid' },
       stat('ยอดที่ต้องจ่ายทั้งหมด', money(center.totalOutstanding) + ' ฿', `${center.outstandingInvoices.length} ใบเรียกเก็บ`,
-        { tone: center.totalOutstanding > 0 ? 'due' : 'income', icon: center.totalOutstanding > 0 ? '⏳' : '✓' }),
+        {
+          tone: center.totalOutstanding > 0 ? 'due' : 'income',
+          icon: center.totalOutstanding > 0 ? '⏳' : '✓',
+          // ร้านที่จ่ายเป็น USD: เท่ากับยอดดอลลาร์ที่ต้องโอนของทุกใบรวมกัน (แต่ละใบใช้อัตราที่ตรึงไว้กับบิล)
+          usd: center.totalOutstandingUsd,
+        }),
       stat('แจ้งแล้ว รอตรวจสอบ', money(center.summary.pendingAmount) + ' ฿', `${int(center.summary.pendingCount)} รายการ`,
-        { tone: center.summary.pendingCount ? 'warn' : 'muted', icon: '👀' }),
-      stat('ยืนยันรับเงินแล้ว', money(center.summary.approvedAmount) + ' ฿', null, { tone: 'income', icon: '✓' }),
+        { tone: center.summary.pendingCount ? 'warn' : 'muted', icon: '👀', usd: center.summary.pendingAmountUsd }),
+      stat('ยืนยันรับเงินแล้ว', money(center.summary.approvedAmount) + ' ฿', null,
+        { tone: 'income', icon: '✓', usd: center.summary.approvedAmountUsd }),
       // โผล่เฉพาะตอนมีจริง — ร้านส่วนใหญ่ไม่เคยติดลบ ไม่ต้องมีการ์ด 0.00 ให้รก
       credit?.summary.open > 0
         ? stat('ทางเราติดค้างร้าน', money(credit.summary.open) + ' ฿',
-          'จะถูกหักออกจากบิลรอบถัดไปให้อัตโนมัติ', { tone: 'income', icon: '↩' })
+          'จะถูกหักออกจากบิลรอบถัดไปให้อัตโนมัติ', { tone: 'income', icon: '↩', usd: credit.summary.openUsd })
         : ''),
 
     card('บิลที่ต้องชำระ',
@@ -589,10 +600,13 @@ export async function paymentTotals(periodCode = '') {
   return {
     pendingCount: pending.summary.pendingCount,
     pendingAmount: pending.summary.pendingAmount,
+    pendingAmountUsd: pending.summary.pendingAmountUsd,
     receivedTotal: received.summary.total,
+    receivedTotalUsd: received.summary.totalUsd,
     receivedCount: received.summary.count,
     pendingAllCount: pendingAll ? pendingAll.summary.pendingCount : pending.summary.pendingCount,
     pendingAllAmount: pendingAll ? pendingAll.summary.pendingAmount : pending.summary.pendingAmount,
+    pendingAllAmountUsd: pendingAll ? pendingAll.summary.pendingAmountUsd : pending.summary.pendingAmountUsd,
   };
 }
 
@@ -701,9 +715,12 @@ function reviewModal(first, queue = [first]) {
         el('div', { class: 'slip-review-pane' }, slipPane),
         el('div', {},
           el('div', { class: 'stat-grid', style: 'grid-template-columns:repeat(2,minmax(0,1fr))' },
+            // บิล USD: ร้านโอนเป็นดอลลาร์ — บรรทัดเทียบนี้คือยอดที่ควรเห็นในกระเป๋า (อัตราที่ตรึงไว้กับบิล)
             stat('ร้านแจ้งมา', money(row.amount) + ' ฿',
-              `โอน ${dateTh(row.paidAt)}${row.paidTime ? ` ${row.paidTime} น.` : ''}`, { tone: 'sales', icon: '🏦' }),
-            stat('ยอดค้างบิลนี้', money(inv.outstanding) + ' ฿', row.franchiseUsername, { tone: 'due', icon: '⏳' })),
+              `โอน ${dateTh(row.paidAt)}${row.paidTime ? ` ${row.paidTime} น.` : ''}`,
+              { tone: 'sales', icon: '🏦', usd: usdOf(row.amount, row.fxRate ?? inv.fxRate) }),
+            stat('ยอดค้างบิลนี้', money(inv.outstanding) + ' ฿', row.franchiseUsername,
+              { tone: 'due', icon: '⏳', usd: usdOf(inv.outstanding, inv.fxRate) })),
           match,
           el('div', { class: 'sub-line mt-8' },
             `แจ้งโดย ${row.submittedBy ?? '—'} · ช่องทาง ${row.method ?? '—'}${row.reference ? ` · อ้างอิง ${row.reference}` : ''}`),
@@ -804,14 +821,12 @@ export async function receivedMoneyTab(periodCode = '') {
   ], received.items, {
     search: 'ค้นหาร้านหรือเลขที่บิล…',
     empty: periodCode ? `ยังไม่มีเงินเข้าในรอบ ${periodLabel(periodCode)}` : 'ยังไม่มีเงินเข้า',
-    footer: received.items.length ? ['', '', 'รวมที่ได้รับ', money(received.summary.total), '', ''] : undefined,
+    footer: received.items.length
+      ? ['', '', 'รวมที่ได้รับ', totalCell(received.summary.total, received.summary.totalUsd), '', '']
+      : undefined,
   }), { tight: true });
 }
 
-/**
- * บรรทัดยอดที่แปลงเป็นดอลลาร์ — โชว์เฉพาะบิลที่ตรึงอัตราไว้ตอนออก
- * ยอดจริงที่ระบบใช้คิดยังเป็นบาทเสมอ บรรทัดนี้มีไว้ให้ร้านต่างชาติเทียบเท่านั้น
- */
 /** จัดรูปยอดตามสกุลของบิล — ใช้ทุกที่ที่ต้องโชว์ "ต้องจ่ายเท่าไร" */
 export const payMoney = (inv, amount) => (inv?.isUsd ? `$${money(amount)}` : `${money(amount)} ฿`);
 
@@ -824,6 +839,22 @@ export function currencyTag(inv) {
   return el('span', { class: 'badge blue', title: `อัตรา ${money(inv.usdRate)} บาท/ดอลลาร์ ณ วันที่ออกบิล` }, 'USD');
 }
 
+/**
+ * บรรทัดบอกว่าตัวเลข "≈ $…" ในการ์ดสรุปของบิลใบนี้เทียบด้วยอัตราไหน — วางใต้การ์ด (ตัวเลขอยู่ในการ์ดแล้ว ไม่พูดซ้ำ)
+ * บิลที่ตรึงอัตราไว้ตอนออก = อัตรานั้น (ตัวที่ร้านจ่ายจริงเมื่อเป็นบิล USD) · ไม่ได้ตรึง = อัตราเทียบของรอบ/ล่าสุดจากเซิร์ฟเวอร์ (fxRate)
+ */
+export function fxLine(inv) {
+  if (!inv?.fxRate) return '';
+  return el('div', { class: 'usd-line' },
+    el('span', { class: 'sub-line' }, inv.usdRate
+      ? `ยอด ≈ $ เทียบด้วยอัตรา ${money(inv.usdRate)} ฿/USD ที่ตรึงไว้ ณ วันที่ออกบิล`
+      : `ยอด ≈ $ เทียบด้วยอัตรา ${money(inv.fxRate)} ฿/USD — บิลนี้ออกก่อนตั้งอัตราของรอบ จึงใช้อัตราปัจจุบันของรอบ (หรืออัตราล่าสุด)`));
+}
+
+/**
+ * บรรทัดยอดที่แปลงเป็นดอลลาร์ — โชว์เฉพาะบิลที่ตรึงอัตราไว้ตอนออก (ฟอร์มแจ้งชำระของบิล USD)
+ * ยอดจริงที่ระบบใช้คิดยังเป็นบาทเสมอ บรรทัดนี้มีไว้ให้ร้านต่างชาติเทียบเท่านั้น
+ */
 export function usdLine(inv, { amountUsd = inv?.netTotalUsd } = {}) {
   if (!inv?.usdRate || amountUsd === null || amountUsd === undefined) return '';
   return el('div', { class: 'usd-line' },

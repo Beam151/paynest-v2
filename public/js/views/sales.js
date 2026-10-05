@@ -1,6 +1,6 @@
 import { api, qs } from '../api.js';
 import {
-  badge, card, confirmAction, el, formModal, int, money, pct, periodBar, stat, table, toast,
+  badge, card, confirmAction, el, formModal, int, money, pct, periodBar, stat, table, toast, totalCell, usdNote, usdOf,
 } from '../ui.js';
 import { periodOptions, periodRange, setWorkingPeriod, workingPeriod } from '../period.js';
 import { render } from '../app.js';
@@ -528,6 +528,8 @@ export async function salesView() {
   const billable = notInvoiced.length;
   const pendingCommission = Number(notInvoiced.reduce((sum, e) => sum + e.commissionAmount, 0).toFixed(2));
   const invoicedCommission = Number((summary.commissionTotal - pendingCommission).toFixed(2));
+  // ทั้งหน้าเป็นยอดของรอบเดียว — เทียบดอลลาร์ด้วยอัตราของรอบนี้ (ยังไม่ได้ตั้ง = อัตราล่าสุด · เซิร์ฟเวอร์เลือกมาให้ใน fxRate)
+  const usd = (baht) => usdOf(baht, period.fxRate);
 
   return el('div', {},
     el('div', { class: 'page-head' },
@@ -547,16 +549,14 @@ export async function salesView() {
     el('div', { class: 'stat-grid' },
       stat('กรอกแล้ว', `${filled} / ${activeRows.length}`, 'สินค้าที่มีสิทธิ์ขายในรอบนี้',
         { tone: filled === activeRows.length && activeRows.length ? 'income' : 'due', icon: '📝' }),
-      stat('ยอดขายเต็ม', money(summary.grossTotal) + ' ฿', `${int(summary.count)} รายการ`, { tone: 'sales', icon: '🛒' }),
+      stat('ยอดขายเต็ม', money(summary.grossTotal) + ' ฿', `${int(summary.count)} รายการ`,
+        { tone: 'sales', icon: '🛒', usd: usd(summary.grossTotal) }),
       stat('ออกบิลไปแล้ว', money(invoicedCommission) + ' ฿',
         `${int(entriesRes.items.length - billable)} รายการ — ตัวเลขนี้ตรงกับหน้า "ใบเรียกเก็บ"`,
-        { tone: 'income', icon: '💰' }),
+        { tone: 'income', icon: '💰', usd: usd(invoicedCommission) }),
       // แยกให้เห็นว่าส่วนไหนขึ้นบิลแล้ว ส่วนไหนยัง — ไม่งั้นเลขหน้านี้จะดูไม่ตรงกับหน้าใบเรียกเก็บ
-      stat('ยังไม่ได้เรียกเก็บ', money(pendingCommission) + ' ฿',
-        period.usdRate
-          ? `≈ $${(pendingCommission / period.usdRate).toFixed(2)} · ${int(billable)} รายการรอออกบิล`
-          : `${int(billable)} รายการ รอออกบิล`,
-        { tone: billable ? 'due' : 'muted', icon: '⏳' })),
+      stat('ยังไม่ได้เรียกเก็บ', money(pendingCommission) + ' ฿', `${int(billable)} รายการ รอออกบิล`,
+        { tone: billable ? 'due' : 'muted', icon: '⏳', usd: usd(pendingCommission) })),
 
     // ตัวกรองร้านอยู่ชิดขวาคู่กับหัวข้อตาราง แทนที่จะลอยเดี่ยว ๆ เป็นแถวของตัวเอง
     el('div', { class: 'toolbar' },
@@ -579,8 +579,9 @@ export async function salesView() {
       // "ส่วนต่างตาม %" รวมเฉพาะยอดเต็ม × % · ยอดที่บิลใช้จริง (ปนยอดที่กรอกเอง) รวมไว้ใต้คอลัมน์กรอกเอง ตรงกับการ์ดสรุปด้านบน
       footer: filled + retiredRows.length
         ? ['', `รวม ${int(filled + retiredRows.length)} รายการที่กรอกแล้ว`,
-          money(summary.grossTotal), '', money(sumBaht(entriesRes.items.map(pctAmountOf))),
-          el('div', {}, el('strong', {}, money(summary.commissionTotal)), el('div', { class: 'sub-line' }, 'รวมที่ออกบิลจะใช้')),
+          totalCell(summary.grossTotal, usd(summary.grossTotal)), '', money(sumBaht(entriesRes.items.map(pctAmountOf))),
+          el('div', {}, el('strong', {}, money(summary.commissionTotal)), usdNote(usd(summary.commissionTotal)),
+            el('div', { class: 'sub-line' }, 'รวมที่ออกบิลจะใช้')),
           '', '']
         : undefined,
     }), { tight: true })));

@@ -1,5 +1,7 @@
 import { api, qs, session } from '../api.js';
-import { alertBanner, badge, card, dateTh, el, icon, iconFor, infoModal, int, money, pct, periodBar, table, toast } from '../ui.js';
+import {
+  alertBanner, badge, card, dateTh, el, icon, iconFor, infoModal, int, money, pct, periodBar, sumUsd, table, toast, usdNote, usdText,
+} from '../ui.js';
 import { barTrend, compact, donut, shareBar } from '../charts.js';
 import { periodLabel, periodOptions, periodShort, setWorkingPeriod, shiftPeriod, todayIso, workingPeriod } from '../period.js';
 import { hasPermission, render } from '../app.js';
@@ -108,6 +110,7 @@ function heroCard({ data, lastYear, standing, periodCode }) {
     el('div', { class: 'shop-hero-main' },
       el('div', { class: 'shop-hero-label' }, `รอบ ${periodLabel(periodCode)} ร้านได้`),
       el('div', { class: 'shop-hero-value' }, hasSales ? money(cur.netAmount) : '—', hasSales ? el('small', {}, ' ฿') : ''),
+      hasSales ? usdNote(cur.netAmountUsd) : '',
       el('div', { class: 'shop-hero-sub' }, hasSales
         ? `ขายได้ ${money(cur.grossAmount)} ฿ · หักส่วนต่าง ${money(cur.commissionAmount)} ฿ (${pct(cur.effectiveCommissionPct)})`
         : 'รอบนี้ยังไม่มียอดขาย — ยอดจะขึ้นเมื่อทางเราบันทึกยอดของรอบนี้'),
@@ -117,15 +120,15 @@ function heroCard({ data, lastYear, standing, periodCode }) {
         showRank ? el('span', { class: 'hero-chip gold' }, `${rank.position <= 3 ? ['🥇', '🥈', '🥉'][rank.position - 1] : '🏆'} ยอดขายอันดับ ${int(rank.position)} จาก ${int(rank.of)} สาขา`) : '',
         streak >= 2 ? el('span', { class: 'hero-chip gold' }, `🔥 จ่ายตรงเวลา ${int(streak)} รอบติด`) : '')),
     el('div', { class: 'shop-hero-side' },
-      heroFigure('ยอดขาย', cur.grossAmount),
-      heroFigure('ส่วนต่าง', cur.commissionAmount),
+      heroFigure('ยอดขาย', cur.grossAmount, { usd: cur.grossAmountUsd }),
+      heroFigure('ส่วนต่าง', cur.commissionAmount, { usd: cur.commissionAmountUsd }),
       heroFigure('สินค้าที่ขาย', cur.productCount, { unit: 'รายการ', format: int })));
 }
 
 // ตัวเลขข้างการ์ดใหญ่ — ต่ำกว่าล้านเขียนเต็ม (128,450 อ่านง่ายกว่า "1.3 แสน") เกินล้านค่อยย่อ
 const heroAmount = (n) => (Math.abs(n) >= 1e6 ? compact(n) : int(Math.round(n)));
-const heroFigure = (label, value, { unit = '฿', format = heroAmount } = {}) => el('div', { class: 'shop-hero-fig' },
-  el('span', {}, label), el('strong', {}, `${format(value)} ${unit}`));
+const heroFigure = (label, value, { unit = '฿', format = heroAmount, usd } = {}) => el('div', { class: 'shop-hero-fig' },
+  el('span', {}, label), el('strong', {}, `${format(value)} ${unit}`, usdNote(usd)));
 
 /**
  * สิ่งที่ต้องทำเรื่องบิล — เรียงจากเร่งที่สุด
@@ -139,6 +142,8 @@ function billBanners({ unpaid, mySubmissions, canSeeBills }) {
   const upcoming = open.filter((r) => !r.isOverdue).sort((a, b) => a.dueDate.localeCompare(b.dueDate));
   const pending = mySubmissions.filter((s) => s.status === 'PENDING');
   const sum = (rows) => Number(rows.reduce((t, r) => t + r.outstanding, 0).toFixed(2));
+  // ร้านที่จ่ายเป็น USD: ผลรวมนี้เท่ากับยอดดอลลาร์ที่ต้องโอนของทุกใบ (แต่ละใบใช้อัตราที่ตรึงไว้กับบิล)
+  const owedUsd = (rows) => usdText(sumUsd(rows, (r) => r.outstanding));
   const daysLeft = (iso) => Math.round((Date.parse(iso) - Date.parse(todayIso())) / 86400000);
 
   const out = rejectedToRedo(mySubmissions, unpaid).slice(0, 3).map((sub) => alertBanner({
@@ -150,7 +155,7 @@ function billBanners({ unpaid, mySubmissions, canSeeBills }) {
 
   if (overdue.length) {
     out.push(alertBanner({
-      title: `บิลเลยกำหนด ${int(overdue.length)} ใบ รวม ${money(sum(overdue))} ฿`,
+      title: `บิลเลยกำหนด ${int(overdue.length)} ใบ รวม ${money(sum(overdue))} ฿${owedUsd(overdue)}`,
       detail: 'โอนแล้วแนบสลิปได้เลย ทางเราตรวจแล้วตัดยอดให้ทันที',
       actionLabel: 'ไปชำระ',
       onClick: toBills,
@@ -161,7 +166,7 @@ function billBanners({ unpaid, mySubmissions, canSeeBills }) {
     const left = daysLeft(next.dueDate);
     out.push(alertBanner({
       tone: 'warn',
-      title: `ยอดที่ต้องชำระ ${money(sum(upcoming))} ฿ (${int(upcoming.length)} ใบ)`,
+      title: `ยอดที่ต้องชำระ ${money(sum(upcoming))} ฿${owedUsd(upcoming)} (${int(upcoming.length)} ใบ)`,
       detail: `ใบถัดไปครบกำหนด ${dateTh(next.dueDate)}${left === 0 ? ' — วันนี้' : left > 0 ? ` — อีก ${int(left)} วัน` : ''}`,
       actionLabel: 'ดูบิล',
       onClick: toBills,

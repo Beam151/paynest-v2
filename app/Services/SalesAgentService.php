@@ -7,6 +7,7 @@ use App\Libraries\AuthContext;
 use App\Libraries\Db;
 use App\Libraries\Money;
 use App\Libraries\Period;
+use App\Libraries\Usd;
 use Throwable;
 
 /**
@@ -59,8 +60,15 @@ final class SalesAgentService
      */
     private static function selectAgent(): string
     {
+        // ยอดเทียบดอลลาร์ของค่าคอมค้างจ่าย/จ่ายแล้ว — ปัดทีละบิลค่าคอมตามอัตราของบิลนั้น (ดู COMMISSION_RATE_*)
+        $usdCents = Usd::sqlCents('c.total_satang', self::COMMISSION_RATE_OF_PERIOD, self::COMMISSION_RATE_OF_DAY);
+
         return "
             SELECT a.*,
+                   (SELECT SUM(ROUND({$usdCents})) FROM sales_commissions c
+                     WHERE c.sales_agent_id = a.id AND c.status = 'PENDING')             AS pending_usd_cents,
+                   (SELECT SUM(ROUND({$usdCents})) FROM sales_commissions c
+                     WHERE c.sales_agent_id = a.id AND c.status = 'PAID')                AS paid_usd_cents,
                    (SELECT COUNT(*) FROM product_sales_links l
                      WHERE l.sales_agent_id = a.id
                        AND l.start_date <= ?
@@ -189,6 +197,9 @@ final class SalesAgentService
             'userCount'          => (int) $row['user_count'],
             'pendingCommission'  => Money::toBaht($row['pending_satang'] ?? 0),
             'paidCommission'     => Money::toBaht($row['paid_satang'] ?? 0),
+            // ยอดเทียบดอลลาร์ของสองยอดบน (null = ยังไม่เคยตั้งอัตรา)
+            'pendingCommissionUsd' => Usd::fromCents($row['pending_usd_cents'] ?? null),
+            'paidCommissionUsd'    => Usd::fromCents($row['paid_usd_cents'] ?? null),
             // บรรทัดบิลร้านที่ยังไม่ได้ทำบิลค่าคอมให้เซลคนนี้ — หน้ารายการเซลเตือนได้ว่า "ยังค้างทำบิลค่าคอม"
             'uncommissionedCount' => (int) ($row['uncommissioned_count'] ?? 0),
             'createdAt'           => $row['created_at'],
@@ -1158,11 +1169,22 @@ final class SalesAgentService
 
     /* ── อ่านค่าคอม ─────────────────────────────────────────────── */
 
+    /*
+     * อัตราเทียบดอลลาร์ของค่าคอมหนึ่งแถว (สตางค์ต่อ 1 ดอลลาร์ · ใช้กับ Usd::sqlCents / Usd::rate ตามลำดับนี้)
+     *   แถวแบบเก่ามีรอบ = อัตราของรอบนั้น · บิลค่าคอมไม่มีรอบ = อัตราของรอบที่วันทำบิล (เวลาไทย) ตกอยู่
+     *   ไม่มีทั้งคู่ = อัตราล่าสุด (Usd เติมให้) — ยอด "จ่ายแล้วสะสม" จึงไม่ขยับทุกครั้งที่ตั้งอัตราของรอบใหม่
+     */
+    private const COMMISSION_RATE_OF_PERIOD = '(SELECT br.usd_rate_satang FROM billing_periods br WHERE br.id = c.period_id)';
+
+    private const COMMISSION_RATE_OF_DAY = '(SELECT bd.usd_rate_satang FROM billing_periods bd
+                 WHERE DATE(DATE_ADD(c.created_at, INTERVAL 7 HOUR)) BETWEEN bd.start_date AND bd.end_date LIMIT 1)';
+
     // บิลค่าคอมไม่มีรอบ — LEFT JOIN รอบ (ถ้า JOIN ธรรมดา บิลค่าคอมจะหายจากทุกรายการ)
     private const SELECT_COMMISSION = '
         SELECT c.*, a.username AS agent_username, a.name AS agent_name,
                f.username AS franchise_username,
                bp.code AS period_code, bp.start_date AS period_start, bp.end_date AS period_end,
+               bp.usd_rate_satang AS period_usd_rate_satang, ' . self::COMMISSION_RATE_OF_DAY . ' AS made_usd_rate_satang,
                i.invoice_no, i.status AS invoice_status
           FROM sales_commissions c
           JOIN sales_agents a          ON a.id = c.sales_agent_id
@@ -1294,7 +1316,9 @@ final class SalesAgentService
             self::SELECT_COMMISSION . ($where ? ' WHERE ' . implode(' AND ', $where) : '') . self::ORDER_COMMISSION,
             $params,
         ));
-        $sumBy = static fn (string $status) => array_sum(array_map(static fn ($r) => $r['totalAmount'], array_filter($rows, static fn ($r) => $r['status'] === $status)));
+        $by    = static fn (string $status) => array_filter($rows, static fn ($r) => $r['status'] === $status);
+        $sumBy = static fn (string $status) => array_sum(array_map(static fn ($r) => $r['totalAmount'], $by($status)));
+        $live  = array_filter($rows, static fn ($r) => $r['status'] !== 'VOID');
 
         return [
             'items'   => $rows,
@@ -1302,7 +1326,11 @@ final class SalesAgentService
                 'count'   => count($rows),
                 'pending' => Money::round2($sumBy('PENDING')),
                 'paid'    => Money::round2($sumBy('PAID')),
-                'total'   => Money::round2(array_sum(array_map(static fn ($r) => $r['totalAmount'], array_filter($rows, static fn ($r) => $r['status'] !== 'VOID')))),
+                'total'   => Money::round2(array_sum(array_map(static fn ($r) => $r['totalAmount'], $live))),
+                // ยอดเทียบดอลลาร์ของสามยอดบน — รวมจาก fxRate ของแต่ละบิลค่าคอม (null = ยังไม่เคยตั้งอัตรา)
+                'pendingUsd' => Usd::sum($by('PENDING'), 'totalAmount'),
+                'paidUsd'    => Usd::sum($by('PAID'), 'totalAmount'),
+                'totalUsd'   => Usd::sum($live, 'totalAmount'),
             ],
         ];
     }
@@ -1398,6 +1426,8 @@ final class SalesAgentService
             'pctAmount'     => Money::toBaht($row['pct_amount_satang']),
             'fixedAmount'   => Money::toBaht($row['fixed_satang']),
             'totalAmount'   => Money::toBaht($row['total_satang']),
+            // บาทต่อ 1 ดอลลาร์ที่ใช้เทียบยอดของแถวนี้ในสรุป (ลำดับตาม COMMISSION_RATE_*)
+            'fxRate'        => Usd::rate($row['period_usd_rate_satang'] ?? null, $row['made_usd_rate_satang'] ?? null),
             'status'        => $row['status'],
             'paidAt'        => $row['paid_at'],
             'voidedAt'      => $row['voided_at'] ?? null,
@@ -1454,6 +1484,8 @@ final class SalesAgentService
                 'activeProducts' => count(array_filter($links, static fn ($l) => $l['isActive'])),
                 'pending'        => $agent['pendingCommission'],
                 'paid'           => $agent['paidCommission'],
+                'pendingUsd'     => $agent['pendingCommissionUsd'],
+                'paidUsd'        => $agent['paidCommissionUsd'],
             ],
         ];
     }

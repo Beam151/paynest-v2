@@ -1,5 +1,5 @@
 import { api, qs } from '../api.js';
-import { card, confirmAction, dateTh, el, formModal, int, money, periodBar, stat, table, toast } from '../ui.js';
+import { card, confirmAction, dateTh, dollars, el, formModal, int, money, periodBar, stat, table, toast, usdText } from '../ui.js';
 import { periodLabel, periodOptions, periodRange, setWorkingPeriod, todayIso, workingPeriod } from '../period.js';
 import { render } from '../app.js';
 import { activityButton } from './activity.js';
@@ -84,14 +84,14 @@ export async function ledgerView() {
     el('div', { class: 'stat-grid' },
       // มาจากสลิปที่อนุมัติแล้วโดยอัตโนมัติ ไม่ได้คีย์ที่หน้านี้ — บอกไว้ให้ชัด ไม่งั้นดูเหมือนต้องกรอกเอง
       stat('เก็บเงินได้จริงในรอบนี้', money(s.collected) + ' ฿',
-        `จากที่เรียกเก็บไป ${money(s.billed)} ฿ · มาจากสลิปที่อนุมัติแล้ว ไม่ต้องคีย์`,
-        { tone: 'sales', icon: '🏦' }),
-      stat('รายรับอื่น', money(s.income) + ' ฿', 'เงินเข้าที่ไม่ได้มาจากการเรียกเก็บ', { tone: 'income', icon: '➕' }),
+        `จากที่เรียกเก็บไป ${money(s.billed)} ฿${usdText(s.billedUsd)} · มาจากสลิปที่อนุมัติแล้ว ไม่ต้องคีย์`,
+        { tone: 'sales', icon: '🏦', usd: s.collectedUsd }),
+      stat('รายรับอื่น', money(s.income) + ' ฿', 'เงินเข้าที่ไม่ได้มาจากการเรียกเก็บ', { tone: 'income', icon: '➕', usd: s.incomeUsd }),
       stat('รายจ่าย', money(s.expense) + ' ฿', 'ต้นทุนของส่วนกลางในรอบนี้',
-        { tone: s.expense > 0 ? 'warn' : 'muted', icon: '➖' }),
+        { tone: s.expense > 0 ? 'warn' : 'muted', icon: '➖', usd: s.expenseUsd }),
       // ใช้เงินที่เก็บได้จริง ไม่ใช่ยอดที่เรียกเก็บ — เงินที่ร้านยังไม่จ่ายยังไม่ใช่กำไร
       stat('เหลือจริงในรอบนี้', money(s.net) + ' ฿', 'เก็บได้จริง + รายรับอื่น − รายจ่าย',
-        { tone: s.net >= 0 ? 'income' : 'warn', icon: s.net >= 0 ? '✓' : '⚠' })),
+        { tone: s.net >= 0 ? 'income' : 'warn', icon: s.net >= 0 ? '✓' : '⚠', usd: s.netUsd })),
 
     card(null, table([
       {
@@ -133,7 +133,12 @@ export async function ledgerView() {
         + 'ตารางนี้เก็บเฉพาะค่าใช้จ่ายของส่วนกลาง (ค่าขนส่ง ค่าเช่า เงินเดือน) '
         + 'และเงินเข้าที่ไม่ได้มาจากบิล\nเงินที่ร้านโอนเข้ามาอยู่ในการ์ด "เก็บเงินได้จริง" ด้านบน ระบบนับให้เอง',
       footer: res.items.length
-        ? ['', 'รวมในรอบนี้', `+${money(s.income)} / −${money(s.expense)}`, '', '', '']
+        ? ['', 'รวมในรอบนี้',
+          el('div', {}, `+${money(s.income)} / −${money(s.expense)}`,
+            s.incomeUsd || s.expenseUsd
+              ? el('div', { class: 'usd-note' }, `≈ +${dollars(s.incomeUsd)} / −${dollars(s.expenseUsd)}`)
+              : ''),
+          '', '', '']
         : undefined,
     }), { tight: true }));
 }

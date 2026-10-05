@@ -57,7 +57,7 @@
     },
     "scripts-descriptions": {
         "test": "ทดสอบทั้งหมด (smoke + pentest) บนฐานข้อมูลเทสต์แยก — ต้องมี Node ≥ 18 และ MySQL/MariaDB ดู tests/README.md",
-        "test:smoke": "ทดสอบทุกฟีเจอร์ผ่าน HTTP (854 ข้อ)",
+        "test:smoke": "ทดสอบทุกฟีเจอร์ผ่าน HTTP (874 ข้อ)",
         "test:pentest": "ลองโจมตีระบบจริง (123 แบบ) — ทุกข้อต้องกันได้",
         "test:unit": "PHPUnit"
     }

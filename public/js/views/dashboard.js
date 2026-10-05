@@ -1,5 +1,5 @@
 import { api, qs, session } from '../api.js';
-import { badge, card, dateTh, delta, el, iconFor, int, money, pct, periodBar, stat, table } from '../ui.js';
+import { badge, card, dateTh, delta, el, iconFor, int, money, pct, periodBar, stat, table, totalCell, usdText } from '../ui.js';
 import { avatar, barTrend, colorFor, donut, gauge, shareBar } from '../charts.js';
 import { periodLabel, periodOptions, periodShort, setWorkingPeriod, shiftPeriod, workingPeriod } from '../period.js';
 import { render } from '../app.js';
@@ -59,13 +59,19 @@ export async function dashboardView() {
 
   const compareCard = card(`เทียบกับรอบก่อนหน้า (${data.previousPeriod.key})`,
     el('div', { class: 'stat-grid m-0' },
-      stat('ยอดขายรอบนี้', money(data.current.grossAmount) + ' ฿', null, { tone: 'sales' }),
-      stat('ยอดขายรอบก่อน', money(data.previousPeriod.grossAmount) + ' ฿', null, { tone: 'muted' }),
+      stat('ยอดขายรอบนี้', money(data.current.grossAmount) + ' ฿', null, { tone: 'sales', usd: data.current.grossAmountUsd }),
+      stat('ยอดขายรอบก่อน', money(data.previousPeriod.grossAmount) + ' ฿', null,
+        { tone: 'muted', usd: data.previousPeriod.grossAmountUsd }),
+      // ลูกศรบอกทิศแล้ว — ยอดดอลลาร์ของส่วนต่างจึงไม่มีเครื่องหมาย เหมือนยอดบาทใน delta()
       stat('เปลี่ยนแปลงยอดขาย', delta(d.grossAmount, d.grossGrowthPct), 'เทียบรอบครึ่งเดือนก่อน',
-        { tone: d.grossAmount >= 0 ? 'income' : 'warn', icon: d.grossAmount >= 0 ? '▲' : '▼' }),
+        { tone: d.grossAmount >= 0 ? 'income' : 'warn', icon: d.grossAmount >= 0 ? '▲' : '▼', usd: Math.abs(d.grossAmountUsd ?? 0) }),
       stat('เปลี่ยนแปลงส่วนต่าง', delta(d.commissionAmount, d.commissionGrowthPct),
         `${d.entryCount >= 0 ? '+' : ''}${int(d.entryCount)} รายการ`,
-        { tone: d.commissionAmount >= 0 ? 'income' : 'warn', icon: d.commissionAmount >= 0 ? '▲' : '▼' })));
+        {
+          tone: d.commissionAmount >= 0 ? 'income' : 'warn',
+          icon: d.commissionAmount >= 0 ? '▲' : '▼',
+          usd: Math.abs(d.commissionAmountUsd ?? 0),
+        })));
 
   /* ── ภาพรวมของส่วนกลาง ──────────────────────────────────────
    * บนสุดคือ "ต้องทำอะไรวันนี้" — กดแล้วไปถึงงานนั้นเลย
@@ -90,7 +96,7 @@ export async function dashboardView() {
     data.pendingPayments.count > 0 && todoTile({
       tone: 'warn', icon: '👀',
       title: `ตรวจสลิป ${int(data.pendingPayments.count)} ใบ`,
-      detail: `รวม ${money(data.pendingPayments.amount)} ฿ — ยอดจะตัดออกจากบิลเมื่อยืนยันรับเงิน`,
+      detail: `รวม ${money(data.pendingPayments.amount)} ฿${usdText(data.pendingPayments.amountUsd)} — ยอดจะตัดออกจากบิลเมื่อยืนยันรับเงิน`,
       href: '#/invoices?tab=slips&period=all',
     }),
     overdue.length > 0 && todoTile({
@@ -130,13 +136,16 @@ export async function dashboardView() {
 
     el('div', { class: 'stat-grid' },
       stat('ยอดขายเต็มรอบนี้', money(data.current.grossAmount) + ' ฿',
-        `${int(data.current.entryCount)} รายการ · ${int(data.current.productCount)} สินค้า`, { tone: 'sales', icon: '🛒' }),
+        `${int(data.current.entryCount)} รายการ · ${int(data.current.productCount)} สินค้า`,
+        { tone: 'sales', icon: '🛒', usd: data.current.grossAmountUsd }),
       stat('ส่วนต่างที่เรียกเก็บ', money(data.current.commissionAmount) + ' ฿',
-        avgPct === null ? 'ยังไม่มียอด' : `เฉลี่ย ${pct(avgPct)} ของยอดเต็ม`, { tone: 'income', icon: '💰' }),
+        avgPct === null ? 'ยังไม่มียอด' : `เฉลี่ย ${pct(avgPct)} ของยอดเต็ม`,
+        { tone: 'income', icon: '💰', usd: data.current.commissionAmountUsd }),
       // ยอดค้างเป็นของทุกรอบ ไม่ใช่รอบนี้ — บอกไว้บนการ์ดเลย ไม่งั้นดูเหมือนตัวเลขของรอบที่เลือก
       stat('ร้านยังไม่จ่าย (ทุกรอบ)', money(data.outstanding.amount) + ' ฿',
-        `${int(data.outstanding.invoices)} ใบเรียกเก็บ`, { tone: 'due', icon: '⏳' }),
-      stat('เหลือเป็นของร้าน', money(data.current.netAmount) + ' ฿', 'ยอดเต็มหักส่วนต่างแล้ว', { tone: 'muted', icon: '🏪' })),
+        `${int(data.outstanding.invoices)} ใบเรียกเก็บ`, { tone: 'due', icon: '⏳', usd: data.outstanding.amountUsd }),
+      stat('เหลือเป็นของร้าน', money(data.current.netAmount) + ' ฿', 'ยอดเต็มหักส่วนต่างแล้ว',
+        { tone: 'muted', icon: '🏪', usd: data.current.netAmountUsd })),
 
     card('ใบเรียกเก็บของรอบนี้',
       table([
@@ -209,13 +218,13 @@ function ledgerCard(ledger, periodCode) {
   return card('รายรับ-รายจ่ายของเราในรอบนี้',
     el('div', {},
       el('div', { class: 'stat-grid m-0' },
-        stat('เก็บเงินได้จริง', money(s.collected) + ' ฿', `จากที่เรียกเก็บไป ${money(s.billed)} ฿`,
-          { tone: 'sales', icon: '🏦' }),
-        stat('รายรับอื่น', money(s.income) + ' ฿', 'เงินเข้าที่ไม่ได้มาจากบิล', { tone: 'income', icon: '➕' }),
+        stat('เก็บเงินได้จริง', money(s.collected) + ' ฿', `จากที่เรียกเก็บไป ${money(s.billed)} ฿${usdText(s.billedUsd)}`,
+          { tone: 'sales', icon: '🏦', usd: s.collectedUsd }),
+        stat('รายรับอื่น', money(s.income) + ' ฿', 'เงินเข้าที่ไม่ได้มาจากบิล', { tone: 'income', icon: '➕', usd: s.incomeUsd }),
         stat('รายจ่ายของเรา', money(s.expense) + ' ฿', `${int(ledger.items.filter((i) => i.kind === 'EXPENSE').length)} รายการ`,
-          { tone: s.expense > 0 ? 'warn' : 'muted', icon: '➖' }),
+          { tone: s.expense > 0 ? 'warn' : 'muted', icon: '➖', usd: s.expenseUsd }),
         stat('เหลือจริงในรอบนี้', money(s.net) + ' ฿', 'เก็บได้จริง + รายรับอื่น − รายจ่าย',
-          { tone: s.net >= 0 ? 'income' : 'warn', icon: s.net >= 0 ? '✓' : '⚠' })),
+          { tone: s.net >= 0 ? 'income' : 'warn', icon: s.net >= 0 ? '✓' : '⚠', usd: s.netUsd })),
 
       top.length
         ? el('div', { class: 'mt-14' },
@@ -267,7 +276,9 @@ function franchiseTable(breakdown) {
     empty: 'รอบนี้ยังไม่มีร้านไหนกรอกยอด',
     search: 'ค้นหาร้าน…',
     footer: rows.length
-      ? ['รวม', int(breakdown.total.productCount), money(breakdown.total.grossAmount), money(breakdown.total.commissionAmount), '']
+      ? ['รวม', int(breakdown.total.productCount),
+        totalCell(breakdown.total.grossAmount, breakdown.total.grossAmountUsd),
+        totalCell(breakdown.total.commissionAmount, breakdown.total.commissionAmountUsd), '']
       : undefined,
   });
 }
