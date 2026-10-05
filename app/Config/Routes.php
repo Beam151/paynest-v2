@@ -86,6 +86,8 @@ $routes->group('api', ['namespace' => 'App\Controllers\Api'], static function (R
 
     /* ── บิล · ค่าใช้จ่าย/ส่วนลด ── */
     $routes->get('invoices/readiness', 'Invoices::readiness', $g('auth,staff,perm.bills,super'));
+    // หักค่าคอมเซลจากบิลร้าน: พรีวิวก่อนออกบิล (ต้องอยู่ก่อน invoices/(:segment))
+    $routes->get('invoices/sales-deductions', 'Invoices::salesDeductionPreview', $g('auth,staff,perm.bills,super'));
     $routes->post('invoices/generate-bulk', 'Invoices::generateBulk', $g('auth,staff,perm.bills,super'));
     $routes->post('invoices/generate', 'Invoices::generate', $g('auth,staff,perm.bills,super'));
     $routes->patch('invoices/(:segment)', 'Invoices::update/$1', $g('auth,staff,perm.bills,super'));
@@ -99,6 +101,9 @@ $routes->group('api', ['namespace' => 'App\Controllers\Api'], static function (R
     $routes->get('invoices/(:segment)', 'Invoices::show/$1', $g('auth,staff,perm.bills'));
     $routes->post('invoices/(:segment)/adjustments', 'Invoices::addAdjustment/$1', $g('auth,staff,perm.bills,super'));
     $routes->delete('invoices/(:segment)/adjustments/(:segment)', 'Invoices::removeAdjustment/$1/$2', $g('auth,staff,perm.bills,super'));
+    // เซลที่ยังหักค่าคอมจากบิลนี้ได้ · หักเพิ่ม (ถอนการหัก = ลบบรรทัดนั้นผ่าน adjustments ด้านบน)
+    $routes->get('invoices/(:segment)/sales-deductions', 'Invoices::salesDeductions/$1', $g('auth,staff,perm.bills,super'));
+    $routes->post('invoices/(:segment)/sales-deductions', 'Invoices::addSalesDeduction/$1', $g('auth,staff,perm.bills,super'));
     $routes->post('invoices/(:segment)/void', 'Invoices::void/$1', $g('auth,staff,perm.bills,super'));
 
     $routes->get('charge-items', 'ChargeItems::index', $g('auth,staff'));

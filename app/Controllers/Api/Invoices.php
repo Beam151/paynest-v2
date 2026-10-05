@@ -49,6 +49,18 @@ class Invoices extends BaseApiController
         ]))->max(500);
     }
 
+    /**
+     * หักค่าคอมเซลจากบิลร้าน (R25) — ติ๊กทีละเซล หักทั้งหมดของเซลคนนั้นในบิลใบนั้น
+     * amount = ยอดที่หน้าจอโชว์ตอนติ๊ก: เซิร์ฟเวอร์คิดเองเสมอ ส่งมาเพื่อให้เทียบว่าตรงกับที่คนกดเห็น (ไม่ตรง = 409)
+     */
+    private static function salesDeductionSchema()
+    {
+        return V::object([
+            'salesAgentId' => V::id(),
+            'amount'       => V::amount()->optional(),
+        ]);
+    }
+
     /** รูป/PDF ประกอบบิล — อัปโหลดผ่าน /api/uploads ก่อน แล้วส่ง url มา (ไม่รับลิงก์ภายนอก) */
     private static function attachmentsSchema()
     {
@@ -126,7 +138,9 @@ class Invoices extends BaseApiController
             'currency' => V::enum(['THB', 'USD'])->optional(),
             'lines'       => self::lineModesSchema()->optional(),
             'attachments' => self::attachmentsSchema()->max(InvoiceAttachmentService::MAX_PER_INVOICE, 'แนบได้สูงสุด 10 รูปต่อบิล')->optional(),
-            // ค่าคอมเซลไม่ได้เลือกตอนออกบิลร้านแล้ว — ทำ "บิลค่าคอม" ทีหลัง (POST /api/sales-agents/:id/commission-bills)
+            // ค่าคอมเซลปกติทำ "บิลค่าคอม" ทีหลัง (POST /api/sales-agents/:id/commission-bills) — ยกเว้นเซลที่ติ๊กมาตรงนี้:
+            // ร้านเป็นคนจ่ายเซลเอง หักออกจากบิลร้านใบนี้และทำบิลค่าคอมสถานะจ่ายแล้วให้เลย
+            'salesDeductions' => V::array(self::salesDeductionSchema())->max(50)->optional(),
         ]), $this->body());
         $inv = InvoiceService::generate($body, $this->user());
         $this->notifyIssued([$inv]);
@@ -231,9 +245,38 @@ class Invoices extends BaseApiController
         return $this->json(InvoiceService::addAdjustment($invoiceId, $body, $this->user()), 201);
     }
 
+    /** ลบบรรทัด "หักค่าคอมเซล" ทางนี้เหมือนกัน — บิลค่าคอมที่เกิดจากการหักถูกยกเลิกตาม */
     public function removeAdjustment(string $id, string $adjustmentId)
     {
         return $this->json(InvoiceService::removeAdjustment(V::parseId($id), V::parseId($adjustmentId), $this->user()));
+    }
+
+    /**
+     * พรีวิวก่อนออกบิล: ยอดขายที่ยังไม่ขึ้นบิลของร้าน/รอบนี้ มีเซลคนไหนได้ค่าคอมเท่าไร (ให้ติ๊กหักในหน้าต่างออกบิล)
+     * entryIds = "1,2,3" เฉพาะรายการที่ติ๊กไว้ · ไม่ส่ง = ทุกรายการที่ยังไม่ขึ้นบิล
+     */
+    public function salesDeductionPreview()
+    {
+        $franchiseId = V::parseId((string) $this->q('franchiseId'));
+        $periodCode  = V::parse(V::periodCode(), $this->q('periodCode'));
+        $raw         = $this->q('entryIds');
+        $entryIds    = $raw === null ? null : array_values(array_filter(array_map('intval', explode(',', $raw)), static fn ($id) => $id > 0));
+
+        return $this->json(InvoiceService::salesDeductionPreview($franchiseId, $periodCode, $entryIds));
+    }
+
+    /** เซลที่ยังหักค่าคอมจากบิลใบนี้ได้ (หน้าต่างแก้บิล) */
+    public function salesDeductions(string $id)
+    {
+        return $this->json(InvoiceService::salesDeductible(V::parseId($id)));
+    }
+
+    /** หักค่าคอมเซลเพิ่มในบิลที่ยังแก้ได้ */
+    public function addSalesDeduction(string $id)
+    {
+        $body = V::parse(self::salesDeductionSchema(), $this->body());
+
+        return $this->json(InvoiceService::addSalesDeduction(V::parseId($id), $body, $this->user()), 201);
     }
 
     public function void(string $id)

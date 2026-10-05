@@ -103,8 +103,11 @@ export async function myCommissionsView() {
         { label: 'ยอดรวม', num: true, sortValue: (r) => r.totalAmount, render: (r) => el('strong', {}, money(r.totalAmount)) },
         {
           label: 'สถานะ',
+          // หักจากบิลร้าน = ร้านเป็นคนจ่ายให้เอง ไม่ใช่เงินโอนจากทางเรา — เซลต้องรู้ว่าไปตามเงินกับใคร
           render: (r) => el('div', {}, commBadge(r.status, { forAgent: true }),
-            r.status === 'PAID' && r.paidAt ? el('div', { class: 'sub-line' }, `ได้รับ ${dateTh(r.paidAt)}`) : ''),
+            r.status === 'PAID' && r.settledByInvoice
+              ? el('div', { class: 'sub-line' }, `ร้าน ${r.settledByInvoice.franchiseUsername} เป็นผู้จ่าย (หักจากบิล ${r.settledByInvoice.invoiceNo})`)
+              : r.status === 'PAID' && r.paidAt ? el('div', { class: 'sub-line' }, `ได้รับ ${dateTh(r.paidAt)}`) : ''),
         },
         {
           label: '',

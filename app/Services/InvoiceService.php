@@ -34,7 +34,9 @@ final class InvoiceService
                (SELECT COUNT(*) FROM invoice_attachments ia
                  WHERE ia.invoice_id = i.id AND ia.removed_at IS NULL) AS attachment_count,
                (SELECT COUNT(*) FROM invoice_adjustments iadj
-                 WHERE iadj.invoice_id = i.id) AS adjustment_count
+                 WHERE iadj.invoice_id = i.id AND iadj.sales_commission_id IS NULL) AS adjustment_count,
+               (SELECT COALESCE(SUM(sadj.amount_satang), 0) FROM invoice_adjustments sadj
+                 WHERE sadj.invoice_id = i.id AND sadj.sales_commission_id IS NOT NULL) AS sales_deduction_satang
           FROM invoices i
           JOIN franchises f       ON f.id = i.franchise_id
           JOIN billing_periods bp ON bp.id = i.period_id
@@ -84,7 +86,13 @@ final class InvoiceService
          */
         $base = (int) $inv['commission_total_satang'] + $charge;
         if ($base >= 0 && $discount > $base) {
-            throw ApiException::badRequest('ส่วนลดรวมมากกว่ายอดที่ต้องจ่าย — ปรับส่วนลดลงก่อน');
+            // ค่าคอมเซลที่หักในบิล (R25) นับเป็นส่วนลดด้วย — บอกให้รู้ว่าตัวไหนทำให้เกิน ไม่งั้นคนกดไปไล่หาส่วนลดที่ไม่ได้ใส่
+            $salesDeduction = Db::int('SELECT COALESCE(SUM(amount_satang), 0) FROM invoice_adjustments WHERE invoice_id = ? AND sales_commission_id IS NOT NULL', [$invoiceId]);
+
+            throw ApiException::badRequest($salesDeduction > 0
+                ? 'ค่าคอมเซลที่หัก (' . Money::fmtSatang($salesDeduction) . ' บาท) รวมกับส่วนลดอื่นแล้วมากกว่ายอดที่ร้านต้องจ่าย ('
+                    . Money::fmtSatang($base) . ' บาท) — หักค่าคอมเซลจากบิลนี้ไม่ได้ ให้ทำบิลค่าคอมจ่ายเซลตามปกติแทน'
+                : 'ส่วนลดรวมมากกว่ายอดที่ต้องจ่าย — ปรับส่วนลดลงก่อน');
         }
         if ($base < 0 && $discount > 0) {
             throw ApiException::badRequest(
@@ -314,12 +322,14 @@ final class InvoiceService
         $invoiceNo   = self::nextInvoiceNo($period['code'], $franchise['username']);
         $adjustments = $input['adjustments'] ?? [];
         $attachments = InvoiceAttachmentService::prepare(null, $input['attachments'] ?? []);
+        $deductions  = self::uniqueSalesDeductions($input['salesDeductions'] ?? []);
 
         /*
-         * ออกบิลร้านไม่สร้างค่าคอมเซลแล้ว — ส่วนกลางทำ "บิลค่าคอม" ให้เซลทีหลัง โดยติ๊กเลือกบรรทัดจากบิลร้านที่ออกไปแล้ว
+         * ออกบิลร้านไม่สร้างค่าคอมเซลเอง — ส่วนกลางทำ "บิลค่าคอม" ให้เซลทีหลัง โดยติ๊กเลือกบรรทัดจากบิลร้านที่ออกไปแล้ว
          * (SalesAgentService::createCommissionBill) เจ้าของระบบ: แต่ละรอบจ่ายค่าคอมไม่เหมือนกัน
+         * ยกเว้นเซลที่ติ๊ก "หักค่าคอมเซล" มา (salesDeductions · R25): ร้านเป็นคนจ่ายเซลเอง จึงหักออกจากบิลนี้และทำบิลค่าคอมสถานะจ่ายแล้วให้เลย
          */
-        return Db::tx(static function () use ($invoiceNo, $franchise, $period, $grossTotal, $commissionTotal, $due, $input, $bankAccount, $currency, $user, $entries, $adjustments, $plan, $attachments) {
+        return Db::tx(static function () use ($invoiceNo, $franchise, $period, $grossTotal, $commissionTotal, $due, $input, $bankAccount, $currency, $user, $entries, $adjustments, $plan, $attachments, $deductions) {
             $invoiceId = Db::insert(
                 'INSERT INTO invoices
                    (invoice_no, franchise_id, period_id, gross_total_satang, commission_total_satang,
@@ -345,6 +355,12 @@ final class InvoiceService
             foreach ($adjustments as $adj) {
                 self::insertAdjustment($invoiceId, $commissionTotal, $adj, $user);
             }
+            // หลังรายการขึ้นบิลแล้ว — ค่าคอมที่หักคิดจากรายการของบิลใบนี้จริง ๆ (ตัวเดียวกับที่บิลค่าคอมล็อกไว้)
+            $deducted = self::applySalesDeductions(
+                ['id' => $invoiceId, 'invoice_no' => $invoiceNo, 'franchise_id' => (int) $franchise['id'], 'period_id' => (int) $period['id']],
+                $deductions,
+                $user,
+            );
             self::recalc($invoiceId, $user);
 
             InvoiceAttachmentService::insert($invoiceId, $attachments, (int) $user['id']);
@@ -355,6 +371,7 @@ final class InvoiceService
                 'adjustments' => count($adjustments),
                 'lineModes'   => $plan['audit'],
                 'attachments' => ['count' => count($attachments), 'urls' => array_column($attachments, 'url')],
+                ...($deducted !== [] ? ['salesDeductions' => $deducted] : []),
             ]);
 
             return self::get($invoiceId, $user);
@@ -877,13 +894,120 @@ final class InvoiceService
         self::assertEditable(self::row($invoiceId));
 
         return Db::tx(static function () use ($invoiceId, $adjustmentId, $user) {
-            self::lockEditable($invoiceId);
+            $inv = self::lockEditable($invoiceId);
             // อ่านหลังล็อก — อีกจอเพิ่งลบแถวนี้ไปแล้ว = 404 ไม่ใช่คิดยอดใหม่ซ้ำ
             $row = Db::one('SELECT * FROM invoice_adjustments WHERE id = ? AND invoice_id = ?', [$adjustmentId, $invoiceId])
                 ?? throw ApiException::notFound('ไม่พบรายการในใบเรียกเก็บนี้');
             Db::exec('DELETE FROM invoice_adjustments WHERE id = ?', [$adjustmentId]);
+            // บรรทัด "หักค่าคอมเซล": ถอนการหัก = บิลค่าคอมที่เกิดจากการหักถูกยกเลิก รายการกลับไปรอทำบิลค่าคอม/หักใหม่
+            $salesCommissionId = $row['sales_commission_id'] === null ? null : (int) $row['sales_commission_id'];
+            if ($salesCommissionId !== null) {
+                SalesAgentService::unsettleFromInvoice($salesCommissionId, "ถอนการหักค่าคอมจากบิลร้าน {$inv['invoice_no']}", (int) $user['id']);
+            }
             self::recalc($invoiceId, $user);
-            Audit::write((int) $user['id'], 'invoice.adjustment.remove', 'invoice', $invoiceId, ['label' => $row['label']]);
+            Audit::write(
+                (int) $user['id'],
+                $salesCommissionId === null ? 'invoice.adjustment.remove' : 'invoice.sales_deduction.remove',
+                'invoice',
+                $invoiceId,
+                ['label' => $row['label'], ...($salesCommissionId === null ? [] : ['amount' => Money::toBaht($row['amount_satang']), 'salesCommissionId' => $salesCommissionId])],
+            );
+
+            return self::get($invoiceId, $user);
+        });
+    }
+
+    /* ── หักค่าคอมเซลจากบิลร้าน (R25) ─────────────────────────────── */
+
+    /** รายการเซลที่ติ๊กมา — เซลคนเดียวซ้ำสองครั้งไม่ได้ (หักทีเดียวทั้งคนอยู่แล้ว) */
+    private static function uniqueSalesDeductions(array $deductions): array
+    {
+        $seen = [];
+        foreach ($deductions as $d) {
+            $agentId = (int) $d['salesAgentId'];
+            if (isset($seen[$agentId])) {
+                throw ApiException::badRequest('หักค่าคอมเซล: เซลคนเดียวกันถูกเลือกซ้ำ — หนึ่งคนหักได้ครั้งเดียวต่อบิล');
+            }
+            $seen[$agentId] = true;
+        }
+
+        return $deductions;
+    }
+
+    /**
+     * หักค่าคอมของเซลที่เลือกออกจากบิลร้าน — เรียกในทรานแซกชันหลังสร้าง/ล็อกบิลแล้ว และก่อน recalc
+     * ต่อเซลหนึ่งคน: SalesAgentService ทำบิลค่าคอมสถานะจ่ายแล้วจากทุกรายการของเซลคนนั้นในบิลนี้
+     * แล้วเพิ่มบรรทัดส่วนลด "หักค่าคอมเซล" ที่ผูกกับบิลค่าคอมใบนั้น (sales_commission_id) — ยอดสองฝั่งมาจากตัวเลขเดียวกันเสมอ
+     * ยอดรวมของบิล (รวมด่าน "ส่วนลดเกินยอด") ให้ recalc ของคนเรียกคิดทางเดิม
+     *
+     * @param array{id: int, invoice_no: string, franchise_id: int, period_id: int} $inv
+     *
+     * @return list<array> สิ่งที่หักไป (ลงประวัติ)
+     */
+    private static function applySalesDeductions(array $inv, array $deductions, array $user): array
+    {
+        $done = [];
+        foreach ($deductions as $d) {
+            $expected = ($d['amount'] ?? null) === null ? null : Money::toSatang($d['amount'], 'salesDeductions.amount');
+            $settled  = SalesAgentService::settleFromInvoice($inv, (int) $d['salesAgentId'], $expected, $user);
+            $agent    = $settled['agent'];
+            Db::insert(
+                "INSERT INTO invoice_adjustments
+                   (invoice_id, charge_item_id, sales_commission_id, kind, label, pct_bp, amount_satang, note, created_by_user_id, created_at)
+                 VALUES (?, NULL, ?, 'DISCOUNT', ?, NULL, ?, ?, ?, UTC_TIMESTAMP())",
+                [
+                    $inv['id'], $settled['commissionId'], "หักค่าคอมเซล {$agent['username']}", $settled['total_satang'],
+                    "ร้านจ่ายค่าคอมให้เซล {$agent['name']} เอง · บิลค่าคอม {$settled['billNo']}", $user['id'],
+                ],
+            );
+            $done[] = ['agent' => $agent['username'], 'billNo' => $settled['billNo'], 'amount' => Money::toBaht($settled['total_satang'])];
+        }
+
+        return $done;
+    }
+
+    /** เซลที่ยังหักค่าคอมจากบิลใบนี้ได้ + ยอดของแต่ละคน — หน้าต่างแก้บิลของส่วนกลาง (คนที่หักไปแล้วไม่โผล่ รายการถูกล็อกแล้ว) */
+    public static function salesDeductible(int $invoiceId): array
+    {
+        $inv = self::row($invoiceId);
+        if ($inv['status'] === 'VOID') {
+            return ['items' => []];
+        }
+        $entryIds = array_column(Db::all('SELECT id FROM sales_entries WHERE invoice_id = ?', [$invoiceId]), 'id');
+
+        return ['items' => SalesAgentService::serializeDealCommissions(
+            SalesAgentService::dealCommissions((int) $inv['franchise_id'], (int) $inv['period_id'], $entryIds),
+        )];
+    }
+
+    /**
+     * พรีวิวก่อนออกบิล: รายการยอดขายที่ยังไม่ขึ้นบิลของร้าน/รอบนี้ (ทั้งหมด หรือเฉพาะที่ติ๊กไว้) มีเซลคนไหนได้ค่าคอมเท่าไร
+     * ตัวเลขจากตัวคิดเดียวกับตอนหักจริง — หน้าต่างออกบิลส่งยอดที่เห็นกลับมาให้เทียบอีกครั้งตอนกดออกบิล
+     */
+    public static function salesDeductionPreview(int $franchiseId, string $periodCode, ?array $entryIds): array
+    {
+        $period = Db::one('SELECT id FROM billing_periods WHERE code = ?', [Period::fromCode($periodCode)['code']]);
+        if ($period === null) {
+            return ['items' => []];
+        }
+        $pending = array_map('intval', array_column(self::pendingEntries($franchiseId, (int) $period['id']), 'id'));
+        $wanted  = $entryIds === null ? $pending : array_values(array_intersect($pending, array_map('intval', $entryIds)));
+
+        return ['items' => SalesAgentService::serializeDealCommissions(
+            SalesAgentService::dealCommissions($franchiseId, (int) $period['id'], $wanted),
+        )];
+    }
+
+    /** หักค่าคอมเซลเพิ่มในบิลที่ออกไปแล้วและยังแก้ได้ (ลืมติ๊กตอนออก / เพิ่มรายการเข้าบิลทีหลัง) */
+    public static function addSalesDeduction(int $invoiceId, array $input, array $user): array
+    {
+        self::assertEditable(self::row($invoiceId));
+
+        return Db::tx(static function () use ($invoiceId, $input, $user) {
+            $inv  = self::lockEditable($invoiceId);
+            $done = self::applySalesDeductions($inv, [$input], $user);
+            self::recalc($invoiceId, $user);
+            Audit::write((int) $user['id'], 'invoice.sales_deduction.add', 'invoice', $invoiceId, $done[0]);
 
             return self::get($invoiceId, $user);
         });
@@ -1158,12 +1282,16 @@ final class InvoiceService
     public static function serializeAdjustment(array $row): array
     {
         $amount = (int) $row['amount_satang'];
+        // บรรทัด "หักค่าคอมเซล" (R25) — เป็นส่วนลดในทางคิดเงิน แต่ลบแล้วบิลค่าคอมของเซลถูกยกเลิกตาม หน้าเว็บจึงต้องแยกออก
+        $salesCommissionId = ($row['sales_commission_id'] ?? null) === null ? null : (int) $row['sales_commission_id'];
 
         return [
             'id'           => (int) $row['id'],
             'chargeItemId' => $row['charge_item_id'] === null ? null : (int) $row['charge_item_id'],
+            'salesCommissionId' => $salesCommissionId,
+            'isSalesDeduction'  => $salesCommissionId !== null,
             'kind'         => $row['kind'],
-            'kindLabel'    => $row['kind'] === 'DISCOUNT' ? 'ส่วนลด' : 'ค่าใช้จ่าย',
+            'kindLabel'    => $salesCommissionId !== null ? 'หักค่าคอมเซล' : ($row['kind'] === 'DISCOUNT' ? 'ส่วนลด' : 'ค่าใช้จ่าย'),
             'label'        => $row['label'],
             'pct'          => $row['pct_bp'] === null ? null : Money::bpToPct($row['pct_bp']),
             'amount'       => Money::toBaht($amount),
@@ -1229,6 +1357,11 @@ final class InvoiceService
             'chargeTotal'       => Money::toBaht($row['charge_total_satang']),
             'discountTotal'     => Money::toBaht($row['discount_total_satang']),
             /*
+             * ค่าคอมเซลที่หักในบิลนี้ (R25) — เป็น "ส่วนหนึ่งของ discountTotal" ไม่ใช่ยอดเพิ่ม
+             * แยกมาให้หน้าของร้านเขียนได้ถูก: ก้อนนี้ร้านต้องจ่ายให้เซลเอง ไม่ใช่ส่วนลดจากทางเรา และไม่ใช่เงินที่ร้านเก็บไว้
+             */
+            'salesDeductionTotal' => Money::toBaht((int) ($row['sales_deduction_satang'] ?? 0)),
+            /*
              * ยอดยกมาจากรอบก่อนที่ถูกหักออกจากใบนี้ (เราเคยติดค้างร้านไว้)
              * แยกจาก discountTotal เพราะคนละความหมาย — ส่วนลดคือเราลดให้
              * ส่วนยอดยกมาคือเงินของร้านที่ค้างอยู่กับเรามาตั้งแต่รอบก่อน
@@ -1255,6 +1388,7 @@ final class InvoiceService
             // จำนวนรูปประกอบ — รายการบิลโชว์ 📎 N ได้โดยไม่ต้องเซ็นลิงก์ทุกรูปของทุกใบ
             'attachmentCount' => (int) ($row['attachment_count'] ?? 0),
             // จำนวนค่าใช้จ่าย/ส่วนลดในบิล — ตอนออกบิลใหม่ใช้หาบิลเก่าที่มีรายการให้ดึงมาอ้างอิง (นับตามแถว รายการ 0 บาทก็นับ)
+            // ไม่นับบรรทัด "หักค่าคอมเซล" — ดึงไปใช้กับบิลอื่นไม่ได้ (ผูกกับบิลค่าคอมของบิลใบนั้น)
             'adjustmentCount' => (int) ($row['adjustment_count'] ?? 0),
             /*
              * บัญชีที่บิลชี้อยู่ตรงกับที่ส่งเข้า Telegram ของร้านล่าสุดไหม (ไม่มีข้อมูลบัญชีในนี้ ร้านเห็นได้)

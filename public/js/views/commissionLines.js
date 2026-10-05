@@ -144,6 +144,17 @@ export function commissionDetail(r, { forAgent = false } = {}) {
         el('strong', {}, `ยกเลิกแล้ว${r.voidedAt ? ` · ${dateTh(r.voidedAt)}` : ''}`),
         r.voidReason ? el('div', {}, r.voidReason) : '')
       : '',
+    /*
+     * หักจากบิลร้าน (R25) — ร้านเป็นคนจ่ายค่าคอมก้อนนี้ให้เซลเอง ส่วนกลางไม่ได้โอน
+     * เซลต้องรู้ว่าเงินมาจากใคร · ส่วนกลางต้องรู้ว่ายกเลิกที่นี่ไม่ได้ (ต้องถอนจากฝั่งบิลร้าน)
+     */
+    r.settledByInvoice && r.status !== 'VOID'
+      ? el('div', { class: 'notice-box' },
+        el('strong', {}, `หักจากบิลร้าน ${r.settledByInvoice.invoiceNo} — ร้าน ${r.settledByInvoice.franchiseUsername} เป็นผู้จ่ายค่าคอมก้อนนี้`),
+        el('div', { class: 'sub-line mt-4' }, forAgent
+          ? 'ยอดนี้ถูกหักออกจากบิลของร้านแล้ว ร้านเป็นคนจ่ายให้คุณโดยตรง — ทางเราไม่ได้โอนซ้ำ'
+          : 'ยอดนี้ถูกหักออกจากยอดที่ร้านต้องจ่ายแล้ว ไม่ต้องโอนให้เซลอีก · จะยกเลิกให้ไปที่บิลร้านใบนั้น (แก้ไขบิล → "ถอนการหัก" หรือยกเลิกบิลร้าน)'))
+      : '',
     r.note ? el('div', { class: 'notice-box' }, `หมายเหตุ: ${r.note}`) : '',
 
     bill ? commissionLinesTable(r) : el('div', {},

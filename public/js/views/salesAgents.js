@@ -1404,8 +1404,11 @@ function linksTab(items, { commissionModal }) {
 /* ── บิลค่าคอม ─────────────────────────────────────────────── */
 
 /** ช่องสถานะของบิลค่าคอม — ป้าย + วันที่จ่าย / เหตุผลที่ยกเลิก (แท็บบิลค่าคอมและรายละเอียดเซลใช้ตัวเดียวกัน) */
+// ก้อนที่หักจากบิลร้าน (R25): ร้านเป็นคนจ่ายเซลเอง — บอกไว้ใต้ป้าย "จ่ายแล้ว" ไม่งั้นดูเหมือนส่วนกลางโอนไปแล้ว
 const commStatusCell = (r) => el('div', {}, commBadge(r.status),
-  r.status === 'PAID' && r.paidAt ? el('div', { class: 'sub-line' }, `จ่าย ${dateTh(r.paidAt)}`) : '',
+  r.status === 'PAID' && r.settledByInvoice
+    ? el('div', { class: 'sub-line' }, `หักจากบิลร้าน ${r.settledByInvoice.invoiceNo}`)
+    : r.status === 'PAID' && r.paidAt ? el('div', { class: 'sub-line' }, `จ่าย ${dateTh(r.paidAt)}`) : '',
   r.status === 'VOID' && r.voidReason ? el('div', { class: 'sub-line' }, r.voidReason) : '');
 
 /**

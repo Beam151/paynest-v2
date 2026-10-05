@@ -874,10 +874,9 @@ final class SalesAgentService
         $note       = trim((string) ($input['note'] ?? ''));
         $note       = $note === '' ? null : $note;
         $invoiceIds = array_values(array_unique(array_filter(array_column($lines, 'invoice_id'))));
-        $countOf    = static fn (string $kind) => count(array_filter($lines, static fn ($l) => $l['kind'] === $kind));
 
         try {
-            $id = Db::tx(static function () use ($agent, $lines, $header, $note, $invoiceIds, $user, $countOf) {
+            $id = Db::tx(static function () use ($agent, $lines, $header, $note, $invoiceIds, $user) {
                 // ล็อกเซลไว้ — เลขบิลค่าคอมนับต่อวันต่อเซล สองจอของเซลคนเดียวกันต้องไม่ได้เลขเดียวกัน
                 Db::one('SELECT id FROM sales_agents WHERE id = ? FOR UPDATE', [$agent['id']]);
                 /*
@@ -891,37 +890,8 @@ final class SalesAgentService
                         }
                     }
                 }
-                $billNo = self::nextBillNo($agent['username']);
-                $id     = Db::insert(
-                    "INSERT INTO sales_commissions
-                       (sales_agent_id, franchise_id, period_id, invoice_id, kind, bill_no, label, basis,
-                        base_amount_satang, commission_pct_bp, pct_amount_satang, fixed_satang, total_satang,
-                        status, note, created_by_user_id, created_at, updated_at)
-                     VALUES (?, NULL, NULL, NULL, 'BILL', ?, NULL, 'BILL', ?, NULL, ?, ?, ?, 'PENDING', ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP())",
-                    [$agent['id'], $billNo, $header['base_amount_satang'], $header['pct_amount_satang'], $header['fixed_satang'], $header['total_satang'], $note, $user['id']],
-                );
-                foreach ($lines as $l) {
-                    Db::insert(
-                        'INSERT INTO sales_commission_lines
-                           (commission_id, kind, sales_entry_id, invoice_id, franchise_id, period_id, product_id, link_id, label, mode,
-                            base_amount_satang, pct_bp, amount_satang, active_entry_id, active_fixed_key, created_at)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())',
-                        [
-                            $id, $l['kind'], $l['sales_entry_id'], $l['invoice_id'], $l['franchise_id'], $l['period_id'], $l['product_id'], $l['link_id'],
-                            $l['label'], $l['mode'], $l['base_amount_satang'], $l['pct_bp'], $l['amount_satang'], $l['active_entry_id'], $l['active_fixed_key'],
-                        ],
-                    );
-                }
-                Audit::write((int) $user['id'], 'sales_commission.bill_create', 'sales_commission', $id, [
-                    'billNo' => $billNo,
-                    'agent'  => $agent['username'],
-                    'items'  => $countOf('ITEM'),
-                    'fixed'  => $countOf('FIXED'),
-                    'others' => $countOf('OTHER'),
-                    'total'  => Money::toBaht($header['total_satang']),
-                ]);
 
-                return $id;
+                return self::insertBill($agent, $lines, $header, $note, (int) $user['id'])['id'];
             });
         } catch (Throwable $e) {
             if (self::isDuplicateKey($e)) {
@@ -932,6 +902,296 @@ final class SalesAgentService
         }
 
         return self::getCommission($id, $user);
+    }
+
+    /**
+     * เขียนหัวบิลค่าคอม + รายการ + ประวัติ — เรียกในทรานแซกชันที่ล็อกแถวเซลแล้วเท่านั้น (เลขบิลนับต่อวันต่อเซล)
+     * $settledBy = เลขบิลร้านที่หักค่าคอมก้อนนี้ไป (settleFromInvoice): ร้านเป็นคนจ่ายเซลเอง บิลจึงเกิดมาในสถานะจ่ายแล้ว
+     * UNIQUE active_entry_id / active_fixed_key ชน = มีบิลค่าคอมอื่นถือรายการนั้นอยู่ — คนเรียกแปลเป็น 409
+     *
+     * @return array{id: int, billNo: string}
+     */
+    private static function insertBill(array $agent, array $lines, array $header, ?string $note, int $actorUserId, ?string $settledBy = null): array
+    {
+        $billNo = self::nextBillNo($agent['username']);
+        $paid   = $settledBy !== null;
+        $id     = Db::insert(
+            "INSERT INTO sales_commissions
+               (sales_agent_id, franchise_id, period_id, invoice_id, kind, bill_no, label, basis,
+                base_amount_satang, commission_pct_bp, pct_amount_satang, fixed_satang, total_satang,
+                status, paid_at, note, created_by_user_id, created_at, updated_at)
+             VALUES (?, NULL, NULL, NULL, 'BILL', ?, NULL, 'BILL', ?, NULL, ?, ?, ?, ?, " . ($paid ? 'UTC_TIMESTAMP()' : 'NULL') . ', ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP())',
+            [
+                $agent['id'], $billNo, $header['base_amount_satang'], $header['pct_amount_satang'], $header['fixed_satang'], $header['total_satang'],
+                $paid ? 'PAID' : 'PENDING', $note, $actorUserId,
+            ],
+        );
+        foreach ($lines as $l) {
+            Db::insert(
+                'INSERT INTO sales_commission_lines
+                   (commission_id, kind, sales_entry_id, invoice_id, franchise_id, period_id, product_id, link_id, label, mode,
+                    base_amount_satang, pct_bp, amount_satang, active_entry_id, active_fixed_key, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())',
+                [
+                    $id, $l['kind'], $l['sales_entry_id'], $l['invoice_id'], $l['franchise_id'], $l['period_id'], $l['product_id'], $l['link_id'],
+                    $l['label'], $l['mode'], $l['base_amount_satang'], $l['pct_bp'], $l['amount_satang'], $l['active_entry_id'], $l['active_fixed_key'],
+                ],
+            );
+        }
+        $countOf = static fn (string $kind) => count(array_filter($lines, static fn ($l) => $l['kind'] === $kind));
+        Audit::write($actorUserId, 'sales_commission.bill_create', 'sales_commission', $id, [
+            'billNo' => $billNo,
+            'agent'  => $agent['username'],
+            'items'  => $countOf('ITEM'),
+            'fixed'  => $countOf('FIXED'),
+            'others' => $countOf('OTHER'),
+            'total'  => Money::toBaht($header['total_satang']),
+            ...($paid ? ['settledByInvoice' => $settledBy] : []),
+        ]);
+
+        return ['id' => $id, 'billNo' => $billNo];
+    }
+
+    /* ── หักค่าคอมเซลจากบิลร้าน (R25 · รุ่น 2.7.0) ─────────────────── */
+
+    /**
+     * ค่าคอมตามดีลของเซลแต่ละคน จากบรรทัดยอดขายชุดหนึ่งของร้านเดียวรอบเดียว
+     * ตัวเดียวทั้งตอนพรีวิวในหน้าต่างออกบิล (ยังไม่มีบิล) และตอนหักจริง (settleFromInvoice) — ตัวเลขสองที่จึงตรงกันเสมอ
+     *
+     * เซลของบรรทัด = คนที่ถือดีลของสินค้านั้นอยู่ตอนนี้ (หนึ่งสินค้ามีคนถือได้คนเดียว)
+     *   ดีลที่ปิดแล้วไม่หักให้เอง — ส่วนกลางยังทำบิลค่าคอมของรายการนั้นเองได้ตามเดิม (commissionCandidates)
+     * รายการสินค้า: ยอดขายเต็ม × % ของดีล · ดีลไม่มี % = ไม่มีรายการ · บรรทัดที่อยู่ในบิลค่าคอมที่ยังมีผลแล้ว (locked) ไม่คิดซ้ำ
+     * เหมาต่อรอบ: ค่าเหมาสูงสุดของดีลในชุดนี้ ครั้งเดียวต่อ เซล × ร้าน × รอบ — เคยจ่ายแล้ว (active_fixed_key) ไม่คิดอีก
+     * (ร้าน, รอบ) ที่มีแถวค่าคอมแบบเก่า (DEAL) ของเซลคนนั้น = จ่ายไปแล้วในระบบเดิม ตัดทั้งคน — กติกาเดียวกับ eligibleRows
+     *
+     * @param list<int> $entryIds
+     *
+     * @return array<int, array{agent: array, rows: list<array>, fixed: ?array, total_satang: int}> agentId → …
+     */
+    public static function dealCommissions(int $franchiseId, int $periodId, array $entryIds): array
+    {
+        $entryIds = array_values(array_unique(array_map('intval', $entryIds)));
+        if ($entryIds === []) {
+            return [];
+        }
+        $today = Period::today();
+        $rows  = Db::all(
+            'SELECT se.id AS entry_id, se.product_id, se.gross_amount_satang,
+                    p.sku, p.name AS product_name,
+                    l.id AS link_id, l.commission_pct_bp, l.fixed_satang,
+                    a.id AS agent_id, a.username AS agent_username, a.name AS agent_name,
+                    scl.id AS live_line_id, sc.sales_agent_id AS live_agent_id
+               FROM sales_entries se
+               JOIN products p            ON p.id = se.product_id
+               JOIN product_sales_links l ON l.product_id = se.product_id
+                                         AND l.start_date <= ? AND (l.end_date IS NULL OR l.end_date > ?)
+               JOIN sales_agents a        ON a.id = l.sales_agent_id
+               LEFT JOIN sales_commission_lines scl ON scl.active_entry_id = se.id
+               LEFT JOIN sales_commissions sc       ON sc.id = scl.commission_id
+              WHERE se.id IN ? AND se.franchise_id = ? AND se.period_id = ?
+              ORDER BY a.username, p.sku, se.id, l.start_date DESC, l.id DESC',
+            [$today, $today, $entryIds, $franchiseId, $periodId],
+        );
+        if ($rows === []) {
+            return [];
+        }
+        $legacy = array_flip(array_map('intval', array_column(Db::all(
+            "SELECT DISTINCT sales_agent_id FROM sales_commissions
+              WHERE kind = 'DEAL' AND franchise_id = ? AND period_id = ? AND status <> 'VOID'",
+            [$franchiseId, $periodId],
+        ), 'sales_agent_id')));
+
+        $out  = [];
+        $seen = [];
+        foreach ($rows as $r) {
+            $entryId = (int) $r['entry_id'];
+            $agentId = (int) $r['agent_id'];
+            // ดีลแบบมีวันที่ (API เดิม) ที่ช่วงทับกันผิดปกติ — บรรทัดหนึ่งนับให้เซลคนเดียว (ดีลล่าสุดก่อน)
+            if (isset($seen[$entryId]) || isset($legacy[$agentId])) {
+                continue;
+            }
+            $seen[$entryId] = true;
+            $out[$agentId] ??= [
+                'agent' => ['id' => $agentId, 'username' => $r['agent_username'], 'name' => $r['agent_name']],
+                'rows'  => [],
+                'fixed' => null,
+            ];
+            $pctBp  = $r['commission_pct_bp'] === null ? null : (int) $r['commission_pct_bp'];
+            $locked = $r['live_line_id'] !== null;
+            $out[$agentId]['rows'][] = [
+                'entry_id'            => $entryId,
+                'product_id'          => (int) $r['product_id'],
+                'sku'                 => $r['sku'],
+                'product_name'        => $r['product_name'],
+                'link_id'             => (int) $r['link_id'],
+                'gross_amount_satang' => (int) $r['gross_amount_satang'],
+                'pct_bp'              => $pctBp,
+                // บรรทัดที่ไปอยู่ในบิลค่าคอมของเซลคนอื่นแล้ว ไม่ทำให้เซลคนนี้ได้เหมา (กติกาเดียวกับ candidateSets)
+                'fixed_satang'        => $locked && (int) $r['live_agent_id'] !== $agentId ? 0 : (int) ($r['fixed_satang'] ?? 0),
+                'locked'              => $locked,
+                // ยอดที่จะหักของบรรทัดนี้ — 0 = ไม่มีรายการ (ดีลไม่มี % หรืออยู่ในบิลค่าคอมอื่นแล้ว)
+                'amount_satang'       => ! $locked && $pctBp !== null && $pctBp > 0 ? Money::commissionOf((int) $r['gross_amount_satang'], $pctBp) : 0,
+            ];
+        }
+        if ($out === []) {
+            return [];
+        }
+
+        $keys = [];
+        foreach (array_keys($out) as $agentId) {
+            $keys[$agentId] = self::fixedKey($agentId, $franchiseId, $periodId);
+        }
+        $liveKeys = array_flip(array_column(
+            Db::all('SELECT active_fixed_key FROM sales_commission_lines WHERE active_fixed_key IN ?', [array_values($keys)]),
+            'active_fixed_key',
+        ));
+        foreach ($out as $agentId => &$c) {
+            $best = null;
+            foreach ($c['rows'] as $row) {
+                if ($row['fixed_satang'] > 0 && ($best === null || $row['fixed_satang'] > $best['fixed_satang'])) {
+                    $best = $row;
+                }
+            }
+            if ($best !== null && ! isset($liveKeys[$keys[$agentId]])) {
+                $c['fixed'] = ['key' => $keys[$agentId], 'amount_satang' => $best['fixed_satang'], 'link_id' => $best['link_id']];
+            }
+            $c['total_satang'] = array_sum(array_column($c['rows'], 'amount_satang')) + ($c['fixed']['amount_satang'] ?? 0);
+        }
+        unset($c);
+
+        // เซลที่ไม่มีอะไรให้หักแล้ว (ทุกรายการอยู่ในบิลค่าคอมอื่น · ดีลไม่มี % และเหมาจ่ายไปแล้ว) ไม่ต้องโผล่ให้ติ๊ก
+        return array_filter($out, static fn ($c) => $c['fixed'] !== null || array_filter($c['rows'], static fn ($r) => $r['amount_satang'] !== 0) !== []);
+    }
+
+    /** แบบส่งออก API ของ dealCommissions — ตัวเลือก "หักค่าคอมเซล" ในหน้าต่างออกบิล/แก้บิล (ส่วนกลางเท่านั้น) */
+    public static function serializeDealCommissions(array $byAgent): array
+    {
+        return array_values(array_map(static fn ($c) => [
+            'salesAgentId' => $c['agent']['id'],
+            'username'     => $c['agent']['username'],
+            'name'         => $c['agent']['name'],
+            'items'        => array_values(array_map(static fn ($r) => [
+                'entryId'     => $r['entry_id'],
+                'sku'         => $r['sku'],
+                'productName' => $r['product_name'],
+                'grossAmount' => Money::toBaht($r['gross_amount_satang']),
+                'pct'         => Money::bpToPct($r['pct_bp']),
+                'amount'      => Money::toBaht($r['amount_satang']),
+            ], array_filter($c['rows'], static fn ($r) => $r['amount_satang'] !== 0))),
+            'fixedAmount'  => $c['fixed'] === null ? null : Money::toBaht($c['fixed']['amount_satang']),
+            'total'        => Money::toBaht($c['total_satang']),
+            // ยอดรวมไม่เป็นบวก (รอบคืนของ) หักจากบิลร้านไม่ได้ — หน้าเว็บโชว์เหตุผลแทนช่องติ๊ก
+            'deductible'   => $c['total_satang'] > 0,
+        ], $byAgent));
+    }
+
+    /**
+     * หักค่าคอมของเซลคนหนึ่งจากบิลร้าน: ทำบิลค่าคอมจาก "ทุกรายการของเซลคนนั้นในบิลใบนี้" ในสถานะจ่ายแล้ว
+     * เจ้าของระบบ (5 ต.ค. 69): ร้านเป็นคนจ่ายค่าคอมให้เซลเอง จึงหักออกจากบิลร้านได้เลย — ส่วนกลางไม่ต้องจ่ายก้อนนี้อีก
+     *
+     * เรียกในทรานแซกชันของ InvoiceService ที่ล็อก/เพิ่งสร้างบิลร้านแล้วเท่านั้น (ยกเลิกบิลร้านล็อกแถวเดียวกัน สองทางจึงไม่สวนกัน)
+     * $expectedSatang = ยอดที่หน้าจอโชว์ตอนติ๊ก — ดีลถูกแก้ระหว่างนั้นแล้วยอดไม่ตรง = 409 ไม่หักด้วยตัวเลขที่คนกดไม่เคยเห็น
+     *
+     * @return array{commissionId: int, billNo: string, total_satang: int, agent: array}
+     */
+    public static function settleFromInvoice(array $invoice, int $agentId, ?int $expectedSatang, array $user): array
+    {
+        $agent = self::agentRow($agentId);
+        // ล็อกเซลไว้ — เลขบิลค่าคอมนับต่อวันต่อเซล (แบบเดียวกับ createCommissionBill)
+        Db::one('SELECT id FROM sales_agents WHERE id = ? FOR UPDATE', [$agent['id']]);
+        $invoiceId   = (int) $invoice['id'];
+        $franchiseId = (int) $invoice['franchise_id'];
+        $periodId    = (int) $invoice['period_id'];
+        $entryIds    = array_column(Db::all('SELECT id FROM sales_entries WHERE invoice_id = ?', [$invoiceId]), 'id');
+        $c           = self::dealCommissions($franchiseId, $periodId, $entryIds)[$agentId]
+            ?? throw ApiException::badRequest(
+                "เซล {$agent['username']} ไม่มีค่าคอมจากบิล {$invoice['invoice_no']} ให้หัก — ไม่ได้ถือดีลของสินค้าในบิลนี้อยู่ หรือรายการถูกทำบิลค่าคอมไปแล้ว",
+            );
+        $total = (int) $c['total_satang'];
+        if ($total <= 0) {
+            throw ApiException::badRequest("ค่าคอมของเซล {$agent['username']} จากบิลนี้รวมแล้วไม่เป็นบวก (" . Money::fmtSatang($total) . ' บาท) — หักจากบิลร้านไม่ได้');
+        }
+        if ($expectedSatang !== null && $expectedSatang !== $total) {
+            throw ApiException::conflict(
+                "ค่าคอมของเซล {$agent['username']} จากบิลนี้คือ " . Money::fmtSatang($total) . ' บาท ไม่ตรงกับที่หน้าจอแสดง ('
+                . Money::fmtSatang($expectedSatang) . ' บาท) — ดีลหรือรายการอาจเพิ่งเปลี่ยน ตรวจตัวเลขใหม่แล้วกดอีกครั้ง',
+            );
+        }
+
+        $lines = [];
+        foreach ($c['rows'] as $r) {
+            if ($r['amount_satang'] === 0) {
+                continue;
+            }
+            $lines[] = [
+                'kind'               => 'ITEM',
+                'sales_entry_id'     => $r['entry_id'],
+                'invoice_id'         => $invoiceId,
+                'franchise_id'       => $franchiseId,
+                'period_id'          => $periodId,
+                'product_id'         => $r['product_id'],
+                'link_id'            => $r['link_id'],
+                'label'              => null,
+                'mode'               => 'PCT',
+                'base_amount_satang' => $r['gross_amount_satang'],
+                'pct_bp'             => $r['pct_bp'],
+                'amount_satang'      => $r['amount_satang'],
+                'active_entry_id'    => $r['entry_id'],
+                'active_fixed_key'   => null,
+            ];
+        }
+        if ($c['fixed'] !== null) {
+            $lines[] = [
+                'kind'               => 'FIXED',
+                'sales_entry_id'     => null,
+                'invoice_id'         => $invoiceId,
+                'franchise_id'       => $franchiseId,
+                'period_id'          => $periodId,
+                'product_id'         => null,
+                'link_id'            => $c['fixed']['link_id'],
+                'label'              => null,
+                'mode'               => null,
+                'base_amount_satang' => 0,
+                'pct_bp'             => null,
+                'amount_satang'      => $c['fixed']['amount_satang'],
+                'active_entry_id'    => null,
+                'active_fixed_key'   => $c['fixed']['key'],
+            ];
+        }
+
+        try {
+            // ไม่ใส่หมายเหตุ — "หักจากบิลร้านใบไหน" อ่านจากลิงก์ของบรรทัดในบิลร้าน (settledByInvoice) ที่เดียว ไม่ให้มีข้อความซ้ำที่อาจไม่ตรงกัน
+            $bill = self::insertBill($agent, $lines, self::headerOf($lines), null, (int) $user['id'], $invoice['invoice_no']);
+        } catch (Throwable $e) {
+            if (self::isDuplicateKey($e)) {
+                throw ApiException::conflict("รายการของเซล {$agent['username']} ในบิลนี้เพิ่งถูกทำบิลค่าคอมไปแล้ว — โหลดหน้าใหม่แล้วลองอีกครั้ง");
+            }
+
+            throw $e;
+        }
+
+        return ['commissionId' => $bill['id'], 'billNo' => $bill['billNo'], 'total_satang' => $total, 'agent' => $c['agent']];
+    }
+
+    /**
+     * ถอนการหักค่าคอมจากบิลร้าน (ลบบรรทัด "หักค่าคอมเซล" / ยกเลิกบิลร้าน) — บิลค่าคอมที่เกิดจากการหักถูกยกเลิก
+     * รายการกลับไปรอทำบิลค่าคอม/หักใหม่ได้ · ต่างจากบิลค่าคอมที่ส่วนกลางจ่ายเอง (จ่ายแล้วยกเลิกไม่ได้): ก้อนนี้ "จ่าย" ด้วยการหักในบิลร้าน
+     * เมื่อการหักไม่มีแล้ว ก็ไม่มีการจ่ายเกิดขึ้น · เรียกในทรานแซกชันที่ล็อกบิลร้านแล้วเท่านั้น
+     */
+    public static function unsettleFromInvoice(int $commissionId, string $reason, int $actorUserId): void
+    {
+        $row = Db::one('SELECT * FROM sales_commissions WHERE id = ? FOR UPDATE', [$commissionId]);
+        if ($row === null || $row['status'] === 'VOID') {
+            return;
+        }
+        self::markVoid($commissionId, $reason);
+        Audit::write($actorUserId, 'sales_commission.void', 'sales_commission', $commissionId, [
+            'billNo' => $row['bill_no'],
+            'kind'   => $row['kind'],
+            'reason' => $reason,
+            'total'  => Money::toBaht($row['total_satang']),
+            'auto'   => true,
+        ]);
     }
 
     /**
@@ -986,7 +1246,14 @@ final class SalesAgentService
         Db::tx(static function () use ($id, $reason, $user) {
             $row = Db::one('SELECT * FROM sales_commissions WHERE id = ? FOR UPDATE', [$id]) ?? throw ApiException::notFound('ไม่พบรายการค่าคอม');
             if ($row['status'] === 'PAID') {
-                throw ApiException::conflict('จ่ายแล้วยกเลิกไม่ได้ — ถ้าจ่ายเกิน ให้ใส่ค่าคอมอื่น ๆ ติดลบในบิลถัดไป');
+                // ก้อนที่หักจากบิลร้าน: ยกเลิกที่นี่ไม่ได้ ไม่งั้นบิลร้านยังหักอยู่แต่เซลไม่ได้อะไร — ต้องถอนจากฝั่งบิลร้าน
+                $shopBill = Db::val(
+                    'SELECT i.invoice_no FROM invoice_adjustments ia JOIN invoices i ON i.id = ia.invoice_id WHERE ia.sales_commission_id = ?',
+                    [$id],
+                );
+                throw ApiException::conflict($shopBill !== null
+                    ? "บิลค่าคอมนี้หักจากบิลร้าน {$shopBill} (ร้านเป็นผู้จ่าย) — ถ้าจะยกเลิก ให้ลบรายการ \"หักค่าคอมเซล\" ในบิลร้านใบนั้น (หรือยกเลิกบิลร้าน)"
+                    : 'จ่ายแล้วยกเลิกไม่ได้ — ถ้าจ่ายเกิน ให้ใส่ค่าคอมอื่น ๆ ติดลบในบิลถัดไป');
             }
             if ($row['status'] === 'VOID') {
                 throw ApiException::conflict('รายการนี้ถูกยกเลิกไปแล้ว');
@@ -1028,6 +1295,12 @@ final class SalesAgentService
     {
         self::voidCommissionsForInvoice($invoiceId, $actorUserId);
 
+        $invoiceNo = (string) Db::val('SELECT invoice_no FROM invoices WHERE id = ?', [$invoiceId]);
+        // ค่าคอมที่ "จ่าย" ด้วยการหักในบิลใบนี้ — บิลถูกยกเลิก การหักก็ไม่มีแล้ว ยกเลิกทั้งใบ (แม้สถานะจ่ายแล้ว) รายการกลับไปรอใหม่
+        foreach (Db::all('SELECT sales_commission_id FROM invoice_adjustments WHERE invoice_id = ? AND sales_commission_id IS NOT NULL ORDER BY id', [$invoiceId]) as $adj) {
+            self::unsettleFromInvoice((int) $adj['sales_commission_id'], "บิลร้าน {$invoiceNo} ถูกยกเลิก — ค่าคอมที่หักในบิลนี้จึงไม่ได้จ่าย", $actorUserId);
+        }
+
         $billIds = array_map('intval', array_column(
             Db::all('SELECT DISTINCT commission_id FROM sales_commission_lines WHERE invoice_id = ?', [$invoiceId]),
             'commission_id',
@@ -1035,7 +1308,6 @@ final class SalesAgentService
         if ($billIds === []) {
             return;
         }
-        $invoiceNo = (string) Db::val('SELECT invoice_no FROM invoices WHERE id = ?', [$invoiceId]);
         foreach (Db::all("SELECT * FROM sales_commissions WHERE id IN ? AND kind = 'BILL' AND status = 'PENDING' ORDER BY id FOR UPDATE", [$billIds]) as $bill) {
             $billId  = (int) $bill['id'];
             $removed = Db::exec("DELETE FROM sales_commission_lines WHERE commission_id = ? AND invoice_id = ? AND kind IN ('ITEM', 'FIXED')", [$billId, $invoiceId]);
@@ -1185,12 +1457,16 @@ final class SalesAgentService
                f.username AS franchise_username,
                bp.code AS period_code, bp.start_date AS period_start, bp.end_date AS period_end,
                bp.usd_rate_satang AS period_usd_rate_satang, ' . self::COMMISSION_RATE_OF_DAY . ' AS made_usd_rate_satang,
-               i.invoice_no, i.status AS invoice_status
+               i.invoice_no, i.status AS invoice_status,
+               si.id AS settled_invoice_id, si.invoice_no AS settled_invoice_no, sf.username AS settled_franchise_username
           FROM sales_commissions c
           JOIN sales_agents a          ON a.id = c.sales_agent_id
           LEFT JOIN franchises f       ON f.id = c.franchise_id
           LEFT JOIN billing_periods bp ON bp.id = c.period_id
-          LEFT JOIN invoices i         ON i.id = c.invoice_id';
+          LEFT JOIN invoices i         ON i.id = c.invoice_id
+          LEFT JOIN invoice_adjustments sia ON sia.sales_commission_id = c.id
+          LEFT JOIN invoices si             ON si.id = sia.invoice_id
+          LEFT JOIN franchises sf           ON sf.id = si.franchise_id';
 
     /* แถวเก่าเรียงตามรอบ บิลค่าคอมเรียงตามวันที่ทำ (เวลาไทย) — ปนกันได้ในรายการเดียว */
     private const ORDER_COMMISSION = ' ORDER BY COALESCE(bp.start_date, DATE(DATE_ADD(c.created_at, INTERVAL 7 HOUR))) DESC, c.id DESC';
@@ -1430,6 +1706,15 @@ final class SalesAgentService
             'fxRate'        => Usd::rate($row['period_usd_rate_satang'] ?? null, $row['made_usd_rate_satang'] ?? null),
             'status'        => $row['status'],
             'paidAt'        => $row['paid_at'],
+            /*
+             * ค่าคอมก้อนนี้หักจากบิลร้านใบไหน (R25) — ร้านเป็นคนจ่ายเซลเอง ส่วนกลางไม่ได้โอน · null = บิลค่าคอมปกติที่ส่วนกลางจ่าย
+             * ถอนการหักในบิลร้าน/ยกเลิกบิลร้าน = บิลค่าคอมนี้ถูกยกเลิก (ลิงก์ของใบที่ถอนแล้วหายไป · ของบิลร้านที่ยกเลิกยังอยู่เป็นประวัติ)
+             */
+            'settledByInvoice' => ($row['settled_invoice_id'] ?? null) === null ? null : [
+                'id'                => (int) $row['settled_invoice_id'],
+                'invoiceNo'         => $row['settled_invoice_no'],
+                'franchiseUsername' => $row['settled_franchise_username'],
+            ],
             'voidedAt'      => $row['voided_at'] ?? null,
             'voidReason'    => $row['void_reason'] ?? null,
             'note'          => $row['note'],

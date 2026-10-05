@@ -4463,6 +4463,153 @@ section('ยอดเทียบดอลลาร์ในสรุปยอ�
   await setRate(today.code, null);
 }
 
+/* ── หักค่าคอมเซลจากบิลร้าน (รุ่น 2.7.0 · R25) ──────────────────
+ * ร้านเป็นคนจ่ายค่าคอมให้เซลเอง: ตอนออกบิลร้านติ๊กเซล → ค่าคอมตามดีลของเซลคนนั้น "ทั้งหมดในบิลนี้" ถูกหักออกจากบิลร้าน
+ * และระบบทำบิลค่าคอมสถานะจ่ายแล้วให้ (ส่วนกลางไม่จ่ายซ้ำ) · ถอนการหัก/ยกเลิกบิลร้าน = บิลค่าคอมนั้นถูกยกเลิกตาม
+ * ฉาก: dsale1 ถือ D-1 (2% + เหมา 300) กับ D-2 (5%) · dsale2 ถือ D-3 (4%) · D-4 ไม่มีดีล · ส่วนต่างของร้าน 10% ทุกตัว
+ */
+section('หักค่าคอมเซลจากบิลร้าน (ร้านจ่ายค่าคอมให้เซลเอง)');
+{
+  const fid = (await api('POST', '/api/franchises', { token: admin, body: { username: 'dedshop', password: 'dedshop-pass-1' } })).body.franchise?.id;
+  const shopTok = (await shopLogin('dedshop', 'dedshop-pass-1', fid)).body.token;
+  const mkp = async (sku) => (await api('POST', '/api/products', {
+    token: admin, body: { sku, name: `สินค้าหักคอม ${sku}`, commissionPct: 10, franchiseId: fid, startDate: '2026-01-01' },
+  })).body.product;
+  const [d1, d2, d3, d4] = [await mkp('D-1'), await mkp('D-2'), await mkp('D-3'), await mkp('D-4')];
+  const mkAgent = async (username, name) => (await api('POST', '/api/sales-agents', { token: admin, body: { username, password: `${username}-pass-123`, name } })).body.agent;
+  const s1 = await mkAgent('dsale1', 'เซลหักหนึ่ง');
+  const s2 = await mkAgent('dsale2', 'เซลหักสอง');
+  await api('POST', '/api/sales-agents/links', {
+    token: admin, body: { salesAgentId: s1?.id, items: [{ productId: d1?.id, commissionPct: 2, fixedAmount: 300 }, { productId: d2?.id, commissionPct: 5 }] },
+  });
+  await api('POST', '/api/sales-agents/links', { token: admin, body: { salesAgentId: s2?.id, items: [{ productId: d3?.id, commissionPct: 4 }] } });
+
+  const [P1, P2] = ['2031-06-H1', '2031-06-H2'];
+  const sell = async (product, grossAmount, periodCode) => (await api('POST', '/api/sales-entries', { token: admin, body: { periodCode, productId: product?.id, grossAmount } })).body;
+  const e1 = await sell(d1, 100000, P1);   // เซล 1: 2% = 2,000 (+ เหมา 300)
+  const e2 = await sell(d2, 20000, P1);    // เซล 1: 5% = 1,000
+  const e3 = await sell(d3, 50000, P1);    // เซล 2: 4% = 2,000
+  const e4 = await sell(d4, 10000, P1);    // ไม่มีดีล
+  const preview = async (extra = '', token = admin) => api('GET', `/api/invoices/sales-deductions?franchiseId=${fid}&periodCode=${P1}${extra}`, { token });
+  const generate = (body) => api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: fid, ...body } });
+  const billOf = async (id, token = admin) => (await api('GET', `/api/invoices/${id}`, { token })).body;
+  const commsOf = async (agentId) => (await api('GET', `/api/sales-agents/commissions?salesAgentId=${agentId}`, { token: admin })).body.items ?? [];
+  const candOf = async (agentId) => (await api('GET', `/api/sales-agents/${agentId}/commission-candidates`, { token: admin })).body;
+  const deductibleOf = async (id) => (await api('GET', `/api/invoices/${id}/sales-deductions`, { token: admin })).body.items ?? [];
+  const of = (items, agent) => items?.find((a) => a.salesAgentId === agent?.id);
+
+  const pv = await preview();
+  check('พรีวิวก่อนออกบิล: เซลแต่ละคนที่ถือดีลของสินค้าในรอบนี้ + ค่าคอมตามดีล (% ของยอดเต็ม + เหมาต่อรอบ)',
+    pv.status === 200 && pv.body.items.length === 2
+      && of(pv.body.items, s1)?.total === 3300 && of(pv.body.items, s1).fixedAmount === 300 && of(pv.body.items, s1).items.length === 2
+      && of(pv.body.items, s2)?.total === 2000 && of(pv.body.items, s2).fixedAmount === null && of(pv.body.items, s1).deductible === true,
+    pv.body);
+  const pvSome = await preview(`&entryIds=${e2.id},${e4.id}`);
+  check('พรีวิวเฉพาะรายการที่ติ๊ก: คิดจากรายการนั้นเท่านั้น (ไม่ติ๊กสินค้าที่มีเหมา = ไม่มีเหมา · สินค้าไม่มีดีลไม่มีเซล)',
+    pvSome.body.items?.length === 1 && of(pvSome.body.items, s1)?.total === 1000 && of(pvSome.body.items, s1).fixedAmount === null, pvSome.body);
+  check('ร้านค้าดูพรีวิวค่าคอมเซลไม่ได้', (await preview('', shopTok)).status === 403);
+
+  // ตรวจไม่ผ่าน = ไม่มีทั้งบิลร้านและบิลค่าคอม (ทรานแซกชันเดียว)
+  const stale = await generate({ periodCode: P1, salesDeductions: [{ salesAgentId: s1?.id, amount: 3000 }] });
+  const twice = await generate({ periodCode: P1, salesDeductions: [{ salesAgentId: s1?.id }, { salesAgentId: s1?.id }] });
+  const noDeal = await generate({ periodCode: P1, entryIds: [e4.id], salesDeductions: [{ salesAgentId: s1?.id }] });
+  check('ยอดที่หน้าจอส่งมาไม่ตรงกับที่ระบบคิด (ดีลเพิ่งถูกแก้) → 409 ไม่หักด้วยตัวเลขที่ไม่เคยเห็น', stale.status === 409, stale.body);
+  check('เลือกเซลคนเดียวซ้ำ → 400 · เซลที่ไม่มีค่าคอมจากรายการในบิล → 400', twice.status === 400 && noDeal.status === 400, { twice: twice.body, noDeal: noDeal.body });
+  check('ตรวจไม่ผ่านแล้วไม่มีอะไรถูกบันทึก (ไม่มีบิลร้าน ไม่มีบิลค่าคอม)',
+    (await api('GET', `/api/invoices?franchiseId=${fid}`, { token: admin })).body.items.length === 0 && (await commsOf(s1?.id)).length === 0);
+
+  // ส่วนต่าง 18,000 + ค่าใช้จ่าย 500 − ค่าคอมเซล 1 (3,300) = 15,200
+  const inv = await generate({
+    periodCode: P1,
+    adjustments: [{ kind: 'CHARGE', label: 'ค่าขนส่ง', amount: 500 }],
+    salesDeductions: [{ salesAgentId: s1?.id, amount: 3300 }],
+  });
+  const ded = inv.body.adjustments?.find((a) => a.isSalesDeduction);
+  check('ออกบิลพร้อมหักค่าคอมเซล: ยอดที่ร้านต้องจ่ายลดลงเท่าค่าคอมของเซลคนนั้นทั้งหมดในบิล (18,000 + 500 − 3,300 = 15,200)',
+    inv.status === 201 && inv.body.commissionTotal === 18000 && inv.body.chargeTotal === 500 && inv.body.discountTotal === 3300
+      && inv.body.salesDeductionTotal === 3300 && inv.body.netTotal === 15200, inv.body);
+  check('บรรทัดในบิล: "หักค่าคอมเซล <เซล>" ผูกกับบิลค่าคอม (ไม่นับเป็นค่าใช้จ่าย/ส่วนลดที่ดึงไปอ้างอิงบิลอื่นได้)',
+    ded?.label === 'หักค่าคอมเซล dsale1' && ded.amount === 3300 && ded.kind === 'DISCOUNT' && ded.kindLabel === 'หักค่าคอมเซล'
+      && Number.isInteger(ded.salesCommissionId)
+      && (await api('GET', `/api/invoices?franchiseId=${fid}`, { token: admin })).body.items[0].adjustmentCount === 1, ded);
+
+  const c1 = (await commsOf(s1?.id))[0];
+  check('ระบบทำบิลค่าคอมให้เซลในสถานะจ่ายแล้ว ยอดเท่าที่หัก และบอกว่าหักจากบิลร้านใบไหน',
+    c1?.id === ded?.salesCommissionId && c1.status === 'PAID' && c1.totalAmount === 3300 && c1.isBill === true && Boolean(c1.paidAt)
+      && c1.settledByInvoice?.invoiceNo === inv.body.invoiceNo && c1.settledByInvoice.franchiseUsername === 'dedshop', c1);
+  const kinds = (c1?.lines ?? []).map((l) => `${l.kind}:${l.amount}`).sort().join();
+  check('บิลค่าคอมมีทุกรายการของเซลคนนั้นในบิล: สินค้า 2 รายการตาม % ของดีล + เหมาต่อรอบ',
+    kinds === 'FIXED:300,ITEM:1000,ITEM:2000' && c1.lines.every((l) => l.invoiceNo === inv.body.invoiceNo), c1?.lines);
+  const cand1 = await candOf(s1?.id);
+  const cand2 = await candOf(s2?.id);
+  check('รายการที่หักแล้วไม่กลับมาให้ส่วนกลางทำบิลค่าคอมซ้ำ · เซลที่ไม่ได้ติ๊กยังรอทำบิลค่าคอมตามเดิม',
+    !cand1.items?.some((i) => [e1.id, e2.id].includes(i.entryId)) && !cand1.fixed?.some((f) => f.invoiceNo === inv.body.invoiceNo)
+      && cand2.items?.some((i) => i.entryId === e3.id), { cand1, cand2: cand2.items });
+  const s1Tok = (await api('POST', '/api/auth/login', { body: { username: 'dsale1', password: 'dsale1-pass-123' } })).body.token;
+  const me1 = (await api('GET', '/api/sales-agents/me', { token: s1Tok })).body;
+  check('เซลเห็นค่าคอมก้อนนี้เป็น "ได้รับแล้ว" (ร้านเป็นผู้จ่าย) ไม่ค้างรอรับจากส่วนกลาง',
+    me1.summary?.paid === 3300 && me1.summary.pending === 0 && me1.recentBills?.[0]?.settledByInvoice?.invoiceNo === inv.body.invoiceNo, me1.summary);
+  const shopBill = await billOf(inv.body.id, shopTok);
+  check('ร้านเห็นบรรทัดหักค่าคอมเซลในบิลของตัวเอง และยอดที่ต้องจ่ายหลังหัก',
+    shopBill.netTotal === 15200 && shopBill.adjustments?.some((a) => a.isSalesDeduction && a.label === 'หักค่าคอมเซล dsale1'), shopBill.adjustments);
+  const voidPaid = await api('POST', `/api/sales-agents/commissions/${c1?.id}/void`, { token: admin, body: { reason: 'ลองยกเลิกจากหน้าเซล' } });
+  check('ยกเลิกบิลค่าคอมที่หักจากบิลร้านจากหน้าเซลไม่ได้ — ข้อความชี้ไปที่บิลร้าน',
+    voidPaid.status === 409 && String(voidPaid.body.error?.message ?? voidPaid.body.message ?? '').includes(inv.body.invoiceNo), voidPaid.body);
+
+  // หักเพิ่มในบิลที่ออกแล้ว (ลืมติ๊ก) แล้วถอนการหัก
+  const left = await deductibleOf(inv.body.id);
+  check('บิลที่ออกแล้ว: เซลที่ยังหักได้เหลือเฉพาะคนที่ยังไม่ได้หัก', left.length === 1 && of(left, s2)?.total === 2000, left);
+  check('ร้านค้าหักค่าคอมเซลเองไม่ได้',
+    (await api('POST', `/api/invoices/${inv.body.id}/sales-deductions`, { token: shopTok, body: { salesAgentId: s2?.id } })).status === 403);
+  const added = await api('POST', `/api/invoices/${inv.body.id}/sales-deductions`, { token: admin, body: { salesAgentId: s2?.id, amount: 2000 } });
+  const ded2 = added.body.adjustments?.find((a) => a.label === 'หักค่าคอมเซล dsale2');
+  check('หักค่าคอมเซลเพิ่มในบิลที่ยังแก้ได้: ยอดลดอีก 2,000 และเซลคนนั้นได้บิลค่าคอมสถานะจ่ายแล้ว',
+    added.status === 201 && added.body.netTotal === 13200 && ded2?.amount === 2000 && (await commsOf(s2?.id))[0]?.status === 'PAID', added.body);
+  const removed = await api('DELETE', `/api/invoices/${inv.body.id}/adjustments/${ded2?.id}`, { token: admin });
+  const c2 = (await commsOf(s2?.id))[0];
+  check('ถอนการหัก: ยอดบิลกลับมา · บิลค่าคอมที่เกิดจากการหักถูกยกเลิก · รายการกลับไปรอทำบิลค่าคอม/หักใหม่',
+    removed.status === 200 && removed.body.netTotal === 15200 && c2?.status === 'VOID' && String(c2.voidReason).includes(inv.body.invoiceNo)
+      && (await candOf(s2?.id)).items?.some((i) => i.entryId === e3.id) && (await deductibleOf(inv.body.id)).length === 1, { net: removed.body.netTotal, c2 });
+
+  // หักเกินยอดบิลไม่ได้ — และต้องไม่มีบิลค่าคอมค้างจากครั้งที่ไม่ผ่าน
+  const bigDisc = await api('POST', `/api/invoices/${inv.body.id}/adjustments`, { token: admin, body: { kind: 'DISCOUNT', label: 'ส่วนลดก้อนใหญ่', amount: 14000 } });
+  const tooMuch = await api('POST', `/api/invoices/${inv.body.id}/sales-deductions`, { token: admin, body: { salesAgentId: s2?.id } });
+  check('ค่าคอมเซลรวมส่วนลดแล้วเกินยอดที่ร้านต้องจ่าย → 400 ไม่มีอะไรถูกบันทึก',
+    bigDisc.status === 201 && tooMuch.status === 400 && (await billOf(inv.body.id)).netTotal === 1200
+      && (await commsOf(s2?.id)).filter((c) => c.status !== 'VOID').length === 0, tooMuch.body);
+  await api('DELETE', `/api/invoices/${inv.body.id}/adjustments/${bigDisc.body.adjustments?.find((a) => a.label === 'ส่วนลดก้อนใหญ่')?.id}`, { token: admin });
+
+  // ยกเลิกบิลร้าน = การหักไม่มีแล้ว → บิลค่าคอม (แม้สถานะจ่ายแล้ว) ถูกยกเลิก รายการกลับมาให้ทำใหม่
+  const voided = await api('POST', `/api/invoices/${inv.body.id}/void`, { token: admin, body: { reason: 'ออกผิด ออกใหม่' } });
+  const c1After = (await commsOf(s1?.id)).find((c) => c.id === c1?.id);
+  check('ยกเลิกบิลร้าน: บิลค่าคอมที่หักจากบิลนั้นถูกยกเลิกตาม (ไม่มีการจ่ายเกิดขึ้นแล้ว)',
+    voided.status === 200 && c1After?.status === 'VOID' && String(c1After.voidReason).includes(inv.body.invoiceNo), c1After);
+  const reissue = await generate({ periodCode: P1 });
+  const candAgain = await candOf(s1?.id);
+  check('ออกบิลใหม่โดยไม่ติ๊กหัก: ยอดเต็มตามเดิม และรายการ + เหมาต่อรอบกลับมาให้ทำบิลค่าคอมที่หน้าเซลได้',
+    reissue.status === 201 && reissue.body.netTotal === 18000 && reissue.body.adjustments?.length === 0
+      && candAgain.items?.filter((i) => [e1.id, e2.id].includes(i.entryId)).length === 2 && candAgain.fixed?.some((f) => f.amount === 300), candAgain);
+
+  // เพิ่มรายการเข้าบิลทีหลัง: รายการใหม่ของเซลที่หักไปแล้วยังหักเพิ่มได้ (เหมาต่อรอบไม่คิดซ้ำ) · เงินเข้าแล้วถอนการหักไม่ได้
+  await sell(d1, 40000, P2);                 // เซล 1: 2% = 800 + เหมา 300
+  const inv2 = await generate({ periodCode: P2, salesDeductions: [{ salesAgentId: s1?.id, amount: 1100 }] });
+  await sell(d2, 10000, P2);                 // เซล 1: 5% = 500 (กรอกทีหลัง)
+  const addedLines = await api('POST', `/api/invoices/${inv2.body.id}/lines`, { token: admin, body: {} });
+  const more = await deductibleOf(inv2.body.id);
+  check('เพิ่มรายการเข้าบิลทีหลัง: ค่าคอมของรายการใหม่ยังไม่ถูกหัก และขึ้นให้หักเพิ่มได้ (500 · ไม่มีเหมาซ้ำ)',
+    inv2.status === 201 && inv2.body.netTotal === 2900 && addedLines.body.netTotal === 3900
+      && more.length === 1 && of(more, s1)?.total === 500 && of(more, s1).fixedAmount === null, { inv2: inv2.body.netTotal, more });
+  const topUp = await api('POST', `/api/invoices/${inv2.body.id}/sales-deductions`, { token: admin, body: { salesAgentId: s1?.id, amount: 500 } });
+  check('หักเพิ่มอีกก้อนของเซลคนเดิมได้ (บิลค่าคอมใบที่สอง) — ยอดบิลร้าน 5,000 − 1,100 − 500 = 3,400',
+    topUp.status === 201 && topUp.body.netTotal === 3400 && topUp.body.adjustments?.filter((a) => a.isSalesDeduction).length === 2
+      && (await commsOf(s1?.id)).filter((c) => c.status === 'PAID' && c.settledByInvoice?.invoiceNo === inv2.body.invoiceNo).length === 2, topUp.body);
+  const paySlip = await api('POST', '/api/payments', { token: shopTok, body: { invoiceId: inv2.body.id, amount: 1000, paidAt: '2026-09-21', slipUrl: slip } });
+  await api('POST', `/api/payments/${paySlip.body.id}/approve`, { token: admin, body: {} });
+  const lateRemove = await api('DELETE', `/api/invoices/${inv2.body.id}/adjustments/${topUp.body.adjustments?.find((a) => a.isSalesDeduction)?.id}`, { token: admin });
+  check('ร้านจ่ายเงินเข้ามาแล้ว ถอนการหักค่าคอมไม่ได้ (บิลล็อกตามกติกาเดิม) และบิลค่าคอมยังเป็นจ่ายแล้ว',
+    lateRemove.status === 409 && (await commsOf(s1?.id)).filter((c) => c.status === 'PAID').length === 2, lateRemove.body);
+}
+
 section('captcha หน้าเข้าสู่ระบบ: หลาย IP ผลัดกันเดารหัสบัญชีเดียว (botnet)');
 {
   const botKeys = {};

@@ -1125,7 +1125,8 @@ export function breakdownTable(inv) {
     { label: 'ส่วนต่างจากยอดเต็ม', detail: `จากยอดขายเต็ม ${money(inv.grossTotal)} ฿`, amount: inv.commissionTotal },
     ...inv.adjustments.map((a) => ({
       label: a.label,
-      detail: a.pct !== null ? `${a.kindLabel} ${a.pct}% ของส่วนต่าง` : a.kindLabel,
+      // หักค่าคอมเซล: ชื่อรายการบอกแล้วว่าเป็นอะไร — บรรทัดรองบอกว่าร้านจ่ายเซลเอง + เลขบิลค่าคอม (หมายเหตุจากเซิร์ฟเวอร์)
+      detail: a.isSalesDeduction ? (a.note ?? a.kindLabel) : a.pct !== null ? `${a.kindLabel} ${a.pct}% ของส่วนต่าง` : a.kindLabel,
       amount: a.signedAmount,
     })),
     /*

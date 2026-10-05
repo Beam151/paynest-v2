@@ -41,6 +41,8 @@ final class ActivityService
         'invoice.add_lines'              => 'เพิ่มรายการเข้าบิล',
         'invoice.adjustment.add'         => 'เพิ่มค่าใช้จ่าย/ส่วนลดในบิล',
         'invoice.adjustment.remove'      => 'ลบค่าใช้จ่าย/ส่วนลดออกจากบิล',
+        'invoice.sales_deduction.add'    => 'หักค่าคอมเซลจากบิลร้าน',
+        'invoice.sales_deduction.remove' => 'ถอนการหักค่าคอมเซลจากบิลร้าน',
         'invoice.payment'                => 'ตัดยอดในบิลแล้ว',
         'invoice.void'                   => 'ยกเลิกใบเรียกเก็บ',
         'invoice.update'                 => 'แก้ไขหัวบิล',

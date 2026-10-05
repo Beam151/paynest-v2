@@ -336,11 +336,18 @@ function billStoryCard(bills, periodCode) {
       el('div', { class: 'sub-line' }, 'ออกบิลแล้วจะแจ้งให้ทราบ พร้อมรายละเอียดว่ายอดมาจากสินค้าอะไรบ้าง')));
   }
   return card('บิลของรอบนี้ อ่านง่าย ๆ', el('div', { class: 'story-list' }, ...bills.map((b) => {
+    /*
+     * ค่าคอมเซลที่หักในบิล (ร้านจ่ายให้เซลเอง) นับอยู่ใน discountTotal — แยกออกมาเป็นบรรทัดของมันเอง
+     * ไม่ใช่ "ส่วนลดจากทางเรา" และไม่ใช่เงินที่ร้านเก็บไว้ (ร้านต้องจ่ายต่อให้เซล)
+     */
+    const toSales = b.salesDeductionTotal ?? 0;
+    const discount = Number((b.discountTotal - toSales).toFixed(2));
     const steps = [
       { label: 'ร้านขายได้', amount: b.grossTotal, tone: 'muted' },
       { label: `ส่วนต่างของทางเรา (${pct(b.grossTotal ? (b.commissionTotal / b.grossTotal) * 100 : 0)})`, amount: b.commissionTotal, sign: '' },
       b.chargeTotal ? { label: 'ค่าใช้จ่ายอื่น', amount: b.chargeTotal, sign: '+' } : null,
-      b.discountTotal ? { label: 'ส่วนลดจากทางเรา', amount: b.discountTotal, sign: '−', tone: 'good' } : null,
+      discount ? { label: 'ส่วนลดจากทางเรา', amount: discount, sign: '−', tone: 'good' } : null,
+      toSales ? { label: 'หักค่าคอมเซล (ร้านจ่ายให้เซลเอง)', amount: toSales, sign: '−' } : null,
       b.creditApplied ? { label: 'หักยอดยกมาจากรอบก่อน', amount: b.creditApplied, sign: '−', tone: 'good' } : null,
     ].filter(Boolean);
     return el('div', { class: 'story' },
@@ -352,8 +359,10 @@ function billStoryCard(bills, periodCode) {
           el('span', {}, s.label), el('span', {}, `${s.sign ?? ''}${money(s.amount)} ฿`))),
         el('div', { class: 'story-line total' },
           el('span', {}, 'ยอดที่โอนให้ทางเรา'), el('strong', {}, `${money(b.netTotal)} ฿`)),
+        toSales ? el('div', { class: 'story-line' },
+          el('span', {}, 'จ่ายค่าคอมให้เซลเอง'), el('span', {}, `${money(toSales)} ฿`)) : '',
         el('div', { class: 'story-line keep' },
-          el('span', {}, 'ร้านเก็บไว้'), el('strong', {}, `${money(Math.max(0, b.grossTotal - b.netTotal))} ฿`))),
+          el('span', {}, 'ร้านเก็บไว้'), el('strong', {}, `${money(Math.max(0, b.grossTotal - b.netTotal - toSales))} ฿`))),
       el('div', { class: 'story-foot' },
         b.outstanding > 0
           ? el('span', {}, `ชำระแล้ว ${money(b.paid)} ฿ · คงเหลือ `, el('strong', {}, `${money(b.outstanding)} ฿`))
