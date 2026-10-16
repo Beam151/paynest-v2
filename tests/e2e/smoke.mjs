@@ -4618,6 +4618,63 @@ section('หักค่าคอมเซลจากบิลร้าน (ร
     lateRemove.status === 409 && (await commsOf(s1?.id)).filter((c) => c.status === 'PAID').length === 2, lateRemove.body);
 }
 
+/* ── สัญญาเริ่มกลางรอบ · เปลี่ยนสัญญากลางรอบ (รุ่น 2.7.2 · R26) ─────────
+ * สัญญาที่คาบเกี่ยวรอบบันทึกยอดรอบนั้นได้ ไม่ต้องครอบทั้งรอบ (เริ่ม 2 ต.ค. → รอบ 1–15 ต.ค. ได้)
+ * เปลี่ยนสัญญากลางรอบ (ปิดสัญญาเดิมวันที่ 1 แล้วเริ่มใหม่วันที่ 2 · ร้านเดิมหรือร้านอื่น) ยอดทั้งรอบเป็นของสัญญาท้ายรอบ
+ * — เดิมตอบ 409 "เปลี่ยนมือกลางรอบ" แล้วบันทึกไม่ได้เลย · ยอดที่บันทึกให้ร้านเดิมไว้ก่อนแล้วไม่ถูกย้ายร้านเงียบ ๆ
+ */
+section('สัญญาเริ่มกลางรอบ · เปลี่ยนสัญญากลางรอบ');
+{
+  const mkShop = async (u) => (await api('POST', '/api/franchises', { token: admin, body: { username: u, password: `${u}-pass-1` } })).body.franchise?.id;
+  const m1 = await mkShop('midshop1');
+  const m2 = await mkShop('midshop2');
+  const mkp = async (sku, franchiseId, startDate, endDate) => (await api('POST', '/api/products', {
+    token: admin, body: { sku, name: `สินค้าสัญญากลางรอบ ${sku}`, commissionPct: 10, franchiseId, startDate, ...(endDate ? { endDate } : {}) },
+  })).body;
+  const assign = (productId, franchiseId, startDate) => api('POST', '/api/assignments', { token: admin, body: { productId, franchiseId, startDate } });
+  const P = '2032-03-H1'; // 1–15 มี.ค. 75
+  const sell = (productId, grossAmount, periodCode = P) => api('POST', '/api/sales-entries', { token: admin, body: { periodCode, productId, grossAmount } });
+  const msg = (r) => r.body?.error?.message ?? '';
+
+  const a = await mkp('MID-1', m1, '2032-03-02');
+  const ea = await sell(a.product?.id, 1000);
+  check('สัญญาเริ่มวันที่ 2 ของรอบ → บันทึกยอดรอบนั้นได้ (ไม่ต้องครอบทั้งรอบ)',
+    ea.status === 201 && ea.body.franchiseId === m1 && ea.body.assignmentId === a.assignment?.id, ea.body);
+
+  const b = await mkp('MID-2', m1, '2032-02-01', '2032-03-01');
+  const b2 = await assign(b.product?.id, m1, '2032-03-02');
+  const eb = await sell(b.product?.id, 2000);
+  const ebEdit = await sell(b.product?.id, 2500);
+  check('ร้านเดิมปิดสัญญาวันที่ 1 แล้วเริ่มสัญญาใหม่วันที่ 2 → บันทึกได้ ผูกสัญญาใหม่ (ท้ายรอบ) · แก้ยอดซ้ำ = รายการเดิม',
+    b2.status === 201 && eb.status === 201 && eb.body.franchiseId === m1 && eb.body.assignmentId === b2.body.id
+      && ebEdit.status === 201 && ebEdit.body.id === eb.body.id && ebEdit.body.grossAmount === 2500, { eb: eb.body, ebEdit: ebEdit.body });
+
+  const c = await mkp('MID-3', m1, '2032-02-01', '2032-03-01');
+  const c2 = await assign(c.product?.id, m2, '2032-03-02');
+  const ec = await api('POST', '/api/sales-entries/bulk', { token: admin, body: { items: [{ periodCode: P, productId: c.product?.id, grossAmount: 3000 }] } });
+  check('ย้ายไปร้านอื่นกลางรอบ → "บันทึกทั้งหมด" ผ่าน · ยอดทั้งรอบเป็นของร้านที่ถือสินค้าท้ายรอบ',
+    c2.status === 201 && ec.status === 201 && ec.body.saved?.[0]?.franchiseId === m2 && ec.body.saved?.[0]?.assignmentId === c2.body.id, ec.body);
+  const ecOld = await sell(c.product?.id, 400, '2032-02-H2');
+  check('รอบก่อนย้าย (อยู่ในสัญญาเดิมทั้งรอบ) ยังเป็นของร้านเดิม', ecOld.status === 201 && ecOld.body.franchiseId === m1, ecOld.body);
+  const ecPick = await api('POST', '/api/sales-entries', { token: admin, body: { periodCode: P, productId: c.product?.id, grossAmount: 3000, franchiseId: m1 } });
+  check('ระบุร้านเดิมมาเองไม่ได้ — บอกว่ารอบนี้เป็นของร้านใหม่', ecPick.status === 400 && msg(ecPick).includes('midshop2'), ecPick.body);
+  const bill = await api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: m2, periodCode: P } });
+  check('ออกบิลรอบนั้นให้ร้านใหม่ได้ · ยอดอยู่ในบิลร้านใหม่ (10% ของ 3,000 = 300)', bill.status === 201 && bill.body.netTotal === 300, bill.body);
+
+  const d = await mkp('MID-4', m1, '2032-02-01');
+  const ed = await sell(d.product?.id, 500);
+  const endD = await api('POST', `/api/assignments/${d.assignment?.id}/end`, { token: admin, body: { endDate: '2032-03-01' } });
+  const d2 = await assign(d.product?.id, m2, '2032-03-02');
+  const moved = await sell(d.product?.id, 600);
+  check('ยอดรอบนี้บันทึกให้ร้านเดิมไว้ก่อนย้าย → แก้ทับไม่ได้ (409 บอกทั้งสองร้าน) · ยอดเดิมไม่ถูกย้ายร้านเงียบ ๆ',
+    ed.status === 201 && endD.status === 200 && d2.status === 201 && moved.status === 409
+      && msg(moved).includes('midshop1') && msg(moved).includes('midshop2')
+      && (await api('GET', `/api/sales-entries/${ed.body.id}`, { token: admin })).body.franchiseId === m1, moved.body);
+  await api('DELETE', `/api/sales-entries/${ed.body.id}`, { token: admin });
+  const again = await sell(d.product?.id, 600);
+  check('ลบยอดเดิมแล้วกรอกใหม่ → เป็นของร้านใหม่', again.status === 201 && again.body.franchiseId === m2, again.body);
+}
+
 section('captcha หน้าเข้าสู่ระบบ: หลาย IP ผลัดกันเดารหัสบัญชีเดียว (botnet)');
 {
   const botKeys = {};

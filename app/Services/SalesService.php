@@ -86,6 +86,20 @@ final class SalesService
             if ($existing['status'] === 'INVOICED') {
                 throw ApiException::conflict('รายการนี้ถูกออกใบเรียกเก็บแล้ว ต้องยกเลิกใบเรียกเก็บก่อนจึงจะแก้ไขได้');
             }
+            /*
+             * ยอดที่บันทึกไว้ให้ร้านเดิม แล้วสินค้าย้ายไปร้านอื่นกลางรอบ (ยอดทั้งรอบเป็นของร้านท้ายรอบ — resolveForPeriod)
+             * ไม่ย้ายยอดข้ามร้านเงียบ ๆ: บิลค่าคอมเซลที่จ่ายไปแล้วจับคู่ด้วย (ร้าน, รอบ) ย้ายร้านแล้วจะกลับมาให้จ่ายซ้ำได้
+             * ให้คนตัดสินใจเอง — ลบยอดเดิมแล้วกรอกใหม่ หรือเลื่อนวันเริ่มสัญญาใหม่ให้รอบนี้ยังเป็นของร้านเดิม
+             */
+            if ((int) $existing['franchise_id'] !== (int) $assignment['franchise_id']) {
+                $old = Db::val('SELECT username FROM franchises WHERE id = ?', [$existing['franchise_id']]);
+                $new = $assignment['franchise_username'];
+                throw ApiException::conflict(
+                    'ยอดรอบ ' . Period::text($period['code']) . " ของสินค้า {$product['sku']} บันทึกไว้ให้ร้าน {$old} แล้ว"
+                    . " แต่สินค้านี้ย้ายไปร้าน {$new} กลางรอบ (ยอดทั้งรอบเป็นของร้านที่ถือสินค้าท้ายรอบ) — ลบยอดเดิมแล้วกรอกใหม่ให้ร้าน {$new}"
+                    . " · ถ้ารอบนี้ต้องเป็นของร้าน {$old} ให้เลื่อนวันเริ่มสัญญาของร้าน {$new} ไปหลัง " . Period::thDate($period['end_date']),
+                );
+            }
         }
 
         $manualSatang = self::resolveManual($input, $existing, $grossSatang, (string) $product['sku']);

@@ -230,8 +230,13 @@ final class AssignmentService
     }
 
     /**
-     * หาสัญญาที่ใช้กับรอบบิลนี้ (ต้องเจอเพียงรายการเดียวเท่านั้น)
-     * ถ้าเจอมากกว่า 1 แปลว่ามีการเปลี่ยนมือกลางรอบ → ให้ผู้ดูแลตัดสินใจก่อน
+     * หาสัญญาที่ใช้กับรอบบิลนี้ — สัญญาที่คาบเกี่ยวรอบ ไม่ต้องครอบทั้งรอบ (เริ่ม 2 ต.ค. ก็บันทึกยอดรอบ 1–15 ต.ค. ได้)
+     *
+     * สัญญาเปลี่ยนกลางรอบ (ปิดสัญญาเดิม 1 ต.ค. แล้วเริ่มใหม่ 2 ต.ค. — ร้านเดิมหรือร้านอื่นก็ตาม) = เจอหลายสัญญา
+     * ยอดทั้งรอบเป็นของสัญญาที่อยู่ท้ายสุดของรอบ — ตรงกับแถวในหน้ายอดขาย (ดึงสินค้าด้วยสัญญา ณ วันสุดท้ายของรอบ)
+     * เดิมตอบ 409 "เปลี่ยนมือกลางรอบ" แล้วบันทึกไม่ได้เลย เจ้าของระบบสั่งให้บันทึกได้ (16 ต.ค. 69 · รุ่น 2.7.2)
+     * อยากให้รอบนั้นเป็นของสัญญาเดิม: เลื่อนวันเริ่มของสัญญาใหม่ไปหลังวันสุดท้ายของรอบ
+     * สัญญาสินค้าชิ้นเดียวกันทับกันไม่ได้ (assign / update) จึงเรียงตามวันเริ่มได้ลำดับเดียว — ตัวสุดท้ายคือท้ายสุดของรอบ
      */
     public static function resolveForPeriod(int $productId, array $period, ?int $franchiseId = null): array
     {
@@ -239,18 +244,7 @@ final class AssignmentService
         if ($matches === []) {
             throw ApiException::badRequest("สินค้านี้ยังไม่ถูกมอบหมายให้ร้านใดในรอบบิล {$period['code']}");
         }
-        if (count($matches) > 1) {
-            throw ApiException::conflict(
-                "สินค้านี้เปลี่ยนมือกลางรอบบิล {$period['code']} — ต้องแยกรอบหรือแก้ช่วงสัญญาก่อนบันทึกยอด",
-                array_map(static fn ($a) => [
-                    'assignmentId'      => (int) $a['id'],
-                    'franchiseUsername' => $a['franchise_username'],
-                    'startDate'         => $a['start_date'],
-                    'endDate'           => $a['end_date'],
-                ], $matches),
-            );
-        }
-        $assignment = $matches[0];
+        $assignment = $matches[array_key_last($matches)];
         if ($franchiseId && (int) $assignment['franchise_id'] !== $franchiseId) {
             throw ApiException::badRequest("สินค้านี้อยู่ในความดูแลของร้าน {$assignment['franchise_username']} ไม่ใช่ของคุณ");
         }
