@@ -3,12 +3,12 @@ import {
   alertBanner, badge, card, confirmAction, dateTh, dateTimeTh, el, field, flashRows, formModal, infoModal,
   int, money, pct, periodBar, stat, sumUsd, table, toast, usdOf, usdText,
 } from '../ui.js';
-import { periodLabel, periodOf, periodOptions, setWorkingPeriod, storedWorkingPeriod, workingPeriod } from '../period.js';
+import { periodLabel, periodOf, periodOptions, setWorkingPeriod, storedWorkingPeriod, todayIso, workingPeriod } from '../period.js';
 import {
   accountCheckNotice, attachmentGrid, bankAccountBox, breakdownTable, currencyTag, fxLine, payCenterView, payMoney, paymentTotals,
   receivedMoneyTab, slipReviewTab, slipStatusPicker,
 } from './payments.js';
-import { billLineEditor, commissionOf, lineProductCell, parseAmount, parsePct, presetOf } from './billLines.js';
+import { billLineEditor, commissionOf, dealTerms, lineProductCell, parseAmount, parsePct, presetOf } from './billLines.js';
 import { elevated } from '../elevation.js';
 import { hashParam, render } from '../app.js';
 import { activityButton } from './activity.js';
@@ -231,6 +231,36 @@ export async function invoicesView() {
     },
   });
 
+  /*
+   * ── หักค่าคอมเซล (R25) — ชิ้นส่วนที่หน้าต่างออกบิลและหน้าแก้ไขบิลใช้ร่วมกัน ──
+   * กล่องนี้ขึ้นเสมอ (รุ่น 2.7.1): เดิมซ่อนเมื่อไม่มีเซลให้ติ๊ก เจ้าของระบบเปิดหน้าต่างแล้วไม่เห็นอะไร จึงเข้าใจว่าไม่มีฟีเจอร์นี้
+   * ไม่มีอะไรให้ติ๊ก = บอกว่าขาดอะไร (ยังไม่มียอดขาย / สินค้าตัวไหนยังไม่มีเซลถือดีล) และต้องไปทำที่ไหน
+   */
+  const SALES_DEDUCT_INTRO = 'ติ๊กเมื่อร้านเป็นคนจ่ายค่าคอมให้เซลเอง — ยอดทั้งหมดของเซลคนนั้นในบิลนี้ถูกหักออกจากยอดที่ร้านต้องจ่าย '
+    + 'และระบบทำบิลค่าคอมของเซลเป็น "จ่ายแล้ว" ให้ (ไม่ต้องจ่ายซ้ำที่หน้าเซล) · ไม่ติ๊ก = ทำบิลค่าคอมจ่ายเซลทีหลังตามปกติ';
+  const HOW_TO_DEAL = 'ผูกดีลให้เซล: หน้า "เซล" → ปุ่ม "ตั้งค่าคอม" ที่แถวของเซล → เลือกสินค้า ใส่ % หรือเหมาต่อรอบ → บันทึก '
+    + 'แล้วกลับมาที่นี่ ชื่อเซลพร้อมยอดค่าคอมจะขึ้นให้ติ๊ก';
+  const toAgentsLink = () => el('a', { href: '#/sales-agents', style: 'display:inline-block;margin-top:6px' }, 'ไปหน้าเซล →');
+
+  /** รายละเอียดค่าคอมของเซลหนึ่งคน: "SKU ยอดเต็ม × % = ค่าคอม · เหมาต่อรอบ …" */
+  const salesBreakdown = (a) => [
+    ...a.items.map((i) => `${i.sku} ${money(i.grossAmount)} × ${pct(i.pct)} = ${money(i.amount)}`),
+    a.fixedAmount !== null ? `เหมาต่อรอบ ${money(a.fixedAmount)}` : null,
+  ].filter(Boolean).join(' · ');
+
+  /** ไม่มีเซลให้ติ๊ก — เหตุผลจากเซิร์ฟเวอร์ (noDealSkus = สินค้าในรายการที่ยังไม่มีเซลถือดีล) + ทางไปผูกดีล */
+  const noSalesToDeduct = (noDealSkus = []) => el('div', { class: 'notice-box m-0' },
+    el('strong', {}, 'ยังไม่มีเซลให้หักในบิลนี้'),
+    el('div', { class: 'mt-4' }, noDealSkus.length
+      ? `สินค้าที่ยังไม่มีเซลถือดีล: ${noDealSkus.join(', ')}`
+      : 'สินค้าในบิลนี้ไม่มีค่าคอมค้างให้หัก — ทำบิลค่าคอมไปแล้ว หรือดีลไม่มี % และเหมาต่อรอบจ่ายไปแล้ว'),
+    noDealSkus.length ? el('div', { class: 'sub-line mt-4' }, HOW_TO_DEAL) : '',
+    noDealSkus.length ? toAgentsLink() : '');
+
+  /** กล่องแบบยังติ๊กไม่ได้ (ยังไม่มีรายการให้คิดค่าคอม) — หัวข้อเดียวกับกล่องจริง ให้รู้ว่าฟีเจอร์อยู่ตรงนี้ */
+  const salesDeductPlaceholder = (...body) => el('div', { class: 'adj-block' },
+    el('div', { class: 'sales-deduct solo' }, el('h3', {}, '🤝 หักค่าคอมเซล'), ...body));
+
   /**
    * หักค่าคอมเซลเพิ่มในบิลที่ออกไปแล้วและยังแก้ได้ (R25) — ลืมติ๊กตอนออกบิล หรือเพิ่มรายการเข้าบิลทีหลัง
    * deductible = เซลที่ยังหักได้ของบิลนี้ (เซิร์ฟเวอร์คิดยอดให้ · คนที่หักไปแล้วไม่อยู่ในนี้)
@@ -243,14 +273,12 @@ export async function invoicesView() {
       name: 'agents',
       label: 'เซลที่ร้านเป็นคนจ่ายค่าคอมให้เอง',
       type: 'checklist',
-      value: [],
+      // มีคนเดียวติ๊กให้เลย — กดปุ่มมาเพื่อหักคนนี้อยู่แล้ว
+      value: deductible.length === 1 ? [String(deductible[0].salesAgentId)] : [],
       options: deductible.map((a) => ({
         value: String(a.salesAgentId),
         label: `${a.username} — ${a.name} · หัก ${money(a.total)} ฿`,
-        hint: [
-          ...a.items.map((i) => `${i.sku} ${money(i.grossAmount)} × ${pct(i.pct)} = ${money(i.amount)}`),
-          a.fixedAmount !== null ? `เหมาต่อรอบ ${money(a.fixedAmount)}` : null,
-        ].filter(Boolean).join(' · '),
+        hint: salesBreakdown(a),
       })),
       hint: 'หักทั้งหมดของเซลคนนั้นในบิลนี้ · ระบบทำบิลค่าคอมของเซลเป็น "จ่ายแล้ว" ให้ ไม่ต้องจ่ายซ้ำที่หน้าเซล',
     }],
@@ -509,7 +537,7 @@ export async function invoicesView() {
      * ตัวเลขมาจากเซิร์ฟเวอร์ (ตัวคิดเดียวกับตอนหักจริง) โหลดใหม่ทุกครั้งที่รายการที่ติ๊กเปลี่ยน
      * ติ๊กเซลคนไหน = ร้านจ่ายค่าคอมให้คนนั้นเอง: ยอดทั้งหมดของเซลคนนั้นในบิลนี้ถูกหักออก และระบบทำบิลค่าคอมเป็น "จ่ายแล้ว" ให้
      */
-    const sales = { items: [], ticked: new Set(), loading: false, error: '', key: '', seq: 0, timer: null };
+    const sales = { items: [], noDealSkus: [], ticked: new Set(), loading: false, error: '', key: '', seq: 0, timer: null };
     const salesBox = el('div');
     const salesPicked = () => sales.items.filter((a) => a.deductible && sales.ticked.has(a.salesAgentId));
 
@@ -521,7 +549,7 @@ export async function invoicesView() {
       clearTimeout(sales.timer);
       const seq = ++sales.seq;
       if (!ids.length) {
-        Object.assign(sales, { items: [], loading: false, error: '' });
+        Object.assign(sales, { items: [], noDealSkus: [], loading: false, error: '' });
         drawSales();
         return;
       }
@@ -532,9 +560,9 @@ export async function invoicesView() {
         let next;
         try {
           const res = await api.get(`/api/invoices/sales-deductions${qs({ franchiseId, periodCode, entryIds: ids.join(',') })}`);
-          next = { items: res.items ?? [], error: '' };
+          next = { items: res.items ?? [], noDealSkus: res.noDealSkus ?? [], error: '' };
         } catch (e) {
-          next = { items: [], error: e.message || 'โหลดค่าคอมเซลไม่สำเร็จ' };
+          next = { items: [], noDealSkus: [], error: e.message || 'โหลดค่าคอมเซลไม่สำเร็จ' };
         }
         if (seq !== sales.seq) return;
         Object.assign(sales, next, { loading: false });
@@ -542,40 +570,47 @@ export async function invoicesView() {
       }, 250);
     }
 
+    /** กล่องนี้วาดเสมอ — ไม่มีเซลให้ติ๊กก็บอกเหตุผล (ดู noSalesToDeduct) ไม่ซ่อนทั้งกล่องเหมือนรุ่น 2.7.0 */
     function drawSales() {
-      // ไม่มีเซลถือดีลของสินค้าในรายการที่เลือก = ไม่ต้องมีกล่องนี้ (ร้านส่วนใหญ่ไม่มี)
-      if (!sales.items.length && !sales.error) {
-        salesBox.replaceChildren();
-        refreshTotals();
-        return;
-      }
       const row = (a) => {
         const box = el('input', { type: 'checkbox', checked: a.deductible && sales.ticked.has(a.salesAgentId), disabled: !a.deductible });
         box.addEventListener('change', () => {
           if (box.checked) sales.ticked.add(a.salesAgentId); else sales.ticked.delete(a.salesAgentId);
           refreshTotals();
         });
-        const parts = [
-          ...a.items.map((i) => `${i.sku} ${money(i.grossAmount)} × ${pct(i.pct)} = ${money(i.amount)}`),
-          a.fixedAmount !== null ? `เหมาต่อรอบ ${money(a.fixedAmount)}` : null,
-        ].filter(Boolean);
         return el('label', { class: 'check-item' },
           box,
           el('div', { style: 'flex:1;min-width:0' },
             el('strong', {}, `${a.username} — ${a.name}`),
-            el('div', { class: 'sub-line' }, parts.join(' · ')),
+            el('div', { class: 'sub-line' }, salesBreakdown(a)),
             a.deductible ? '' : el('div', { class: 'sub-line', style: 'color:var(--danger)' },
               'ยอดรวมไม่เป็นบวก (รอบคืนของ) — หักจากบิลร้านไม่ได้')),
           el('span', { class: 'adj-amount', style: 'color:var(--success)' }, `−${money(a.total)}`));
       };
+      const selected = editor ? editor.selectedIds().length : 0;
+      let body;
+      if (sales.error) {
+        body = el('div', { class: 'sub-line', style: 'color:var(--danger)' }, sales.error);
+      } else if (sales.items.length) {
+        body = [
+          el('div', { class: 'checklist', style: sales.loading ? 'opacity:.55' : '' }, ...sales.items.map(row)),
+          sales.loading ? el('div', { class: 'sub-line mt-6' }, 'กำลังคิดค่าคอมของรายการที่เลือก…') : '',
+          // มีเซลให้ติ๊กแล้วแต่บางสินค้ายังไม่มีดีล — บอกไว้ ไม่งั้นดูเหมือนค่าคอมของสินค้านั้นถูกลืม
+          !sales.loading && sales.noDealSkus.length
+            ? el('div', { class: 'sub-line mt-6' }, `สินค้าที่ไม่มีเซลถือดีล (ไม่มีค่าคอมให้หัก): ${sales.noDealSkus.join(', ')}`)
+            : '',
+        ];
+      } else if (sales.loading) {
+        body = el('div', { class: 'sub-line' }, 'กำลังดูว่าสินค้าในรายการที่เลือกมีเซลถือดีลไหม…');
+      } else if (!selected) {
+        body = el('div', { class: 'sub-line' }, 'ติ๊กรายการสินค้าด้านบนก่อน — ค่าคอมเซลคิดจากรายการที่จะเรียกเก็บในบิลนี้');
+      } else {
+        body = noSalesToDeduct(sales.noDealSkus);
+      }
       salesBox.replaceChildren(el('div', { class: 'sales-deduct' },
         el('h3', {}, '🤝 หักค่าคอมเซล'),
-        el('div', { class: 'sub-line', style: 'margin-bottom:8px' },
-          'ติ๊กเมื่อร้านเป็นคนจ่ายค่าคอมให้เซลเอง — ยอดทั้งหมดของเซลคนนั้นในบิลนี้ถูกหักออกจากยอดที่ร้านต้องจ่าย '
-          + 'และระบบทำบิลค่าคอมของเซลเป็น "จ่ายแล้ว" ให้ (ไม่ต้องจ่ายซ้ำที่หน้าเซล) · ไม่ติ๊ก = ทำบิลค่าคอมจ่ายเซลทีหลังตามปกติ'),
-        sales.error ? el('div', { class: 'sub-line', style: 'color:var(--danger)' }, sales.error) : '',
-        el('div', { class: 'checklist', style: sales.loading ? 'opacity:.55' : '' }, ...sales.items.map(row)),
-        sales.loading ? el('div', { class: 'sub-line mt-6' }, 'กำลังคิดค่าคอมของรายการที่เลือก…') : ''));
+        el('div', { class: 'sub-line', style: 'margin-bottom:8px' }, SALES_DEDUCT_INTRO),
+        body));
       refreshTotals();
     }
     // ไฟล์ที่อัปโหลดไปแล้วของฟอร์มนี้ — กดออกบิลซ้ำหลังเจอ error จะไม่อัปโหลดซ้ำ
@@ -971,7 +1006,7 @@ export async function invoicesView() {
       clearTimeout(sales.timer);
       sales.seq += 1;
       sales.ticked.clear();
-      Object.assign(sales, { items: [], loading: false, error: '', key: '' });
+      Object.assign(sales, { items: [], noDealSkus: [], loading: false, error: '', key: '' });
       drawSales();
       if (!v.franchiseId || !v.periodCode) {
         previewKey = key;
@@ -988,11 +1023,14 @@ export async function invoicesView() {
       if (existing) {
         return remember(key, {
           canSubmit: false, // กดไปก็ไม่ผ่าน ปิดปุ่มไว้เลยดีกว่าปล่อยให้เจอ error
-          node: el('div', { class: 'notice-box m-0' },
-            el('div', {}, el('strong', {}, `รอบ ${periodLabel(v.periodCode)} ออกใบเรียกเก็บไปแล้ว — ${existing.invoiceNo}`)),
-            el('div', {}, 'หนึ่งรอบบิลออกได้ใบเดียว ถ้ามีรายการตกหล่นให้กด "+ รายการ" ที่ใบเดิม หรือยกเลิกใบเดิมก่อนแล้วออกใหม่'),
-            el('div', { class: 'mt-6' },
-              'จะเพิ่มค่าใช้จ่ายหรือส่วนลดในใบนี้ ให้กด "แก้ไขบิล" ที่แถวของใบนั้นในตาราง')),
+          node: el('div', {},
+            el('div', { class: 'notice-box m-0' },
+              el('div', {}, el('strong', {}, `รอบ ${periodLabel(v.periodCode)} ออกใบเรียกเก็บไปแล้ว — ${existing.invoiceNo}`)),
+              el('div', {}, 'หนึ่งรอบบิลออกได้ใบเดียว ถ้ามีรายการตกหล่นให้กด "+ รายการ" ที่ใบเดิม หรือยกเลิกใบเดิมก่อนแล้วออกใหม่'),
+              el('div', { class: 'mt-6' },
+                'จะเพิ่มค่าใช้จ่ายหรือส่วนลดในใบนี้ ให้กด "แก้ไขบิล" ที่แถวของใบนั้นในตาราง')),
+            salesDeductPlaceholder(el('div', { class: 'sub-line' },
+              `บิลของรอบนี้ออกไปแล้ว — หักค่าคอมเซลของใบ ${existing.invoiceNo} ได้ที่ "แก้ไขบิล" ของใบนั้น ในส่วน "🤝 หักค่าคอมเซล" (ก่อนร้านจ่ายเงิน)`))),
         });
       }
 
@@ -1001,15 +1039,38 @@ export async function invoicesView() {
       const billable = all.items.filter((e) => e.status !== 'INVOICED');
 
       if (!billable.length) {
+        /*
+         * ยังไม่มียอดขาย = ยังคิดค่าคอมไม่ได้ แต่กล่องหักค่าคอมเซลต้องขึ้นให้เห็นว่าอยู่ตรงนี้ และบอกสองอย่างที่ต้องมีก่อน:
+         * ยอดขายของรอบนี้ + เซลที่ถือดีลของสินค้า (บอกด้วยว่าตอนนี้ร้านนี้มีเซลถือดีลตัวไหนอยู่แล้วบ้าง)
+         * โหลดดีลไม่ได้ก็ยังขึ้นกล่อง แค่ไม่มีบรรทัดรายชื่อ
+         */
+        const deals = await api.get(`/api/sales-agents/links${qs({ franchiseId: v.franchiseId, activeOn: todayIso() })}`)
+          .then((r) => r.items).catch(() => null);
+        if (latestKey !== key) return null;
+        const byAgent = new Map();
+        for (const l of deals ?? []) {
+          byAgent.set(l.agentUsername, [...(byAgent.get(l.agentUsername) ?? []),
+            `${l.sku} ${dealTerms({ pct: l.commissionPct, fixedAmount: l.fixedAmount })}`]);
+        }
         return remember(key, {
           canSubmit: false,
-          node: el('div', { class: 'notice-box m-0' },
-            el('div', {}, el('strong', {}, `รอบ ${periodLabel(v.periodCode)} ยังออกบิลไม่ได้`)),
-            el('div', {}, `ร้านนี้ยังไม่มีการกรอกยอดขายในรอบ ${periodLabel(v.periodCode)} — ไปกรอกยอดเงินเต็มที่หน้า "ยอดขายรายรอบ" ก่อน`),
-            // บอกด้วยว่าช่องใส่ส่วนลด/ค่าใช้จ่ายหายไปไหน ไม่ใช่ปล่อยให้งงว่าทำไมไม่มี
-            el('div', { class: 'mt-6' },
-              'ส่วน "ค่าใช้จ่ายอื่น / ส่วนลด" จะโผล่ขึ้นมาในหน้าต่างนี้เอง เมื่อเลือกร้านที่มียอดพร้อมเรียกเก็บแล้ว'),
-            el('a', { href: '#/sales', style: 'display:inline-block;margin-top:6px' }, 'ไปหน้ายอดขายรายรอบ →')),
+          node: el('div', {},
+            el('div', { class: 'notice-box m-0' },
+              el('div', {}, el('strong', {}, `รอบ ${periodLabel(v.periodCode)} ยังออกบิลไม่ได้`)),
+              el('div', {}, `ร้านนี้ยังไม่มีการกรอกยอดขายในรอบ ${periodLabel(v.periodCode)} — ไปกรอกยอดเงินเต็มที่หน้า "ยอดขายรายรอบ" ก่อน`),
+              // บอกด้วยว่าช่องใส่ส่วนลด/ค่าใช้จ่ายหายไปไหน ไม่ใช่ปล่อยให้งงว่าทำไมไม่มี
+              el('div', { class: 'mt-6' },
+                'ส่วน "ค่าใช้จ่ายอื่น / ส่วนลด" จะโผล่ขึ้นมาในหน้าต่างนี้เอง เมื่อเลือกร้านที่มียอดพร้อมเรียกเก็บแล้ว'),
+              el('a', { href: '#/sales', style: 'display:inline-block;margin-top:6px' }, 'ไปหน้ายอดขายรายรอบ →')),
+            salesDeductPlaceholder(
+              el('div', { class: 'sub-line' },
+                'ยังติ๊กไม่ได้ — ค่าคอมเซลคิดจากยอดขายของรอบนี้ · กรอกยอดขายของร้านก่อน แล้วชื่อเซลที่ถือดีลของสินค้าพร้อมยอดค่าคอมจะขึ้นให้ติ๊กตรงนี้'),
+              deals === null ? '' : byAgent.size
+                ? el('div', { class: 'mt-6' }, 'เซลที่ถือดีลของสินค้าร้านนี้อยู่ตอนนี้: ',
+                  ...[...byAgent].map(([agent, items], i) => el('span', {}, i ? ' · ' : '', el('strong', {}, agent), ` (${items.join(', ')})`)))
+                : el('div', { class: 'mt-6' },
+                  el('strong', {}, 'ร้านนี้ยังไม่มีสินค้าที่เซลถือดีล'), ' — ต้องผูกดีลก่อนด้วย ถึงจะมีเซลให้หัก',
+                  el('div', { class: 'sub-line mt-4' }, HOW_TO_DEAL), toAgentsLink()))),
         });
       }
 
@@ -1353,10 +1414,9 @@ export async function invoicesView() {
     // แก้ตัวเลขได้เฉพาะบิลที่ยังไม่มีใครแตะเงิน — ถ้าร้านจ่ายมาแล้วหรือส่งสลิปรออยู่
     // การแก้ยอดจะทำให้สิ่งที่ร้านเห็นกับสิ่งที่จ่ายมาไม่ตรงกัน ต้องยกเลิกแล้วออกใหม่แทน
     const editable = edit && canEditInvoice(inv);
-    // เซลที่ยังหักค่าคอมจากบิลนี้ได้ (R25) — ถามเฉพาะตอนแก้บิล · โหลดไม่ได้ก็แค่ไม่มีปุ่ม ไม่ล้มทั้งหน้าต่าง
-    const deductible = editable
-      ? await api.get(`/api/invoices/${inv.id}/sales-deductions`).then((r) => r.items.filter((a) => a.deductible)).catch(() => [])
-      : [];
+    // เซลที่ยังหักค่าคอมจากบิลนี้ได้ + สินค้าที่ยังไม่มีเซลถือดีล (R25) — ถามเฉพาะตอนแก้บิล · โหลดไม่ได้ (null) ไม่ล้มทั้งหน้าต่าง
+    const salesChoice = editable ? await api.get(`/api/invoices/${inv.id}/sales-deductions`).catch(() => null) : null;
+    const deductible = (salesChoice?.items ?? []).filter((a) => a.deductible);
     const modal = infoModal({
       title: `${inv.invoiceNo} — ${inv.franchiseUsername}${edit ? ' (แก้ไข)' : ''}`,
       width: 760,
@@ -1379,6 +1439,56 @@ export async function invoicesView() {
     // ค่าคอมเซลที่หักในบิล (R25) กับส่วนลดจริง — สองก้อนนี้รวมกันคือ discountTotal
     const toSales = inv.salesDeductionTotal ?? 0;
     const ownDiscount = Number((inv.discountTotal - toSales).toFixed(2));
+
+    /**
+     * ส่วน "หักค่าคอมเซล" ของหน้าแก้ไขบิล — ขึ้นเสมอในโหมดแก้ไขของส่วนกลาง (ลืมติ๊กตอนออกบิลก็มาหักตรงนี้ได้)
+     * มีเซลให้หัก = รายชื่อ + ปุ่ม · ไม่มี = บอกเหตุผล (หักครบแล้ว / สินค้าตัวไหนยังไม่มีเซลถือดีล / บิลล็อกแล้ว)
+     * โหมดดูเฉย ๆ ไม่มีส่วนนี้ ตามกติกา "เปิดดูไม่มีปุ่มแก้" — บรรทัดที่หักไปแล้วอยู่ในตารางด้านบนอยู่แล้ว
+     */
+    const salesDeductSection = () => {
+      if (!edit || !isSuper || inv.status === 'VOID') return '';
+      const done = inv.adjustments.filter((a) => a.isSalesDeduction);
+      const noDealSkus = salesChoice?.noDealSkus ?? [];
+      let body;
+      if (!editable) {
+        body = el('div', { class: 'sub-line' },
+          'บิลนี้แก้ไม่ได้แล้ว (มีเงินเข้าหรือมีสลิปรอตรวจ) — หักค่าคอมเซลเพิ่มหรือถอนการหักไม่ได้ ค่าคอมที่ยังไม่ได้หักให้ทำบิลค่าคอมที่หน้าเซลตามปกติ');
+      } else if (salesChoice === null) {
+        body = el('div', { class: 'sub-line', style: 'color:var(--danger)' }, 'โหลดรายชื่อเซลของบิลนี้ไม่สำเร็จ — ปิดหน้าต่างแล้วเปิด "แก้ไขบิล" ใหม่อีกครั้ง');
+      } else if (deductible.length) {
+        body = [
+          el('div', { class: 'adj-ref-list', style: 'margin-top:0' }, ...deductible.map((a) => el('div', { class: 'adj-ref-item' },
+            el('div', { style: 'min-width:0' },
+              el('strong', {}, `${a.username} — ${a.name}`),
+              el('div', { class: 'sub-line' }, salesBreakdown(a))),
+            el('span', { class: 'adj-amount', style: 'color:var(--success)' }, `−${money(a.total)}`)))),
+          noDealSkus.length
+            ? el('div', { class: 'sub-line mt-6' }, `สินค้าที่ไม่มีเซลถือดีล (ไม่มีค่าคอมให้หัก): ${noDealSkus.join(', ')}`)
+            : '',
+          el('div', { class: 'btn-row', style: 'margin-top:10px' },
+            el('button', {
+              class: 'btn sm',
+              type: 'button',
+              onclick: () => { modal.close(); salesDeductModal(inv, deductible); },
+            }, `🤝 หักค่าคอมเซลออกจากบิลนี้ (${int(deductible.length)} คน)`)),
+        ];
+      } else if (done.length) {
+        body = [
+          el('div', { class: 'sub-line' },
+            `หักค่าคอมเซลของบิลนี้ครบแล้ว (${int(done.length)} รายการ รวม ${money(toSales)} ฿) — ดูบรรทัด "หักค่าคอมเซล …" ในตารางด้านบน · ติ๊กผิดกด "ถอนการหัก" ที่บรรทัดนั้น`),
+          noDealSkus.length
+            ? el('div', { class: 'sub-line mt-6' }, `สินค้าที่ไม่มีเซลถือดีล (ไม่มีค่าคอมให้หัก): ${noDealSkus.join(', ')}`)
+            : '',
+        ];
+      } else {
+        body = noSalesToDeduct(noDealSkus);
+      }
+      return el('div', { class: 'adj-block' },
+        el('div', { class: 'sales-deduct solo' },
+          el('h3', {}, '🤝 หักค่าคอมเซล'),
+          el('div', { class: 'sub-line', style: 'margin-bottom:8px' }, SALES_DEDUCT_INTRO),
+          body));
+    };
 
     /*
      * วิธีคิดยอดรายบรรทัด — ส่วนกลางเห็น "ยอดที่กรอกไว้" (ยอดส่วนต่างที่กรอกในหน้ายอดขาย · R21) หรือ "กรอกยอดเอง" (พิมพ์ตอนออกบิล)
@@ -1469,17 +1579,10 @@ export async function invoicesView() {
 
       el('div', { style: 'display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin:18px 0 8px' },
         el('h3', {}, 'ค่าใช้จ่ายอื่น / ส่วนลด'),
-        editable ? el('div', { class: 'btn-row' },
-          // โผล่เฉพาะเมื่อยังมีเซลที่หักได้ (ลืมติ๊กตอนออกบิล / เพิ่มรายการเข้าบิลทีหลัง)
-          deductible.length ? el('button', {
-            class: 'btn ghost sm',
-            title: 'ร้านจ่ายค่าคอมให้เซลเอง — หักออกจากบิลนี้ และทำบิลค่าคอมของเซลเป็นจ่ายแล้ว',
-            onclick: () => { modal.close(); salesDeductModal(inv, deductible); },
-          }, `🤝 หักค่าคอมเซล (${int(deductible.length)})`) : '',
-          el('button', {
-            class: 'btn sm',
-            onclick: () => { modal.close(); adjustmentModal(inv); },
-          }, '+ เพิ่มรายการ')) : ''),
+        editable ? el('button', {
+          class: 'btn sm',
+          onclick: () => { modal.close(); adjustmentModal(inv); },
+        }, '+ เพิ่มรายการ') : ''),
       table([
         { label: 'รายการ', render: (a) => el('div', {}, a.label, el('div', { class: 'sub-line' }, a.note ?? a.kindLabel)) },
         {
@@ -1511,6 +1614,8 @@ export async function invoicesView() {
             : ''),
         },
       ], inv.adjustments, { empty: 'ยังไม่มีค่าใช้จ่ายอื่นหรือส่วนลดในบิลนี้' }),
+
+      salesDeductSection(),
 
       el('h3', { style: 'margin:18px 0 8px' }, 'สรุปยอดที่ต้องจ่าย'),
       breakdownTable(inv),

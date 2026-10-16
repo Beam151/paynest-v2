@@ -971,13 +971,23 @@ final class InvoiceService
     {
         $inv = self::row($invoiceId);
         if ($inv['status'] === 'VOID') {
-            return ['items' => []];
+            return ['items' => [], 'noDealSkus' => []];
         }
         $entryIds = array_column(Db::all('SELECT id FROM sales_entries WHERE invoice_id = ?', [$invoiceId]), 'id');
 
-        return ['items' => SalesAgentService::serializeDealCommissions(
-            SalesAgentService::dealCommissions((int) $inv['franchise_id'], (int) $inv['period_id'], $entryIds),
-        )];
+        return self::salesDeductionChoices((int) $inv['franchise_id'], (int) $inv['period_id'], $entryIds);
+    }
+
+    /**
+     * items = เซลที่หักได้ + ยอด · noDealSkus = สินค้าในชุดนี้ที่ยังไม่มีเซลถือดีล
+     * (หน้าเว็บโชว์กล่องหักค่าคอมเซลเสมอ — ไม่มีเซลให้ติ๊กก็ต้องบอกได้ว่าเพราะสินค้าตัวไหนยังไม่ได้ผูกดีล)
+     */
+    private static function salesDeductionChoices(int $franchiseId, int $periodId, array $entryIds): array
+    {
+        return [
+            'items'      => SalesAgentService::serializeDealCommissions(SalesAgentService::dealCommissions($franchiseId, $periodId, $entryIds)),
+            'noDealSkus' => SalesAgentService::skusWithoutDeal($entryIds),
+        ];
     }
 
     /**
@@ -988,14 +998,12 @@ final class InvoiceService
     {
         $period = Db::one('SELECT id FROM billing_periods WHERE code = ?', [Period::fromCode($periodCode)['code']]);
         if ($period === null) {
-            return ['items' => []];
+            return ['items' => [], 'noDealSkus' => []];
         }
         $pending = array_map('intval', array_column(self::pendingEntries($franchiseId, (int) $period['id']), 'id'));
         $wanted  = $entryIds === null ? $pending : array_values(array_intersect($pending, array_map('intval', $entryIds)));
 
-        return ['items' => SalesAgentService::serializeDealCommissions(
-            SalesAgentService::dealCommissions($franchiseId, (int) $period['id'], $wanted),
-        )];
+        return self::salesDeductionChoices($franchiseId, (int) $period['id'], $wanted);
     }
 
     /** หักค่าคอมเซลเพิ่มในบิลที่ออกไปแล้วและยังแก้ได้ (ลืมติ๊กตอนออก / เพิ่มรายการเข้าบิลทีหลัง) */

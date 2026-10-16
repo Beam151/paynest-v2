@@ -837,6 +837,8 @@ tr.row-flash > td { animation: row-flash 1.5s ease-out 1; }
 .adj-block .adj-row { background: var(--surface); }
 /* กล่อง "หักค่าคอมเซล" ในหน้าต่างออกบิล — อยู่ใต้แถวค่าใช้จ่าย/ส่วนลด คั่นด้วยเส้นประ ให้รู้ว่าเป็นอีกเรื่อง (ติ๊กต่อเซล) */
 .sales-deduct { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border-strong); }
+/* solo = เป็นกล่องของตัวเอง (หน้าแก้ไขบิล / หน้าต่างออกบิลตอนยังไม่มีรายการ) — ไม่ต้องมีเส้นคั่นจากแถวด้านบน */
+.sales-deduct.solo { margin-top: 0; padding-top: 0; border-top: 0; }
 .sales-deduct h3 { font-size: var(--fs-base); margin: 0 0 2px; }
 .sales-deduct .check-item { align-items: center; }
 .sales-deduct .check-item .sub-line { overflow-wrap: anywhere; }

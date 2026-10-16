@@ -4508,6 +4508,12 @@ section('หักค่าคอมเซลจากบิลร้าน (ร
   check('พรีวิวเฉพาะรายการที่ติ๊ก: คิดจากรายการนั้นเท่านั้น (ไม่ติ๊กสินค้าที่มีเหมา = ไม่มีเหมา · สินค้าไม่มีดีลไม่มีเซล)',
     pvSome.body.items?.length === 1 && of(pvSome.body.items, s1)?.total === 1000 && of(pvSome.body.items, s1).fixedAmount === null, pvSome.body);
   check('ร้านค้าดูพรีวิวค่าคอมเซลไม่ได้', (await preview('', shopTok)).status === 403);
+  // กล่องหักค่าคอมเซลขึ้นเสมอ (รุ่น 2.7.1) — ไม่มีเซลให้ติ๊กต้องบอกได้ว่าสินค้าตัวไหนยังไม่มีเซลถือดีล
+  const pvNone = await preview(`&entryIds=${e4.id}`);
+  check('พรีวิวบอกสินค้าที่ยังไม่มีเซลถือดีล (noDealSkus) — ทั้งตอนมีเซลให้ติ๊ก และตอนไม่มีเซลเลย',
+    pv.body.noDealSkus?.join() === 'D-4' && pvSome.body.noDealSkus?.join() === 'D-4'
+      && pvNone.status === 200 && pvNone.body.items?.length === 0 && pvNone.body.noDealSkus?.join() === 'D-4',
+    { all: pv.body.noDealSkus, none: pvNone.body });
 
   // ตรวจไม่ผ่าน = ไม่มีทั้งบิลร้านและบิลค่าคอม (ทรานแซกชันเดียว)
   const stale = await generate({ periodCode: P1, salesDeductions: [{ salesAgentId: s1?.id, amount: 3000 }] });
@@ -4559,6 +4565,8 @@ section('หักค่าคอมเซลจากบิลร้าน (ร
   // หักเพิ่มในบิลที่ออกแล้ว (ลืมติ๊ก) แล้วถอนการหัก
   const left = await deductibleOf(inv.body.id);
   check('บิลที่ออกแล้ว: เซลที่ยังหักได้เหลือเฉพาะคนที่ยังไม่ได้หัก', left.length === 1 && of(left, s2)?.total === 2000, left);
+  check('บิลที่ออกแล้ว: บอกสินค้าในบิลที่ยังไม่มีเซลถือดีลด้วย (หน้าแก้ไขบิลใช้อธิบายว่าทำไมไม่มีเซลให้หัก)',
+    (await api('GET', `/api/invoices/${inv.body.id}/sales-deductions`, { token: admin })).body.noDealSkus?.join() === 'D-4');
   check('ร้านค้าหักค่าคอมเซลเองไม่ได้',
     (await api('POST', `/api/invoices/${inv.body.id}/sales-deductions`, { token: shopTok, body: { salesAgentId: s2?.id } })).status === 403);
   const added = await api('POST', `/api/invoices/${inv.body.id}/sales-deductions`, { token: admin, body: { salesAgentId: s2?.id, amount: 2000 } });

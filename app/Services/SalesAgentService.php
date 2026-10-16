@@ -1063,6 +1063,34 @@ final class SalesAgentService
         return array_filter($out, static fn ($c) => $c['fixed'] !== null || array_filter($c['rows'], static fn ($r) => $r['amount_satang'] !== 0) !== []);
     }
 
+    /**
+     * รหัสสินค้าของบรรทัดยอดขายชุดนี้ที่ "ไม่มีเซลถือดีลอยู่ตอนนี้" — กล่องหักค่าคอมเซลใช้บอกว่าทำไมไม่มีชื่อเซลให้ติ๊ก
+     * (เจ้าของระบบเปิดหน้าต่างออกบิล/แก้บิลแล้วไม่เห็นอะไรเลย จึงเข้าใจว่าฟีเจอร์หาย — ต้องบอกว่าขาดดีลของสินค้าตัวไหน)
+     *
+     * @param list<int> $entryIds
+     *
+     * @return list<string>
+     */
+    public static function skusWithoutDeal(array $entryIds): array
+    {
+        $entryIds = array_values(array_unique(array_map('intval', $entryIds)));
+        if ($entryIds === []) {
+            return [];
+        }
+        $today = Period::today();
+
+        return array_column(Db::all(
+            'SELECT DISTINCT p.sku
+               FROM sales_entries se
+               JOIN products p ON p.id = se.product_id
+              WHERE se.id IN ?
+                AND NOT EXISTS (SELECT 1 FROM product_sales_links l
+                                 WHERE l.product_id = se.product_id AND l.start_date <= ? AND (l.end_date IS NULL OR l.end_date > ?))
+              ORDER BY p.sku',
+            [$entryIds, $today, $today],
+        ), 'sku');
+    }
+
     /** แบบส่งออก API ของ dealCommissions — ตัวเลือก "หักค่าคอมเซล" ในหน้าต่างออกบิล/แก้บิล (ส่วนกลางเท่านั้น) */
     public static function serializeDealCommissions(array $byAgent): array
     {
