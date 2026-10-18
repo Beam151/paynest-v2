@@ -72,6 +72,58 @@ sudo ./update.sh
 - เครื่อง aaPanel ที่มี PHP หลายรุ่น: สคริปต์อ่านรุ่นที่เว็บใช้จากไฟล์ vhost ของ aaPanel (root = `<โฟลเดอร์>/public`) ให้ cron และ reload ตรงรุ่น
   หาไม่เจอ (ยังไม่ได้ Add site) = ใช้รุ่นสูงสุดแล้วเตือน — ตั้ง `PHP_BIN=/www/server/php/82/bin/php` เองได้
 
+**อัปเดตเองอัตโนมัติเมื่อมี commit ใหม่ (ไม่บังคับ)**
+
+อย่าใส่ `./update.sh` ลง cron ตรง ๆ — มันสำรองข้อมูลและรัน `app:install` ทุกครั้งแม้ไม่มีของใหม่
+(cron ทุก 3 นาที = ได้ไฟล์สำรอง, log และ Telegram "🟢 ระบบเริ่มทำงาน" ทุก 3 นาที) — ให้ cron เช็กก่อน มี commit ใหม่ค่อยเรียก `update.sh`:
+
+1. รัน `sudo ./update.sh` เองหนึ่งครั้งก่อน (เปลี่ยนเจ้าของโค้ดเป็น root ให้ — git ของ root จึงไม่ต้องใช้ `safe.directory`)
+2. aaPanel → Cron → Add Cron → Type: Shell Script · Execution cycle: N Minutes = 3 · Script content:
+
+```sh
+#!/bin/sh
+# cron ทุก 3 นาที (root): มี commit ใหม่ค่อยเรียก update.sh — ไม่มีก็จบเงียบ ๆ
+set -eu
+
+REPO="/www/wwwroot/paynest"
+STATE="/var/lib/paynest-autoupdate"      # ของ root เท่านั้น (ไม่ใช้ writable/ ที่ www เขียนได้)
+
+log() { printf "%s %s\n" "$(date '+%F %T')" "$*"; }
+g() { git -c core.hooksPath=/dev/null -c core.fsmonitor=false -C "$REPO" "$@"; }
+
+[ "$(id -u)" = 0 ] || { log "ERROR: ต้องรันด้วย root (ตอนนี้เป็น $(id -un))"; exit 1; }
+mkdir -p "$STATE"
+
+exec 9>"$STATE/lock"
+flock -n 9 || exit 0
+
+UPSTREAM=$(g rev-parse --abbrev-ref '@{u}' 2>/dev/null) || { log "ERROR: branch ไม่มี upstream"; exit 1; }
+# timeout เรียกฟังก์ชัน g ไม่ได้ — ใส่ git เต็ม ๆ
+timeout 60 git -c core.hooksPath=/dev/null -c core.fsmonitor=false -C "$REPO" fetch --quiet origin
+OLD=$(g rev-parse HEAD)
+NEW=$(g rev-parse "$UPSTREAM")
+
+[ "$OLD" = "$NEW" ] && exit 0                                    # ไม่มีของใหม่
+[ "$(cat "$STATE/failed" 2>/dev/null)" = "$NEW" ] && exit 0      # รุ่นนี้เคยอัปเดตไม่ผ่าน — รอ commit ใหม่
+
+log "พบรุ่นใหม่ $(printf %.7s "$OLD") -> $(printf %.7s "$NEW") — เรียก update.sh"
+if bash "$REPO/update.sh"; then
+  rm -f "$STATE/failed"
+  log "Done: $(g log -1 --oneline)"
+else
+  printf '%s\n' "$NEW" > "$STATE/failed"
+  log "ERROR: update.sh ไม่สำเร็จ — ดู $REPO/writable/logs/update-*.log (ไม่ลองซ้ำจนกว่าจะมี commit ใหม่)"
+  exit 1
+fi
+```
+
+- ไม่มีของใหม่ = ไม่พิมพ์อะไร · มี = `พบรุ่นใหม่ …` ตามด้วยผลของ `update.sh` แล้ว `Done: …`
+- "Successful" ในหน้า Cron ของ aaPanel = แค่เรียก cron แล้ว ไม่ได้แปลว่าสคริปต์สำเร็จ — ดูข้อความใต้บรรทัดนั้น
+- ไฟล์โค้ดถูกแก้บนเครื่อง = `update.sh` หยุดแล้วบอกใน log (ไม่ลบให้) — แก้แล้วรอ commit ถัดไป หรือรัน `sudo ./update.sh` เอง
+- ⚠ อย่าใส่ `chown -R www:www <โฟลเดอร์>` หรือ `git -c safe.directory=…` ในสคริปต์ cron — `www` จะแก้ `.git` ได้
+  แล้ว git ที่ root รันทุก 3 นาทีจะรันโปรแกรมที่ใครวางไว้ใน `.git` ด้วยสิทธิ์ root (เว็บโดนเจาะ = ยึดเครื่องได้)
+- log ขึ้น `sudo: unable to resolve host <ชื่อเครื่อง>` = แค่คำเตือน แก้ด้วย `echo "127.0.1.1 $(hostname)" >> /etc/hosts`
+
 ค่าที่ตั้งได้ — ตัวแปรสภาพแวดล้อม หรือ `--ชื่อตัวเล็ก=ค่า` (เช่น `--db-name=paynest` `--skip-cron`) · ดูทั้งหมด: `./deploy.sh --help` `./update.sh --help`
 
 | ตัวแปร | ใช้กับ | ค่าตั้งต้น | ใช้ทำอะไร |
