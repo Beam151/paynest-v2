@@ -4673,6 +4673,46 @@ section('สัญญาเริ่มกลางรอบ · เปลี่�
   await api('DELETE', `/api/sales-entries/${ed.body.id}`, { token: admin });
   const again = await sell(d.product?.id, 600);
   check('ลบยอดเดิมแล้วกรอกใหม่ → เป็นของร้านใหม่', again.status === 201 && again.body.franchiseId === m2, again.body);
+
+  /*
+   * ย้อนวันเริ่มทับสัญญาเก่าของร้านเดียวกัน = รวมเป็นสัญญาเดียว (รุ่น 2.7.3) — เดิม 409 "ทับกับสัญญาของร้าน …" ทั้งที่เป็นร้านเดียวกัน
+   * เจ้าของระบบปิดสัญญา 1 ต.ค. เริ่มใหม่ 2 ต.ค. ร้านเดิม แล้วย้อนวันเริ่มไป 28 ก.ย. ในหน้าแก้ไขสินค้าไม่ได้
+   */
+  const contractsOf = async (productId) => (await api('GET', `/api/products/${productId}`, { token: admin })).body.assignments ?? [];
+  const e = await mkp('MID-5', m1, '2032-03-01', '2032-03-01');
+  const e2 = await assign(e.product?.id, m1, '2032-03-02');
+  const back = await api('PATCH', `/api/products/${e.product?.id}`, { token: admin, body: { assignment: { id: e2.body.id, startDate: '2032-02-27' } } });
+  const eLeft = await contractsOf(e.product?.id);
+  check('ย้อนวันเริ่มทับสัญญาเก่าของร้านเดียวกัน (1–1 มี.ค.) → บันทึกได้ รวมเป็นสัญญาเดียว 27 ก.พ. → ไม่กำหนด',
+    e2.status === 201 && back.status === 200 && back.body.assignment?.id === e2.body.id && back.body.assignment.startDate === '2032-02-27'
+      && back.body.assignment.endDate === null && back.body.assignment.mergedCount === 1
+      && eLeft.length === 1 && eLeft[0].id === e2.body.id, { back: back.body, eLeft });
+  const eSell = await sell(e.product?.id, 700, '2032-02-H2');
+  check('รวมแล้วบันทึกยอดรอบก่อนหน้า (16–29 ก.พ.) ได้ ผูกสัญญาที่รวมแล้ว', eSell.status === 201 && eSell.body.assignmentId === e2.body.id, eSell.body);
+
+  const f = await mkp('MID-6', m1, '2032-02-10', '2032-03-01');
+  const fOld = await sell(f.product?.id, 800, '2032-02-H2');
+  const f2 = await assign(f.product?.id, m1, '2032-03-02');
+  const fBack = await api('PATCH', `/api/assignments/${f2.body.id}`, { token: admin, body: { startDate: '2032-02-20' } });
+  check('ทับบางส่วน (สัญญาเก่าเริ่ม 10 ก.พ.) → ช่วงที่รวมครอบสัญญาเก่าทั้งหมด เริ่ม 10 ก.พ. · ยอดของสัญญาเก่าย้ายมาสัญญานี้ (ร้านเดิม)',
+    fOld.status === 201 && fOld.body.assignmentId === f.assignment?.id && fBack.status === 200 && fBack.body.startDate === '2032-02-10'
+      && (await api('GET', `/api/sales-entries/${fOld.body.id}`, { token: admin })).body.assignmentId === f2.body.id
+      && (await api('GET', `/api/assignments/${f.assignment?.id}`, { token: admin })).status === 404, fBack.body);
+
+  const g = await mkp('MID-7', m1, '2032-01-01', '2032-01-31');
+  const g2 = await assign(g.product?.id, m1, '2032-02-01');
+  const gOpen = await api('PATCH', `/api/assignments/${g.assignment?.id}`, { token: admin, body: { endDate: null } });
+  check('ขยายสัญญาเก่าเป็นไม่กำหนดวันจบ ทับสัญญาไม่กำหนดวันจบของร้านเดียวกัน → รวมได้ (สัญญาไม่กำหนดวันจบยังมีอันเดียว)',
+    g2.status === 201 && gOpen.status === 200 && gOpen.body.startDate === '2032-01-01' && gOpen.body.endDate === null
+      && (await contractsOf(g.product?.id)).length === 1, gOpen.body);
+
+  const h = await mkp('MID-8', m1, '2032-02-20', '2032-02-25');
+  const h2 = await assign(h.product?.id, m2, '2032-02-26');
+  await api('POST', `/api/assignments/${h2.body.id}/end`, { token: admin, body: { endDate: '2032-03-01' } });
+  const h3 = await assign(h.product?.id, m1, '2032-03-02');
+  const hBack = await api('PATCH', `/api/assignments/${h3.body.id}`, { token: admin, body: { startDate: '2032-02-15' } });
+  check('ทับทั้งสัญญาเก่าของร้านเดียวกันและของร้านอื่น → 409 บอกร้านอื่น · ไม่มีอะไรถูกรวม/ลบ',
+    hBack.status === 409 && msg(hBack).includes('midshop2') && (await contractsOf(h.product?.id)).length === 3, hBack.body);
 }
 
 section('captcha หน้าเข้าสู่ระบบ: หลาย IP ผลัดกันเดารหัสบัญชีเดียว (botnet)');

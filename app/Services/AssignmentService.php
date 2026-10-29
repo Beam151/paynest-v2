@@ -186,6 +186,18 @@ final class AssignmentService
             throw ApiException::badRequest('endDate ต้องไม่น้อยกว่า startDate');
         }
         /*
+         * ทับสัญญาของร้านเดียวกัน (ปิดสัญญาเดิม 1 ต.ค. เริ่มใหม่ 2 ต.ค. แล้วย้อนวันเริ่มไป 28 ก.ย.) = ร้านถือสินค้าต่อเนื่องอยู่แล้ว
+         * → รวมเป็นสัญญานี้สัญญาเดียว ช่วง = ครอบทั้งหมด · เดิมตอบ 409 ทับกัน แล้วย้อนวันเริ่มไม่ได้เลย (29 ต.ค. 69 · รุ่น 2.7.3)
+         * ร้านอื่นยังห้ามทับ — ตรวจด้วยช่วงที่กรอกมา (สัญญาที่รวมเข้ามาไม่ทับร้านอื่นอยู่แล้ว ช่วงที่ครอบทั้งหมดจึงไม่ทับด้วย)
+         */
+        $clash  = self::overlapping((int) $row['product_id'], $startDate, $endDate, $id);
+        $merged = array_values(array_filter($clash, static fn ($a) => (int) $a['franchise_id'] === (int) $row['franchise_id']));
+        $clash  = array_values(array_filter($clash, static fn ($a) => (int) $a['franchise_id'] !== (int) $row['franchise_id']));
+        foreach ($merged as $m) {
+            $startDate = min($startDate, $m['start_date']);
+            $endDate   = $endDate === null || $m['end_date'] === null ? null : max($endDate, $m['end_date']);
+        }
+        /*
          * ยอดขายที่บันทึกไว้แล้วผูกกับสัญญานี้ — รอบของยอดเหล่านั้นต้องยังอยู่ในช่วงสัญญาใหม่ (แบบเดียวกับตอนปิดสัญญา)
          * ไม่งั้นมียอดของรอบที่ร้านไม่ได้ถือสินค้า: บันทึกยอดรอบนั้นซ้ำ/ออกบิลรอบนั้นจะหาสัญญาไม่เจอหรือเจอของร้านอื่น
          */
@@ -201,7 +213,6 @@ final class AssignmentService
             throw ApiException::conflict('แก้วันที่แบบนี้ไม่ได้ เพราะมียอดขายของสัญญานี้บันทึกไว้แล้วในรอบ ' . Period::text($outside['code'])
                 . " ({$outside['code']}) — ช่วงสัญญาต้องยังครอบรอบนั้นอยู่");
         }
-        $clash = self::overlapping((int) $row['product_id'], $startDate, $endDate, $id);
         if ($clash !== []) {
             $c = $clash[0];
             throw ApiException::conflict(
@@ -215,18 +226,35 @@ final class AssignmentService
             ], $clash),
             );
         }
-        Db::exec(
-            'UPDATE product_assignments SET start_date = ?, end_date = ?, note = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?',
-            [$startDate, $endDate, array_key_exists('note', $patch) ? $patch['note'] : $row['note'], $id],
-        );
-        // จดค่าเดิมไว้ด้วย — หน้า "ประวัติรายการ" ต้องบอกได้ว่าย้ายวันจากไหนไปไหน
-        Audit::write($actorUserId, 'assignment.update', 'assignment', $id, [
-            ...$patch,
-            'productId' => (int) $row['product_id'],
-            'from'      => ['startDate' => $row['start_date'], 'endDate' => $row['end_date']],
-        ]);
+        Db::tx(static function () use ($id, $row, $patch, $merged, $startDate, $endDate, $actorUserId): void {
+            if ($merged !== []) {
+                // ยอดของสัญญาที่รวมเข้ามาเป็นของร้านเดียวกัน รอบเดิม — ย้ายแค่ว่าผูกสัญญาไหน (บิลค่าคอมเซลจับคู่ด้วยร้าน+รอบ ไม่กระทบ)
+                // ลบสัญญาเดิมก่อนแก้ช่วง: สัญญาไม่กำหนดวันจบมีได้ทีละหนึ่งต่อสินค้า (uq_assign_open_ended)
+                $mergedIds = array_map(static fn ($m) => (int) $m['id'], $merged);
+                Db::exec('UPDATE sales_entries SET assignment_id = ? WHERE assignment_id IN ?', [$id, $mergedIds]);
+                Db::exec('DELETE FROM product_assignments WHERE id IN ?', [$mergedIds]);
+            }
+            Db::exec(
+                'UPDATE product_assignments SET start_date = ?, end_date = ?, note = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?',
+                [$startDate, $endDate, array_key_exists('note', $patch) ? $patch['note'] : $row['note'], $id],
+            );
+            // จดค่าเดิมไว้ด้วย — หน้า "ประวัติรายการ" ต้องบอกได้ว่าย้ายวันจากไหนไปไหน · รวมสัญญาไหนเข้ามา (แถวนั้นถูกลบแล้ว)
+            Audit::write($actorUserId, 'assignment.update', 'assignment', $id, [
+                ...$patch,
+                'productId' => (int) $row['product_id'],
+                'from'      => ['startDate' => $row['start_date'], 'endDate' => $row['end_date']],
+                ...($merged === [] ? [] : [
+                    'to'     => ['startDate' => $startDate, 'endDate' => $endDate],
+                    'merged' => array_map(static fn ($m) => [
+                        'assignmentId' => (int) $m['id'],
+                        'startDate'    => $m['start_date'],
+                        'endDate'      => $m['end_date'],
+                    ], $merged),
+                ]),
+            ]);
+        });
 
-        return self::get($id);
+        return [...self::get($id), 'mergedCount' => count($merged)];
     }
 
     /**

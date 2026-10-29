@@ -130,13 +130,16 @@ class Products extends BaseApiController
         unset($body['assignment']);
 
         return $this->json(Db::tx(static function () use ($productId, $body, $assignment, $actor) {
+            $contract = null;
             if ($assignment !== null) {
                 $assignmentId = $assignment['id'];
                 unset($assignment['id']);
-                AssignmentService::update($assignmentId, $assignment, $actor, $productId);
+                $contract = AssignmentService::update($assignmentId, $assignment, $actor, $productId);
             }
+            $product = ProductService::update($productId, $body, $actor);
 
-            return ProductService::update($productId, $body, $actor);
+            // สัญญาที่แก้ (วันที่จริงหลังรวมกับสัญญาเดิมของร้านเดียวกัน อาจกว้างกว่าที่กรอก) — หน้าเว็บใช้บอกผลการบันทึก
+            return $contract === null ? $product : [...$product, 'assignment' => $contract];
         }));
     }
 

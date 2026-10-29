@@ -330,7 +330,7 @@ export async function productsView() {
             type: 'date',
             required: true,
             value: contract.startDate,
-            hint: 'ย้อนวันเริ่มได้ ถ้าต้องบันทึกยอดของรอบก่อนหน้า · ห้ามทับช่วงที่ร้านอื่นถือสินค้านี้',
+            hint: 'ย้อนวันเริ่มได้ ถ้าต้องบันทึกยอดของรอบก่อนหน้า · ห้ามทับช่วงที่ร้านอื่นถือสินค้านี้ · ทับสัญญาเก่าของร้านเดียวกัน = รวมเป็นสัญญาเดียว',
           },
           {
             name: 'contractEnd',
@@ -369,7 +369,7 @@ export async function productsView() {
         const group = picker.payload();
         // ส่งวันที่ไปเฉพาะเมื่อเปลี่ยนจริง — เซิร์ฟเวอร์บันทึกพร้อมตัวสินค้าในครั้งเดียว ติดข้อไหนก็ไม่มีอะไรถูกบันทึก
         const datesChanged = contract && (contractStart !== contract.startDate || (contractEnd || null) !== contract.endDate);
-        await api.patch(`/api/products/${product.id}`, {
+        const saved = await api.patch(`/api/products/${product.id}`, {
           ...fields,
           description: description === '' ? null : description,
           ...group,
@@ -378,8 +378,11 @@ export async function productsView() {
         const note = group.isGroup === false
           ? ` — ${product.sku} เลิกเป็นสินค้ากลุ่มแล้ว`
           : group.itemProductIds ? ` — สินค้ากลุ่ม ${product.sku} มี ${group.itemProductIds.length} รายการย่อย` : '';
-        const dateNote = datesChanged
-          ? ` — สัญญากับ ${contract.franchiseUsername} ${dateTh(contractStart)} → ${contractEnd ? dateTh(contractEnd) : 'ไม่กำหนด'}`
+        // วันที่จากเซิร์ฟเวอร์ — ทับสัญญาเก่าของร้านเดียวกันแล้วรวมกัน ช่วงจริงอาจกว้างกว่าที่กรอก
+        const a = saved.assignment;
+        const dateNote = a
+          ? ` — สัญญากับ ${a.franchiseUsername} ${dateTh(a.startDate)} → ${a.endDate ? dateTh(a.endDate) : 'ไม่กำหนด'}`
+            + (a.mergedCount ? ` (รวมสัญญาเก่าของร้านเดียวกัน ${a.mergedCount} สัญญาเข้าด้วยกัน)` : '')
           : '';
         toast(`บันทึกแล้ว${note}${dateNote}`, 'success');
         render();
