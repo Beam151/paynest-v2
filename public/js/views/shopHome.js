@@ -200,9 +200,15 @@ function thanksCard(paid) {
 export async function receiptModal(invoiceId) {
   const inv = await api.get(`/api/invoices/${invoiceId}`);
   const paidAll = inv.outstanding <= 0 && inv.status === 'PAID';
+  /*
+   * บิล USD: ร้านโอนเป็นเหรียญ แต่ระบบบันทึกเงินเข้าเป็นบาท (ยอดที่แจ้ง × อัตราที่ตรึงไว้กับบิล)
+   * หารกลับด้วยอัตราเดียวกันจึงได้ยอดเหรียญที่ร้านโอนจริงของแต่ละงวด — ร้านเทียบกับประวัติกระเป๋าได้ตรง ๆ
+   */
+  const usd = inv.isUsd && inv.usdRate ? (baht) => Number((baht / inv.usdRate).toFixed(2)) : null;
+  const paidUsd = usd ? Number(inv.payments.reduce((t, p) => t + usd(p.amount), 0).toFixed(2)) : null;
   infoModal({
     title: `ใบรับเงิน — ${inv.invoiceNo}`,
-    width: 560,
+    width: usd ? 640 : 560,
     content: el('div', { class: 'receipt' },
       el('div', { class: 'receipt-head' },
         el('div', {},
@@ -212,11 +218,20 @@ export async function receiptModal(invoiceId) {
       table([
         { label: 'วันที่รับ', render: (p) => dateTh(p.paidAt?.slice(0, 10)) },
         { label: 'ช่องทาง', render: (p) => el('div', {}, p.method ?? 'โอนเงิน', p.reference ? el('div', { class: 'sub-line' }, `อ้างอิง ${p.reference}`) : '') },
-        { label: 'จำนวน', num: true, render: (p) => money(p.amount) },
-      ], inv.payments, { sortable: false, empty: 'ยังไม่มีรายการรับเงิน', footer: ['รวมที่ได้รับ', '', money(inv.paid)] }),
+        { label: usd ? 'จำนวน (บาท)' : 'จำนวน', num: true, render: (p) => money(p.amount) },
+        usd && { label: 'จำนวน (เหรียญ)', num: true, render: (p) => `$${money(usd(p.amount))}` },
+      ].filter(Boolean), inv.payments, {
+        sortable: false,
+        empty: 'ยังไม่มีรายการรับเงิน',
+        footer: ['รวมที่ได้รับ', '', money(inv.paid), ...(usd ? [`$${money(paidUsd)}`] : [])],
+      }),
       el('div', { class: 'receipt-foot' },
-        el('div', {}, el('span', { class: 'muted' }, 'ยอดบิล '), el('strong', {}, `${money(inv.netTotal)} ฿`)),
-        el('div', {}, el('span', { class: 'muted' }, 'คงเหลือ '), el('strong', {}, `${money(Math.max(0, inv.outstanding))} ฿`))),
+        el('div', {}, el('span', { class: 'muted' }, 'ยอดบิล '), el('strong', {}, `${money(inv.netTotal)} ฿`),
+          usd ? el('span', { class: 'muted' }, ` · $${money(inv.payAmount)}`) : ''),
+        el('div', {}, el('span', { class: 'muted' }, 'คงเหลือ '), el('strong', {}, `${money(Math.max(0, inv.outstanding))} ฿`),
+          usd ? el('span', { class: 'muted' }, ` · $${money(inv.payOutstanding)}`) : '')),
+      usd ? el('p', { class: 'sub-line', style: 'margin:8px 0 0;text-align:center' },
+        `ยอดเหรียญคิดจากอัตรา ${money(inv.usdRate)} ฿/USD ที่ตรึงไว้กับบิลนี้`) : '',
       el('p', { class: 'sub-line', style: 'margin:14px 0 0;text-align:center' },
         'ทางเราได้รับเงินตามรายการข้างต้นเรียบร้อยแล้ว ขอบคุณครับ')),
   });
