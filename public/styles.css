@@ -384,6 +384,30 @@ tfoot .usd-note { font-size: var(--fs-xs); color: var(--muted); }
 .stat.tone-warn   { --tone: var(--danger);  --tone-soft: var(--danger-soft);  --tone-text: var(--danger); }
 .stat.tone-muted  { --tone: var(--border-strong);        --tone-soft: var(--surface-3);             --tone-text: var(--text); }
 
+/*
+ * ที่มาของยอดในการ์ด "สมดุล" หน้าภาพรวม — บาทคู่เหรียญ (ดอลลาร์) เป็นตารางเล็ก
+ * การ์ดแคบ (ห้าใบต่อแถวบนจอเล็ก) สามคอลัมน์ไม่พอ: ซ่อนหัวตาราง ย้ายยอดเหรียญลงไปใต้ยอดบาท
+ */
+.stat-breakdown { container-type: inline-size; margin-top: 10px; padding-top: 9px; border-top: 1px dashed var(--border); }
+.sb-grid {
+  display: grid; grid-template-columns: 1fr auto auto; row-gap: 2px;
+  font-size: var(--fs-xs); font-variant-numeric: tabular-nums; color: var(--text-2);
+}
+.sb-grid > span { white-space: nowrap; }
+/* ระยะห่างคอลัมน์ใช้ padding ไม่ใช่ column-gap — เส้นบนของบรรทัดรวมจะได้ต่อกันเป็นเส้นเดียว */
+.sb-grid .num { text-align: right; padding-left: 12px; }
+.sb-grid .head { color: var(--muted); font-weight: 600; }
+.sb-grid .in { color: var(--success); }
+.sb-grid .out { color: var(--danger); }
+.sb-grid .total { font-weight: 700; color: var(--text); border-top: 1px solid var(--border); padding-top: 3px; margin-top: 2px; }
+@container (max-width: 240px) {
+  .sb-grid { grid-template-columns: 1fr auto; row-gap: 0; }
+  .sb-grid .head { display: none; }
+  .sb-grid .num { grid-column: 2; }
+  .sb-grid .usd { opacity: .75; margin-bottom: 3px; }
+  .sb-grid .usd.total { border-top: 0; padding-top: 0; margin-top: 0; }
+}
+
 .delta { font-size: var(--fs-sm); font-weight: 700; font-variant-numeric: tabular-nums; }
 .delta.up { color: var(--success); }
 .delta.down { color: var(--danger); }
@@ -1275,6 +1299,7 @@ tr.bill-group-head > td, tr.bill-group-head > th {
   .period-bar select { flex: 1; min-width: 0; }
 
   .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .stat-grid > .stat-wide { grid-column: 1 / -1; } /* การ์ดที่มีตารางที่มาของยอด — ครึ่งจอแคบไป */
   .stat { padding: 12px 13px 13px; }
   .stat .value { font-size: 19px; }
   .stat .sub { font-size: var(--fs-sm); }

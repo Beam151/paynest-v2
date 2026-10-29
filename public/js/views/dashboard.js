@@ -1,5 +1,5 @@
 import { api, qs, session } from '../api.js';
-import { badge, card, dateTh, delta, el, iconFor, int, money, pct, periodBar, stat, table, totalCell, usdText } from '../ui.js';
+import { badge, card, dateTh, delta, dollars, el, iconFor, int, money, pct, periodBar, stat, table, totalCell, usdText } from '../ui.js';
 import { avatar, barTrend, colorFor, donut, gauge, shareBar } from '../charts.js';
 import { periodLabel, periodOptions, periodShort, setWorkingPeriod, shiftPeriod, workingPeriod } from '../period.js';
 import { render } from '../app.js';
@@ -210,16 +210,36 @@ function balanceStat(s) {
  */
 function surplusStat(current, s) {
   const total = Number((current.commissionAmount + s.balance).toFixed(2));
-  const usd = current.commissionAmountUsd === null || s.balanceUsd === null
+  const totalUsd = current.commissionAmountUsd === null || s.balanceUsd === null
     ? null
     : Number((current.commissionAmountUsd + s.balanceUsd).toFixed(2));
-  return stat('สมดุล', `${signed(total)} ฿`,
-    `ส่วนต่าง ${money(current.commissionAmount)} ${s.balance < 0 ? '−' : '+'} ${money(Math.abs(s.balance))}`,
-    { tone: total >= 0 ? 'income' : 'warn', icon: total >= 0 ? '✓' : '⚠', usd });
+
+  // ตารางที่มาของยอด: บาทคู่เหรียญทุกบรรทัด · ยังไม่เคยตั้งอัตรา (null) = "—"
+  const usd = (n, plus = false) => (n === null ? '—' : `${plus && n > 0 ? '+' : ''}${dollars(n)}`);
+  const row = (label, thb, usdText, cls = '') => [
+    el('span', { class: cls }, label),
+    el('span', { class: `num ${cls}` }, thb),
+    el('span', { class: `num usd ${cls}` }, usdText),
+  ];
+  const breakdown = el('div', { class: 'stat-breakdown' },
+    el('div', { class: 'sb-grid' },
+      row('', 'บาท', 'เหรียญ', 'head'),
+      row('ส่วนต่าง', money(current.commissionAmount), usd(current.commissionAmountUsd)),
+      row('รายรับอื่น', plusMinus(s.income), usd(s.incomeUsd, true), 'in'),
+      row('รายจ่าย', plusMinus(-s.expense), usd(s.expenseUsd === null ? null : -s.expenseUsd), 'out'),
+      row('สมดุล', signed(total), usd(totalUsd), 'total')));
+
+  const node = stat('สมดุล', `${signed(total)} ฿`, breakdown,
+    { tone: total >= 0 ? 'income' : 'warn', icon: total >= 0 ? '✓' : '⚠', usd: totalUsd });
+  node.classList.add('stat-wide');
+  return node;
 }
 
 /** ยอดเงินที่อาจติดลบ — ใช้เครื่องหมายลบตัวยาว "−" แบบเดียวกับ dollars() */
 const signed = (n) => `${n < 0 ? '−' : ''}${money(Math.abs(n))}`;
+
+/** ยอดเข้า/ออกในตารางที่มา — ติด +/− ให้เห็นทิศ ยอดศูนย์ไม่ติดเครื่องหมาย (เลี่ยง "−0.00") */
+const plusMinus = (n) => `${n > 0 ? '+' : ''}${signed(n)}`;
 
 /** คอลัมน์ค่าใช้จ่าย/ส่วนลด — เลี่ยง "+0.00 / −0.00" ที่อ่านแล้วต้องหยุดคิดว่าแปลว่าอะไร */
 const adjustmentColumn = {
