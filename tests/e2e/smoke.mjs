@@ -1295,6 +1295,7 @@ check('สรุปกำไรจริง = เก็บได้จริง 
   && ledger.body.summary.income === 500
   && ledger.body.summary.net === Number((ledger.body.summary.collected + 500 - 2000).toFixed(2)),
   ledger.body.summary);
+check('สมดุลของสมุด = รายรับอื่น − รายจ่าย (ไม่นับเงินจากบิล)', ledger.body.summary.balance === -1500, ledger.body.summary);
 
 check('ร้านค้าเปิดสมุดรายรับ-รายจ่ายไม่ได้',
   (await api('GET', `/api/ledger?periodCode=${LP}`, { token: tokenA })).status === 403);

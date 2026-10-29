@@ -144,6 +144,7 @@ export async function dashboardView() {
       // ยอดค้างเป็นของทุกรอบ ไม่ใช่รอบนี้ — บอกไว้บนการ์ดเลย ไม่งั้นดูเหมือนตัวเลขของรอบที่เลือก
       stat('ร้านยังไม่จ่าย (ทุกรอบ)', money(data.outstanding.amount) + ' ฿',
         `${int(data.outstanding.invoices)} ใบเรียกเก็บ`, { tone: 'due', icon: '⏳', usd: data.outstanding.amountUsd }),
+      balanceStat(ledger.summary),
       stat('เหลือเป็นของร้าน', money(data.current.netAmount) + ' ฿', 'ยอดเต็มหักส่วนต่างแล้ว',
         { tone: 'muted', icon: '🏪', usd: data.current.netAmountUsd })),
 
@@ -192,6 +193,17 @@ export async function dashboardView() {
     compareCard,
     card('สินค้าขายดีในรอบนี้', topProductTable(data.topProducts), { tight: true }),
     ledgerCard(ledger, periodCode));
+}
+
+/**
+ * สมดุลของสมุดรายรับ-รายจ่ายในรอบนี้ = รายรับอื่น − รายจ่าย (สองกล่องกลางของหน้า ledger)
+ * ไม่นับเงินที่เก็บจากบิล — ดูว่าต้นทุนของเรากินเงินไปเท่าไรเมื่อหักรายรับอื่นแล้ว
+ */
+function balanceStat(s) {
+  const sign = s.balance < 0 ? '−' : '';
+  return stat('สมดุล', `${sign}${money(Math.abs(s.balance))} ฿`,
+    `รายรับอื่น ${money(s.income)} − รายจ่าย ${money(s.expense)}`,
+    { tone: s.balance >= 0 ? 'income' : 'warn', icon: '📒', usd: s.balanceUsd });
 }
 
 /** คอลัมน์ค่าใช้จ่าย/ส่วนลด — เลี่ยง "+0.00 / −0.00" ที่อ่านแล้วต้องหยุดคิดว่าแปลว่าอะไร */

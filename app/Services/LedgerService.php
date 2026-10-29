@@ -170,12 +170,15 @@ final class LedgerService
                 'collected' => $collected,
                 // กำไรจริง = เงินที่เก็บเข้ามาได้จริง + รายรับอื่น − รายจ่าย
                 'net' => Money::round2($collected + $income - $expense),
-                // ยอดเทียบดอลลาร์ของห้าตัวบน (null = ยังไม่เคยตั้งอัตรา) — ดู App\Libraries\Usd
+                // สมดุลของสมุดเอง = รายรับอื่น − รายจ่าย (ไม่นับเงินจากบิล) — การ์ด "สมดุล" หน้าภาพรวม
+                'balance' => Money::round2($income - $expense),
+                // ยอดเทียบดอลลาร์ของตัวบน (null = ยังไม่เคยตั้งอัตรา) — ดู App\Libraries\Usd
                 'expenseUsd'   => $expenseUsd,
                 'incomeUsd'    => $incomeUsd,
                 'billedUsd'    => Usd::fromCents($row['billed_usd_cents'] ?? null),
                 'collectedUsd' => $collectedUsd,
                 'netUsd'       => $collectedUsd === null ? null : Money::round2($collectedUsd + $incomeUsd - $expenseUsd),
+                'balanceUsd'   => $incomeUsd === null ? null : Money::round2($incomeUsd - $expenseUsd),
             ],
         ];
     }
