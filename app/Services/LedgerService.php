@@ -170,7 +170,7 @@ final class LedgerService
                 'collected' => $collected,
                 // กำไรจริง = เงินที่เก็บเข้ามาได้จริง + รายรับอื่น − รายจ่าย
                 'net' => Money::round2($collected + $income - $expense),
-                // สมดุลของสมุดเอง = รายรับอื่น − รายจ่าย (ไม่นับเงินจากบิล) — การ์ด "สมดุล" หน้าภาพรวม
+                // สมดุลของสมุดเอง = รายรับอื่น − รายจ่าย (ไม่นับเงินจากบิล) — การ์ด "รายรับ-รายจ่าย" หน้าภาพรวม
                 'balance' => Money::round2($income - $expense),
                 // ยอดเทียบดอลลาร์ของตัวบน (null = ยังไม่เคยตั้งอัตรา) — ดู App\Libraries\Usd
                 'expenseUsd'   => $expenseUsd,

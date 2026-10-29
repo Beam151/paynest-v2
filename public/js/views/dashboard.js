@@ -201,7 +201,7 @@ export async function dashboardView() {
  */
 function balanceStat(s) {
   const sign = s.balance < 0 ? '−' : '';
-  return stat('สมดุล', `${sign}${money(Math.abs(s.balance))} ฿`,
+  return stat('รายรับ-รายจ่าย', `${sign}${money(Math.abs(s.balance))} ฿`,
     `รายรับอื่น ${money(s.income)} − รายจ่าย ${money(s.expense)}`,
     { tone: s.balance >= 0 ? 'income' : 'warn', icon: '📒', usd: s.balanceUsd });
 }
