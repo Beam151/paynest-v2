@@ -145,8 +145,7 @@ export async function dashboardView() {
       stat('ร้านยังไม่จ่าย (ทุกรอบ)', money(data.outstanding.amount) + ' ฿',
         `${int(data.outstanding.invoices)} ใบเรียกเก็บ`, { tone: 'due', icon: '⏳', usd: data.outstanding.amountUsd }),
       balanceStat(ledger.summary),
-      stat('เหลือเป็นของร้าน', money(data.current.netAmount) + ' ฿', 'ยอดเต็มหักส่วนต่างแล้ว',
-        { tone: 'muted', icon: '🏪', usd: data.current.netAmountUsd })),
+      surplusStat(data.current, ledger.summary)),
 
     card('ใบเรียกเก็บของรอบนี้',
       table([
@@ -200,11 +199,27 @@ export async function dashboardView() {
  * ไม่นับเงินที่เก็บจากบิล — ดูว่าต้นทุนของเรากินเงินไปเท่าไรเมื่อหักรายรับอื่นแล้ว
  */
 function balanceStat(s) {
-  const sign = s.balance < 0 ? '−' : '';
-  return stat('รายรับ-รายจ่าย', `${sign}${money(Math.abs(s.balance))} ฿`,
+  return stat('รายรับ-รายจ่าย', `${signed(s.balance)} ฿`,
     `รายรับอื่น ${money(s.income)} − รายจ่าย ${money(s.expense)}`,
     { tone: s.balance >= 0 ? 'income' : 'warn', icon: '📒', usd: s.balanceUsd });
 }
+
+/**
+ * สมดุล = ส่วนต่างที่เรียกเก็บ + (รายรับอื่น − รายจ่าย) ของรอบนี้
+ * รายจ่ายมากกว่ารายรับอื่น = ส่วนต่างถูกหักลง · รายรับอื่นมากกว่า = บวกเพิ่ม
+ */
+function surplusStat(current, s) {
+  const total = Number((current.commissionAmount + s.balance).toFixed(2));
+  const usd = current.commissionAmountUsd === null || s.balanceUsd === null
+    ? null
+    : Number((current.commissionAmountUsd + s.balanceUsd).toFixed(2));
+  return stat('สมดุล', `${signed(total)} ฿`,
+    `ส่วนต่าง ${money(current.commissionAmount)} ${s.balance < 0 ? '−' : '+'} ${money(Math.abs(s.balance))}`,
+    { tone: total >= 0 ? 'income' : 'warn', icon: total >= 0 ? '✓' : '⚠', usd });
+}
+
+/** ยอดเงินที่อาจติดลบ — ใช้เครื่องหมายลบตัวยาว "−" แบบเดียวกับ dollars() */
+const signed = (n) => `${n < 0 ? '−' : ''}${money(Math.abs(n))}`;
 
 /** คอลัมน์ค่าใช้จ่าย/ส่วนลด — เลี่ยง "+0.00 / −0.00" ที่อ่านแล้วต้องหยุดคิดว่าแปลว่าอะไร */
 const adjustmentColumn = {
