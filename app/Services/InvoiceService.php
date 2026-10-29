@@ -726,6 +726,28 @@ final class InvoiceService
     }
 
     /**
+     * หัวบิลผ่อนกว่ากติกาแก้ยอดอยู่ข้อเดียว: บิลที่ร้านทยอยจ่าย (PARTIAL) ยังเปลี่ยนบัญชี / วันครบกำหนด / หมายเหตุได้
+     * ยอดที่เหลือยังต้องโอนเข้าที่ไหนสักที่ — บัญชีปิดไปหรือต้องเลื่อนวันให้ร้าน จะมาบังคับยกเลิกบิลไม่ได้ (มีเงินเข้าแล้วยกเลิกไม่ได้อยู่แล้ว)
+     * เงินที่จ่ายไปแล้วไม่ถูกแตะ เพราะสลิปแต่ละใบจดบัญชี ณ ตอนแจ้งไว้เอง (bank_snapshot)
+     * ที่ยังล็อกเหมือนเดิม: มีสลิปรอตรวจ (ร้านเพิ่งโอนเข้าบัญชีเดิม กำลังรอเทียบ) และสกุลเงิน (ยอดที่จ่ายไปแล้วแปลงตามสกุลเดิม)
+     */
+    private static function assertHeaderEditable(array $inv, array $patch): void
+    {
+        if ($inv['status'] !== 'PARTIAL') {
+            self::assertEditable($inv);
+
+            return;
+        }
+        self::assertShopNotDeleted(Db::one('SELECT username, status FROM franchises WHERE id = ?', [$inv['franchise_id']]) ?? []);
+        if (Db::int("SELECT COUNT(*) FROM payment_submissions WHERE invoice_id = ? AND status = 'PENDING'", [$inv['id']]) > 0) {
+            throw ApiException::conflict('มีสลิปรอตรวจสอบอยู่ — ตรวจให้เสร็จ หรือให้ร้านยกเลิกการแจ้งก่อนจึงจะแก้บิลได้');
+        }
+        if (array_key_exists('currency', $patch) && $patch['currency'] !== $inv['currency']) {
+            throw ApiException::conflict('ร้านจ่ายมาแล้ว ' . Money::fmt(Money::toBaht((int) $inv['paid_satang'])) . ' บาท — เปลี่ยนสกุลเงินของบิลไม่ได้ (เปลี่ยนบัญชี/วันครบกำหนดได้)');
+        }
+    }
+
+    /**
      * ร้านที่ลบแล้ว: บิลเก่าเป็นประวัติอ่านอย่างเดียว — ลบได้เฉพาะตอนไม่มีบิลค้าง จึงเหลือแค่บิลที่จ่ายครบ/ยอด 0/ยกเลิกแล้ว
      * แก้/เพิ่มยอดทีหลัง = สร้างหนี้ให้ร้านที่ไม่มีใครเข้าระบบมาจ่ายได้
      */
@@ -767,8 +789,7 @@ final class InvoiceService
 
     /**
      * แก้ข้อมูลหัวบิลที่ไม่เกี่ยวกับตัวเลขยอดขาย — บัญชีปลายทาง วันครบกำหนด หมายเหตุ สกุลที่ให้จ่าย
-     * กติกาเดียวกับการแก้ยอด: แก้ได้เฉพาะตอนที่ยังไม่มีเงินเข้าและไม่มีสลิปรอตรวจ
-     * (ถ้าร้านโอนไปแล้ว การเปลี่ยนบัญชีปลายทางจะทำให้สลิปที่ถืออยู่ไม่ตรงกับบิล)
+     * กติกาเดียวกับการแก้ยอด (ยังไม่มีเงินเข้าและไม่มีสลิปรอตรวจ) ยกเว้นบิลที่ชำระบางส่วน — ดู assertHeaderEditable
      *
      * เปลี่ยนบัญชีปลายทาง = เปลี่ยนว่าเงินไปเข้าที่ไหน จึงแจ้งกลุ่ม Telegram ส่วนกลาง (ปิดไม่ได้) และขึ้นแถบเตือนในเว็บ
      * แต่ "ไม่" ส่งเลขบัญชีใหม่ให้ร้านเอง — ข้อความ Telegram ที่ร้านถืออยู่คือหลักฐานนอกระบบที่ร้านใช้เทียบก่อนโอน
@@ -778,7 +799,7 @@ final class InvoiceService
     public static function updateHeader(int $id, array $patch, array $user): array
     {
         $inv = self::row($id);
-        self::assertEditable($inv);
+        self::assertHeaderEditable($inv, $patch);
         $sets        = [];
         $params      = [];
         $bankChanged = false;

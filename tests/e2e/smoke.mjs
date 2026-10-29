@@ -1642,8 +1642,30 @@ check('บิลที่ยังไม่มีเงินขยับ เป
   moved.body.bankAccount?.id === bank2.body.id && moved.body.dueDate === '2027-01-31',
   { bank: moved.body.bankAccount?.accountNumber, due: moved.body.dueDate });
 
-check('ร้านจ่ายมาแล้ว เปลี่ยนบัญชีไม่ได้', (await api('PATCH', `/api/invoices/${paidBill.body.id}`, {
-  token: admin, body: { bankAccountId: bank2.body.id },
+// ร้านทยอยจ่าย (ชำระบางส่วน): ยอดยังล็อก แต่ยอดที่เหลือต้องเปลี่ยนบัญชี/เลื่อนวันได้ — มีเงินเข้าแล้วยกเลิกบิลไม่ได้ ไม่มีทางอื่น
+const partBefore = await api('GET', `/api/invoices/${paidBill.body.id}`, { token: admin });
+const partMoved = await api('PATCH', `/api/invoices/${paidBill.body.id}`, {
+  token: admin, body: { bankAccountId: bank2.body.id, dueDate: '2027-03-15', currency: 'THB' },
+});
+check('ชำระบางส่วนแล้ว ยังเปลี่ยนบัญชีและวันครบกำหนดได้ (ส่งสกุลเดิมมาด้วยไม่นับเป็นการแก้)',
+  partMoved.status === 200 && partMoved.body.status === 'PARTIAL'
+    && partMoved.body.bankAccount?.id === bank2.body.id && partMoved.body.dueDate === '2027-03-15', partMoved.body);
+check('ชำระบางส่วนแล้ว สลิปที่อนุมัติไปยังจดบัญชี ณ ตอนแจ้งไว้ ไม่ย้ายตามบัญชีใหม่',
+  partBefore.body.submissions.length > 0 && partMoved.body.submissions?.length === partBefore.body.submissions.length
+    && partMoved.body.submissions.every((s, i) => s.bankAccountLabel === partBefore.body.submissions[i].bankAccountLabel),
+  partMoved.body.submissions?.map((s) => s.bankAccountLabel));
+check('ชำระบางส่วนแล้ว เปลี่ยนสกุลเงินไม่ได้', (await api('PATCH', `/api/invoices/${paidBill.body.id}`, {
+  token: admin, body: { currency: 'USD' },
+})).status === 409);
+const partSlip = await api('POST', '/api/payments', {
+  token: tokenA, body: { invoiceId: paidBill.body.id, amount: 500, paidAt: '2026-09-22', slipUrl: slip },
+});
+check('ชำระบางส่วนแต่มีสลิปรอตรวจ แก้หัวบิลไม่ได้', (await api('PATCH', `/api/invoices/${paidBill.body.id}`, {
+  token: admin, body: { dueDate: '2027-03-31' },
+})).status === 409);
+await api('POST', `/api/payments/${partSlip.body.id}/cancel`, { token: tokenA });
+check('ชำระครบแล้ว แก้หัวบิลไม่ได้', (await api('PATCH', `/api/invoices/${inv.body.id}`, {
+  token: admin, body: { dueDate: '2027-03-31' },
 })).status === 409);
 check('มีสลิปรอตรวจ เปลี่ยนบัญชีไม่ได้', (await api('PATCH', `/api/invoices/${slipBill.body.id}`, {
   token: admin, body: { bankAccountId: bank2.body.id },

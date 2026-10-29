@@ -41,6 +41,12 @@ const STATUS_FILTERS = [
  */
 const canEditInvoice = (inv) => inv.status === 'OPEN' && inv.paid === 0 && !inv.pendingSubmissions;
 
+/**
+ * หัวบิล (บัญชีปลายทาง / วันครบกำหนด / หมายเหตุ) ผ่อนกว่าข้อเดียว: ร้านทยอยจ่ายมาแล้ว (ชำระบางส่วน) ก็ยังแก้ได้
+ * ยอดที่เหลือยังต้องมีบัญชีให้โอนและวันครบกำหนด — แต่สกุลเงินล็อก และมีสลิปรอตรวจก็ยังห้ามเหมือนเดิม (กติกาเดียวกับเซิร์ฟเวอร์)
+ */
+const canEditBillHeader = (inv) => canEditInvoice(inv) || (inv.status === 'PARTIAL' && !inv.pendingSubmissions);
+
 /** ยกเลิกได้ตราบใดที่ยังไม่มีเงินเข้า (เงินเข้าแล้วต้องคืนเงินก่อน ระบบยังไม่รองรับ) */
 const canVoidInvoice = (inv) => inv.status !== 'VOID' && inv.paid === 0;
 
@@ -1672,7 +1678,7 @@ export async function invoicesView() {
         !isSuper && inv.outstanding > 0 ? accountCheckNotice(inv) : '',
         bankAccountBox(inv.bankAccount, { shopWarning: !isSuper }),
         superActions ? telegramAccountStatus(inv, reopen) : '',
-        editable
+        edit && canEditBillHeader(inv)
           ? el('div', { class: 'btn-row', style: 'margin-top:8px;justify-content:center' },
             el('button', {
               class: 'btn ghost sm',
@@ -1717,7 +1723,7 @@ export async function invoicesView() {
 
   /**
    * แก้ข้อมูลหัวบิลที่ไม่ใช่ตัวเลข — บัญชีปลายทาง วันครบกำหนด หมายเหตุ
-   * เซิร์ฟเวอร์ใช้กติกาเดียวกับการแก้ยอด จึงกดได้เฉพาะบิลที่ยังไม่มีเงินขยับ
+   * กดได้ตาม canEditBillHeader: บิลที่ยังไม่มีเงินขยับ หรือร้านจ่ายมาบางส่วนแล้ว (บัญชี/วันครบกำหนดใช้กับยอดที่เหลือ)
    */
   const billSettingsModal = (inv) => formModal({
     title: `แก้ข้อมูลบิล — ${inv.invoiceNo}`,
@@ -1736,9 +1742,13 @@ export async function invoicesView() {
           { value: 'THB', label: 'บาท (THB)' },
           { value: 'USD', label: 'ดอลลาร์ (USD)' },
         ],
-        hint: inv.usdRate
-          ? `อัตราที่ตรึงไว้กับใบนี้ ${money(inv.usdRate)} ฿/USD`
-          : 'รอบนี้ยังไม่ได้ตั้งอัตราแลกเปลี่ยน — เลือกดอลลาร์ไม่ได้จนกว่าจะตั้งที่แถบรอบบิล',
+        // ร้านจ่ายมาบางส่วนแล้ว — ยอดที่จ่ายไปแปลงตามสกุลเดิม เปลี่ยนกลางทางยอดที่ร้านเห็นจะไม่ต่อกัน (เซิร์ฟเวอร์ก็ล็อก)
+        disabled: inv.paid > 0,
+        hint: inv.paid > 0
+          ? `ร้านจ่ายมาแล้ว ${money(inv.paid)} ฿ — เปลี่ยนสกุลไม่ได้แล้ว`
+          : inv.usdRate
+            ? `อัตราที่ตรึงไว้กับใบนี้ ${money(inv.usdRate)} ฿/USD`
+            : 'รอบนี้ยังไม่ได้ตั้งอัตราแลกเปลี่ยน — เลือกดอลลาร์ไม่ได้จนกว่าจะตั้งที่แถบรอบบิล',
       },
       {
         name: 'bankAccountId',
@@ -1754,7 +1764,10 @@ export async function invoicesView() {
             ? usable.map((b) => ({ value: String(b.id), label: bankOptionLabel(b) }))
             : [{ value: '', label: `— ยังไม่มีบัญชีที่รับ${v.currency === 'USD' ? 'ดอลลาร์' : 'บาท'} —` }];
         },
-        hint: 'ร้านจะเห็นบัญชีนี้บนบิลและในหน้าจ่ายเงิน',
+        // เงินที่จ่ายไปแล้วไม่ย้ายตาม — สลิปแต่ละใบจดบัญชี ณ ตอนแจ้งไว้เอง
+        hint: inv.paid > 0
+          ? `ใช้กับยอดที่เหลือ ${money(inv.outstanding)} ฿ — เงินที่ร้านจ่ายมาแล้วยังบันทึกว่าเข้าบัญชีเดิม`
+          : 'ร้านจะเห็นบัญชีนี้บนบิลและในหน้าจ่ายเงิน',
       },
       { name: 'dueDate', label: 'ครบกำหนดชำระ', type: 'date', value: inv.dueDate },
       { name: 'note', label: 'หมายเหตุ', value: inv.note ?? '' },
@@ -1785,12 +1798,15 @@ export async function invoicesView() {
 
       const changedCurrency = currency !== (inv.currency ?? 'THB');
       const changedAccount = picked.id !== inv.bankAccount?.id;
+      // ร้านทยอยจ่ายอยู่ = ที่ต้องโอนต่อคือยอดที่เหลือ ไม่ใช่ยอดเต็มของบิล
+      const owed = inv.paid > 0 ? inv.outstanding : inv.netTotal;
       return el('div', { class: 'notice-box m-0' },
         changedCurrency || changedAccount ? '⚠ สิ่งที่ร้านจะเห็นเปลี่ยนไป' : 'ข้อมูลเดิมของบิลใบนี้',
         el('div', { class: 'mt-4' },
+          inv.paid > 0 ? 'ยอดที่เหลือ ' : '',
           el('strong', {}, currency === 'USD'
-            ? `$${money(inv.netTotal / inv.usdRate)} (= ${money(inv.netTotal)} ฿)`
-            : `${money(inv.netTotal)} ฿`)),
+            ? `$${money(owed / inv.usdRate)} (= ${money(owed)} ฿)`
+            : `${money(owed)} ฿`)),
         // กระเป๋า USD โชว์ที่อยู่เต็ม — ในช่องเลือกย่อไว้ ต้องเห็นครบทุกตัวอักษรก่อนกดบันทึก
         el('div', { style: 'margin-top:2px' }, el('strong', { class: isWallet(picked) ? 'wallet-address' : '' }, accountLabel(picked))),
         /*
@@ -1926,6 +1942,13 @@ export async function invoicesView() {
         // ปุ่มแก้/ยกเลิกโผล่เฉพาะตอนที่ทำได้จริง จะได้ไม่กดแล้วเจอข้อความปฏิเสธ
         isSuper && canEditInvoice(r)
           ? el('button', { class: 'btn sm', onclick: () => detailModal(r, { edit: true }) }, 'แก้ไขบิล') : '',
+        // ร้านทยอยจ่ายมาแล้ว — แก้ยอดไม่ได้ แต่ยอดที่เหลือยังเปลี่ยนบัญชี/เลื่อนวันครบกำหนดได้ เปิดหน้าต่างนั้นตรง ๆ
+        isSuper && !canEditInvoice(r) && canEditBillHeader(r)
+          ? el('button', {
+            class: 'btn sm',
+            title: 'เปลี่ยนบัญชี / วันครบกำหนด — ร้านจ่ายมาบางส่วนแล้ว แก้ยอดไม่ได้',
+            onclick: () => billSettingsModal(r),
+          }, 'แก้ไข') : '',
         // มีสลิปค้างอยู่ก็จัดการได้จากแถวนี้เลย ไม่ต้องไปหาเองในอีกแท็บ
         isSuper && r.pendingSubmissions
           ? el('button', {
