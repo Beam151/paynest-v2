@@ -1675,9 +1675,6 @@ check('ชำระครบแล้ว แก้หัวบิลไม่ไ
  * ปิดยอด — ร้านทยอยจ่ายแล้วเหลือเศษค้าง ส่วนกลางปิดบิลได้พร้อมหมายเหตุ
  * ยอดค้างกลายเป็นส่วนลด "ปิดยอด" ไม่ใช่เงินเข้า: เงินที่ได้รับจริงต้องเท่าเดิม
  */
-check('บิลที่ยังไม่มีเงินเข้า ปิดยอดไม่ได้ (แก้บิลใส่ส่วนลด/ยกเลิกแทน)', (await api('POST', `/api/invoices/${freshBill.body.id}/close-balance`, {
-  token: admin, body: { note: 'ทดสอบปิดยอด' },
-})).status === 409);
 check('ปิดยอดต้องใส่หมายเหตุ', (await api('POST', `/api/invoices/${paidBill.body.id}/close-balance`, {
   token: admin, body: { note: ' ' },
 })).status === 400);
@@ -1798,6 +1795,36 @@ const k3Out = kLine(kForgiven.body, (a) => a.isCloseOut);
 check('เปลี่ยนยอดยกไปที่ยังไม่ขึ้นบิลเป็นส่วนลดได้ — ไม่รอขึ้นบิลอีก บิลยังชำระครบ',
   kForgiven.status === 200 && kForgiven.body.status === 'PAID' && k3Out?.carryForward === false && k3Out.kindLabel === 'ปิดยอด'
     && (await kRow(k3.body.id))?.carryPending === 0, kForgiven.body);
+
+/*
+ * บิลค้างชำระ (ยังไม่มีเงินเข้า) ก็ปิดยอดได้ — ปิดทั้งใบ บิลกลายเป็นยอด 0
+ * บิลยอด 0 ยังแก้ได้ตามกติกาเดิม (รับยอดที่กรอกทีหลัง) แต่บรรทัดปิดยอดต้องลบไม่ได้ และปิดซ้ำไม่ได้
+ */
+const k4 = await kBill('2033-02-H2', 40000);
+const k4Closed = await api('POST', `/api/invoices/${k4.body.id}/close-balance`, { token: admin, body: { note: 'ยกให้ร้านทั้งใบ', mode: 'DISCOUNT' } });
+const k4Out = kLine(k4Closed.body, (a) => a.isCloseOut);
+check('บิลค้างชำระปิดยอดเป็นส่วนลดได้ทั้งใบ — ชำระครบ ยอด 0 ไม่มีเงินเข้า',
+  k4Closed.status === 200 && k4Closed.body.status === 'PAID' && k4Closed.body.netTotal === 0 && k4Closed.body.paid === 0
+    && k4Out?.amount === 4000 && k4Out.kindLabel === 'ปิดยอด', k4Closed.body);
+const k4Del = await api('DELETE', `/api/invoices/${k4.body.id}/adjustments/${k4Out?.id}`, { token: admin });
+check('บรรทัดปิดยอดลบไม่ได้ (บิลยอด 0 ยังแก้ได้ แต่ปิดแล้วย้อนไม่ได้)', k4Del.status === 409 && /ปิดยอด/.test(k4Del.body?.error ?? ''), k4Del.body);
+check('บิลที่ปิดยอดแล้ว ปิดซ้ำไม่ได้',
+  (await api('POST', `/api/invoices/${k4.body.id}/close-balance`, { token: admin, body: { note: 'ปิดซ้ำ' } })).status === 409);
+
+// ยกทั้งใบไปงวดถัดไป — ยอดขึ้นบิลอื่นแล้ว ยกเลิกบิลต้นทางไม่ได้ (รายการกลับมาออกบิลใหม่ = ร้านโดนเก็บซ้ำ)
+const k5 = await kBill('2033-03-H1', 50000);
+const k5Closed = await api('POST', `/api/invoices/${k5.body.id}/close-balance`, { token: admin, body: { note: 'จ่ายพร้อมบิลหน้า', mode: 'CARRY' } });
+check('บิลค้างชำระยกทั้งใบไปงวดถัดไปได้ — ชำระครบ ยอด 0 ยอดรอขึ้นบิล',
+  k5Closed.status === 200 && k5Closed.body.status === 'PAID' && k5Closed.body.netTotal === 0 && (await kRow(k5.body.id))?.carryPending === 5000,
+  k5Closed.body);
+const k6 = await kBill('2033-03-H2', 60000);
+check('ยอดทั้งใบที่ยกมาขึ้นบิลงวดถัดไป (6,000 + 5,000)', k6.body.netTotal === 11000 && k6.body.carriedIn === 5000, k6.body);
+const k5Void = await api('POST', `/api/invoices/${k5.body.id}/void`, { token: admin, body: { reason: 'ทดสอบยกเลิกบิลที่ยกยอดไปแล้ว' } });
+check('ยอดของบิลนี้ขึ้นบิลอื่นแล้ว → ยกเลิกบิลต้นทางไม่ได้', k5Void.status === 409 && k5Void.body?.error?.includes(k6.body.invoiceNo), k5Void.body);
+// ปิดบิลสุดท้ายทั้งใบ — ร้านนี้ต้องไม่มีบิลค้างเหลือไปรบกวนเทสต์อื่น
+const k6Closed = await api('POST', `/api/invoices/${k6.body.id}/close-balance`, { token: admin, body: { note: 'ปิดท้ายเทสต์' } });
+check('บิลที่มียอดค้างยกมา ปิดทั้งใบได้ (ยอดยกมารวมอยู่ในยอดที่ปิด)',
+  k6Closed.body.status === 'PAID' && kLine(k6Closed.body, (a) => a.isCloseOut)?.amount === 11000, k6Closed.body);
 check('มีสลิปรอตรวจ เปลี่ยนบัญชีไม่ได้', (await api('PATCH', `/api/invoices/${slipBill.body.id}`, {
   token: admin, body: { bankAccountId: bank2.body.id },
 })).status === 409);

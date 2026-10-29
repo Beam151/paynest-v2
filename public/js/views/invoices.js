@@ -47,11 +47,18 @@ const canEditInvoice = (inv) => inv.status === 'OPEN' && inv.paid === 0 && !inv.
  */
 const canEditBillHeader = (inv) => canEditInvoice(inv) || (inv.status === 'PARTIAL' && !inv.pendingSubmissions);
 
-/** ปิดยอดได้เฉพาะบิลชำระบางส่วนที่ไม่มีสลิปรอตรวจ (ยังไม่มีเงินเข้า = แก้บิลใส่ส่วนลด/ยกเลิกได้อยู่แล้ว) — กติกาเดียวกับเซิร์ฟเวอร์ */
-const canCloseBalance = (inv) => inv.status === 'PARTIAL' && !inv.pendingSubmissions;
+/**
+ * ปิดยอดได้ทั้งบิลค้างชำระ (ปิดทั้งใบ) และชำระบางส่วน — ไม่มีสลิปรอตรวจ และยังไม่เคยปิด (ปิดได้ครั้งเดียว) · กติกาเดียวกับเซิร์ฟเวอร์
+ * ต้องมีรายการค่าใช้จ่าย/ส่วนลดของบิล (adjustments) จึงใช้ได้เฉพาะในหน้าต่างดูบิล ไม่ใช่แถวในตาราง
+ */
+const canCloseBalance = (inv) => ['OPEN', 'PARTIAL'].includes(inv.status) && !inv.pendingSubmissions
+  && !(inv.adjustments ?? []).some((a) => a.isCloseOut);
 
-/** ยกเลิกได้ตราบใดที่ยังไม่มีเงินเข้า (เงินเข้าแล้วต้องคืนเงินก่อน ระบบยังไม่รองรับ) */
-const canVoidInvoice = (inv) => inv.status !== 'VOID' && inv.paid === 0;
+/**
+ * ยกเลิกได้ตราบใดที่ยังไม่มีเงินเข้า (เงินเข้าแล้วต้องคืนเงินก่อน ระบบยังไม่รองรับ)
+ * ยกเว้นบิลที่ปิดยอดแบบยกไปงวดถัดไปแล้วยอดขึ้นบิลอื่นไปแล้ว (ยกไป > ที่ยังรอ) — ยกเลิกแล้วร้านโดนเก็บซ้ำ เซิร์ฟเวอร์ก็กัน
+ */
+const canVoidInvoice = (inv) => inv.status !== 'VOID' && inv.paid === 0 && !((inv.carriedOut ?? 0) > (inv.carryPending ?? 0));
 
 const lockReason = (inv) => {
   if (inv.status === 'VOID') return 'ใบนี้ถูกยกเลิกไปแล้ว แก้ไขไม่ได้';
@@ -152,7 +159,8 @@ export async function invoicesView() {
    * หน้าออกบิลต้องบอกก่อนกด ไม่งั้นยอดในบิลที่ออกมาไม่ตรงกับที่เห็นในหน้าต่าง
    */
   const carryInFor = (franchiseId, periodCode) => {
-    const from = allInvoices.filter((r) => String(r.franchiseId) === String(franchiseId) && r.carryPending > 0 && r.periodCode < periodCode);
+    const from = allInvoices.filter((r) => String(r.franchiseId) === String(franchiseId) && r.status !== 'VOID'
+      && r.carryPending > 0 && r.periodCode < periodCode);
     return { total: Number(from.reduce((t, r) => t + r.carryPending, 0).toFixed(2)), invoiceNos: from.map((r) => r.invoiceNo) };
   };
 
@@ -1646,8 +1654,8 @@ export async function invoicesView() {
         },
         {
           label: '',
-          // ยอดค้างยกมามีที่อยู่ที่เดียว ลบไม่ได้ (เซิร์ฟเวอร์ก็กัน) — ไม่เก็บแล้วให้ใส่ส่วนลดแทน
-          render: (a) => (editable && !a.isCarriedIn
+          // ยอดค้างยกมามีที่อยู่ที่เดียว / ปิดยอดแล้วย้อนไม่ได้ — ลบไม่ได้ทั้งคู่ (เซิร์ฟเวอร์ก็กัน)
+          render: (a) => (editable && !a.isCarriedIn && !a.isCloseOut
             ? el('button', {
               class: 'btn ghost sm',
               // ถอนการหักค่าคอม = บิลค่าคอมของเซลถูกยกเลิกด้วย — บอกก่อนกด ไม่ใช่ลบเหมือนส่วนลดทั่วไป
@@ -1752,7 +1760,10 @@ export async function invoicesView() {
           ? `${isSuper ? 'ยังไม่ได้รับเงิน' : 'ยังค้างชำระ'} ${money(inv.outstanding)} ฿ `
             + `จากทั้งหมด ${money(inv.netTotal)} ฿`
             + (inv.isOverdue ? ` · เลยกำหนดมาแล้ว ${int(inv.daysOverdue)} วัน` : '')
-          : `${isSuper ? 'ได้รับเงินครบ' : 'ชำระครบ'} ${money(inv.netTotal)} ฿ แล้ว`,
+          // บิลค้างชำระที่ปิดทั้งใบ — ไม่มีเงินเข้าเลย "ได้รับเงินครบ 0.00 ฿" อ่านแล้วงง
+          : closeOut && !inv.paid
+            ? (isSuper ? 'ปิดยอดทั้งใบแล้ว — ไม่มียอดต้องเก็บจากบิลนี้' : 'บิลนี้ไม่มียอดต้องชำระแล้ว')
+            : `${isSuper ? 'ได้รับเงินครบ' : 'ชำระครบ'} ${money(inv.netTotal)} ฿ แล้ว`,
         inv.outstanding > 0
           ? el('div', { class: 'sub-line mt-4' },
             isSuper
@@ -1762,7 +1773,7 @@ export async function invoicesView() {
                   onclick: (e) => { e.preventDefault(); modal.close(); jumpToTab('slips'); },
                 }, 'สลิปรอตรวจ →'))
               : el('span', {}, 'โอนเงินแล้วกดปุ่ม "ชำระเงิน" ที่บิลใบนี้ได้เลย'))
-          : closeOut
+          : closeOut && inv.status !== 'VOID'
             ? el('div', { class: 'sub-line mt-4' },
               closeOut.carryForward
                 ? `ยกยอดค้าง ${money(closeOut.amount)} ฿ ไปเก็บ${closeOut.carriedTo ? `ที่บิล ${closeOut.carriedTo}` : 'ในบิลงวดถัดไป (ยังไม่ได้ออกบิล)'}`
@@ -1773,7 +1784,7 @@ export async function invoicesView() {
          * ยกไปงวดถัดไปแล้วแต่ยังไม่มีบิลไหนรับ (เช่นร้านเลิกขาย) — ทางออกเดียวคือไม่เก็บ เปลี่ยนเป็นส่วนลด
          * ขึ้นบิลไปแล้วปุ่มนี้หาย: ไปจัดการที่บิลที่รับยอดไป
          */
-        isSuper && closeOut?.carryForward && !closeOut.carriedTo
+        isSuper && closeOut?.carryForward && !closeOut.carriedTo && inv.status !== 'VOID'
           ? el('div', { class: 'btn-row', style: 'margin-top:10px;justify-content:center' },
             el('button', {
               class: 'btn ghost sm',
@@ -1790,7 +1801,7 @@ export async function invoicesView() {
           : '',
         /*
          * ปิดยอด — ข้อยกเว้นของ "เปิดดูไม่มีปุ่มแก้": บิลชำระบางส่วนเข้าโหมดแก้ไม่ได้ (ปุ่ม "แก้ไข" ในแถวเปิดแค่บัญชี/วันครบกำหนด)
-         * และกล่องนี้คือที่ที่เห็นยอดค้างพอดี
+         * และกล่องนี้คือที่ที่เห็นยอดค้างพอดี — บิลค้างชำระก็ใช้ปุ่มเดียวกันตรงนี้ (ทั้งโหมดดูและโหมดแก้) ที่เดียวทุกสถานะ
          */
         isSuper && canCloseBalance(inv)
           ? el('div', { class: 'btn-row', style: 'margin-top:10px;justify-content:center' },
@@ -1811,8 +1822,8 @@ export async function invoicesView() {
     .sort((a, b) => a.periodCode.localeCompare(b.periodCode))[0] ?? null;
 
   /**
-   * ปิดยอดบิลที่ร้านทยอยจ่ายแล้วเหลือค้าง (เช่นเศษจากอัตราแลกเปลี่ยน) — บิลจึงชำระครบ เลือกได้ว่ายอดค้างเป็น
-   *   ส่วนลด (ไม่เก็บแล้ว) หรือ ยกไปเก็บงวดถัดไป (ขึ้นบิลงวดหลังเป็น "ยอดค้างยกมา")
+   * ปิดยอดบิลที่ยังค้าง — บิลจึงชำระครบ เลือกได้ว่ายอดค้างเป็น ส่วนลด (ไม่เก็บแล้ว) หรือ ยกไปเก็บงวดถัดไป (ขึ้นบิลงวดหลังเป็น "ยอดค้างยกมา")
+   *   ชำระบางส่วน = ปิดส่วนที่เหลือ (เช่นเศษจากอัตราแลกเปลี่ยน) · ค้างชำระ (ยังไม่มีเงินเข้า) = ปิดทั้งใบ บิลกลายเป็นยอด 0
    * ไม่ใช่เงินเข้า รายงานเงินที่ได้รับไม่เปลี่ยน · หมายเหตุบังคับ ร้านเห็นในบิล · ย้อนไม่ได้ จึงบอกให้ครบก่อนกด
    */
   const closeBalanceModal = (inv) => formModal({
@@ -1820,11 +1831,11 @@ export async function invoicesView() {
     submitLabel: 'ปิดยอด',
     fields: [{
       name: 'mode',
-      label: 'ยอดค้างที่เหลือ',
+      label: inv.paid ? 'ยอดค้างที่เหลือ' : 'ยอดทั้งใบ (ยังไม่มีเงินเข้า)',
       type: 'select',
       value: 'DISCOUNT',
       options: [
-        { value: 'DISCOUNT', label: 'เป็นส่วนลด — ไม่เก็บส่วนที่เหลือ' },
+        { value: 'DISCOUNT', label: inv.paid ? 'เป็นส่วนลด — ไม่เก็บส่วนที่เหลือ' : 'เป็นส่วนลด — ไม่เก็บบิลนี้' },
         { value: 'CARRY', label: 'ยกไปเก็บงวดถัดไป — บวกเข้าบิลงวดถัดไปของร้าน' },
       ],
     }, {
@@ -1840,11 +1851,19 @@ export async function invoicesView() {
     preview: (v) => {
       const carry = v.mode === 'CARRY';
       const next = carry ? nextEditableBill(inv) : null;
+      // ยังไม่มีเงินเข้า = ปิดทั้งใบ บิลกลายเป็นยอด 0 · ไม่เก็บทั้งใบต้องบอกทางที่ถูกกว่าเมื่อตัวเลขในบิลผิด (แก้ไข/ยกเลิกแล้วออกใหม่)
+      const whole = !inv.paid;
       return el('div', { class: carry ? 'notice-box m-0' : 'alert-box m-0' },
-        `${inv.franchiseUsername} · ปิดยอดค้าง `,
+        `${inv.franchiseUsername} · ${whole ? 'ปิดยอดทั้งใบ' : 'ปิดยอดค้าง'} `,
         el('strong', {}, `${money(inv.outstanding)} ฿`),
         inv.isUsd ? ` ($${money(inv.payOutstanding)})` : '',
-        ` — ได้รับแล้ว ${money(inv.paid)} ฿ บิลจะเป็น "ชำระครบ"`,
+        whole
+          ? ' — ยังไม่ได้รับเงินจากบิลนี้ บิลจะเป็น "ชำระครบ" ยอด 0'
+          : ` — ได้รับแล้ว ${money(inv.paid)} ฿ บิลจะเป็น "ชำระครบ"`,
+        whole && !carry
+          ? el('div', { class: 'mt-4' }, el('strong', {}, 'ร้านไม่ต้องจ่ายบิลนี้เลย'),
+            ' — ถ้าตัวเลขในบิลผิด ให้ใช้ "แก้ไขบิล" หรือยกเลิกแล้วออกใหม่แทน')
+          : '',
         el('div', { class: 'sub-line mt-4' }, carry
           ? [
             'ยอดค้างยังเป็นหนี้ของร้าน — ',

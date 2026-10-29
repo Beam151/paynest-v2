@@ -39,7 +39,7 @@ final class InvoiceService
                (SELECT COALESCE(SUM(cadj.amount_satang), 0) FROM invoice_adjustments cadj
                  WHERE cadj.invoice_id = i.id AND cadj.carry_forward = 1) AS carried_out_satang,
                (SELECT COALESCE(SUM(cadj.amount_satang), 0) FROM invoice_adjustments cadj
-                 WHERE cadj.invoice_id = i.id AND cadj.carry_forward = 1
+                 WHERE cadj.invoice_id = i.id AND cadj.carry_forward = 1 AND i.status <> 'VOID'
                    AND NOT EXISTS (SELECT 1 FROM invoice_adjustments ch JOIN invoices ni ON ni.id = ch.invoice_id
                                     WHERE ch.carried_from_id = cadj.id AND ni.status <> 'VOID')) AS carry_pending_satang,
                (SELECT COALESCE(SUM(cadj.amount_satang), 0) FROM invoice_adjustments cadj
@@ -936,6 +936,13 @@ final class InvoiceService
             if ($row['carried_from_id'] !== null) {
                 throw ApiException::conflict('ยอดค้างยกมาจากบิลก่อนลบไม่ได้ — ถ้าไม่เก็บแล้วให้ใส่ส่วนลดแทน (ยกเลิกบิลนี้ = ยอดกลับไปรอขึ้นบิลใบถัดไป)');
             }
+            /*
+             * ปิดยอดแล้วย้อนไม่ได้ — มาถึงตรงนี้ได้แค่บิลค้างชำระที่ปิดทั้งใบ (บิลยอด 0 ยังไม่มีเงินเข้า จึงยังแก้ได้)
+             * บรรทัดที่ยกไปขึ้นบิลอื่นแล้วลบไม่ได้อยู่แล้ว (บรรทัดยอดยกมาชี้กลับมา) — กันทุกแบบให้เป็นกติกาเดียว
+             */
+            if ((int) $row['closes_balance'] === 1) {
+                throw ApiException::conflict('บรรทัดปิดยอดลบไม่ได้ — ถ้าปิดผิด ให้ยกเลิกบิลแล้วออกใหม่');
+            }
             Db::exec('DELETE FROM invoice_adjustments WHERE id = ?', [$adjustmentId]);
             // บรรทัด "หักค่าคอมเซล": ถอนการหัก = บิลค่าคอมที่เกิดจากการหักถูกยกเลิก รายการกลับไปรอทำบิลค่าคอม/หักใหม่
             $salesCommissionId = $row['sales_commission_id'] === null ? null : (int) $row['sales_commission_id'];
@@ -1301,6 +1308,20 @@ final class InvoiceService
         if ((int) $inv['paid_satang'] > 0) {
             throw ApiException::conflict('ใบเรียกเก็บที่มีการชำระแล้วยกเลิกไม่ได้');
         }
+        /*
+         * บิลค้างชำระที่ปิดทั้งใบแบบยกไปงวดถัดไป แล้วยอดไปขึ้นบิลอื่นแล้ว — ยกเลิกใบนี้ รายการยอดขายกลับมาออกบิลใหม่ได้
+         * ร้านจะโดนเก็บยอดเดียวกันซ้ำสองที่ (ในบิลใหม่ + ยอดค้างยกมาในบิลนั้น) · ยังไม่ขึ้นบิลไหน = ยกเลิกได้ ยอดที่รอหายไปพร้อมใบนี้
+         */
+        $carriedTo = Db::val(
+            "SELECT ni.invoice_no FROM invoice_adjustments co
+               JOIN invoice_adjustments ch ON ch.carried_from_id = co.id
+               JOIN invoices ni            ON ni.id = ch.invoice_id
+              WHERE co.invoice_id = ? AND co.carry_forward = 1 AND ni.status <> 'VOID' LIMIT 1",
+            [$id],
+        );
+        if ($carriedTo !== null) {
+            throw ApiException::conflict("ยอดค้างของบิลนี้ยกไปขึ้นบิล {$carriedTo} แล้ว — ยกเลิกบิล {$carriedTo} ก่อน ไม่งั้นร้านจะโดนเก็บยอดนี้ซ้ำ");
+        }
         // บิลยอด 0 ของร้านที่ลบแล้ว — ยกเลิกแล้วยอดขายจะกลับไปเป็น "ยังไม่ออกบิล" ของร้านที่ไม่มีอยู่ (ไม่มีใครออกบิลใหม่ได้อีก)
         self::assertShopNotDeleted(Db::one('SELECT username, status FROM franchises WHERE id = ?', [$inv['franchise_id']]) ?? []);
 
@@ -1328,19 +1349,17 @@ final class InvoiceService
     }
 
     /**
-     * ปิดยอดบิลที่ร้านทยอยจ่ายแล้วเหลือค้าง (เช่นเศษจากอัตราแลกเปลี่ยนตอนโอนเหรียญ) — ใส่บรรทัดส่วนลด "ปิดยอด" เท่ากับยอดค้าง บิลจึงชำระครบ
+     * ปิดยอดบิลที่ยังค้าง (เช่นเศษจากอัตราแลกเปลี่ยนตอนโอนเหรียญ) — ใส่บรรทัดส่วนลด "ปิดยอด" เท่ากับยอดค้าง บิลจึงชำระครบ
      * ไม่ใช่เงินเข้า: ไม่แตะ invoice_payments รายงานเงินที่ได้รับจริงไม่เพี้ยน · หมายเหตุบังคับ และร้านเห็นในบิล
-     * เฉพาะบิลชำระบางส่วน — ยังไม่มีเงินเข้าแก้บิล/ยกเลิกได้อยู่แล้ว · มีสลิปรอตรวจต้องตรวจก่อน (สลิปนั้นอาจปิดยอดได้เองด้วยเงินจริง)
-     * ย้อนไม่ได้: บิลชำระครบที่มีเงินเข้าแล้วแก้รายการไม่ได้ ตามกติกาเดิม
+     * ทั้งบิลชำระบางส่วน และบิลค้างชำระที่ยังไม่มีเงินเข้า (ปิดทั้งใบ → บิลยอด 0) · มีสลิปรอตรวจต้องตรวจก่อน (สลิปนั้นอาจปิดยอดได้เองด้วยเงินจริง)
+     * ปิดได้ครั้งเดียวต่อบิล และย้อนไม่ได้: บรรทัดปิดยอดลบไม่ได้ (removeAdjustment) — บิลยอด 0 ที่ปิดผิดให้ยกเลิกแล้วออกใหม่
      */
     public static function closeBalance(int $id, string $note, array $user, string $mode = 'DISCOUNT'): array
     {
         $carry = $mode === 'CARRY';
         $inv   = self::row($id);
-        if ($inv['status'] !== 'PARTIAL') {
-            throw ApiException::conflict($inv['status'] === 'OPEN'
-                ? 'บิลนี้ยังไม่มีเงินเข้า — ใช้ "แก้ไขบิล" ใส่ส่วนลด หรือยกเลิกบิลแทน'
-                : 'ปิดยอดได้เฉพาะบิลที่ชำระบางส่วน (บิลนี้' . ($inv['status'] === 'PAID' ? 'ชำระครบแล้ว' : 'ถูกยกเลิกแล้ว') . ')');
+        if (! in_array($inv['status'], ['OPEN', 'PARTIAL'], true)) {
+            throw ApiException::conflict('ปิดยอดได้เฉพาะบิลที่ยังค้างชำระ (บิลนี้' . ($inv['status'] === 'PAID' ? 'ชำระครบแล้ว' : 'ถูกยกเลิกแล้ว') . ')');
         }
         self::assertShopNotDeleted(Db::one('SELECT username, status FROM franchises WHERE id = ?', [$inv['franchise_id']]) ?? []);
 
@@ -1351,12 +1370,19 @@ final class InvoiceService
                 throw ApiException::conflict('มีสลิปรอตรวจสอบอยู่ — ตรวจให้เสร็จก่อนจึงจะปิดยอดได้');
             }
             /*
+             * ปิดได้ครั้งเดียว — บิลยอด 0 ที่ปิดไปแล้วยังรับรายการที่กรอกทีหลังได้ (กลับมาค้างอีก) แต่ใบนั้นยังไม่มีเงินเข้า
+             * จึงแก้บิลใส่ส่วนลดได้ตามปกติ ไม่ต้องมีบรรทัดปิดยอดสองบรรทัดที่ต้องไล่ว่ายกไปไหนบ้าง
+             */
+            if (Db::int('SELECT COUNT(*) FROM invoice_adjustments WHERE invoice_id = ? AND closes_balance = 1', [$id]) > 0) {
+                throw ApiException::conflict('บิลนี้ปิดยอดไปแล้ว — ยอดที่เพิ่มเข้ามาทีหลังให้ใช้ "แก้ไขบิล" ใส่ส่วนลดแทน');
+            }
+            /*
              * คิดยอดใหม่ก่อน 1 รอบ: recalc หักเครดิตที่ร้านมีค้าง (เราติดค้างร้าน) เข้าบิลเสมอ
              * ถ้าปิดยอดจากตัวเลขเดิม รอบที่สองจะหักเครดิตซ้อนจนเงินที่จ่ายแล้วเกินยอดบิล — ใช้เครดิตก่อน ที่เหลือจึงปิดยอด
              */
             self::recalc($id, $user);
             $inv = self::row($id);
-            if ($inv['status'] !== 'PARTIAL') {
+            if (! in_array($inv['status'], ['OPEN', 'PARTIAL'], true)) {
                 throw ApiException::conflict('บิลนี้เพิ่งเปลี่ยนสถานะ (อาจมียอดยกมาจากรอบก่อนหักจนครบ) — ปิดหน้าต่างแล้วเปิดใหม่อีกครั้ง');
             }
             $remaining = (int) $inv['net_total_satang'] - (int) $inv['paid_satang'];
@@ -1446,7 +1472,11 @@ final class InvoiceService
     public static function forgiveCarry(int $id, array $user): array
     {
         return Db::tx(static function () use ($id, $user) {
-            Db::one('SELECT id FROM invoices WHERE id = ? FOR UPDATE', [$id]);
+            $inv = Db::one('SELECT id, status FROM invoices WHERE id = ? FOR UPDATE', [$id]) ?? throw ApiException::notFound('ไม่พบใบเรียกเก็บ');
+            // ยกเลิกบิลแล้ว ยอดที่รอยกไปหายไปพร้อมใบนั้นอยู่แล้ว (pendingCarries ไม่นับต้นทางที่ยกเลิก)
+            if ($inv['status'] === 'VOID') {
+                throw ApiException::conflict('บิลนี้ถูกยกเลิกแล้ว — ยอดที่ยกไปไม่ได้รอขึ้นบิลอยู่แล้ว');
+            }
             $row = Db::one('SELECT * FROM invoice_adjustments WHERE invoice_id = ? AND carry_forward = 1', [$id])
                 ?? throw ApiException::notFound('บิลนี้ไม่มียอดที่ยกไปเก็บงวดถัดไป');
             $to = Db::val(
