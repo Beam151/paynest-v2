@@ -1,7 +1,7 @@
 import { api, qs, session } from '../api.js';
 import {
   alertBanner, badge, card, confirmAction, dateTh, dateTimeTh, el, field, flashRows, formModal, infoModal,
-  int, money, pct, periodBar, stat, sumUsd, table, toast, usdOf, usdText,
+  dollars, int, money, pct, periodBar, stat, sumUsd, table, toast, usdOf, usdText,
 } from '../ui.js';
 import { periodLabel, periodOf, periodOptions, setWorkingPeriod, storedWorkingPeriod, todayIso, workingPeriod } from '../period.js';
 import {
@@ -2179,7 +2179,7 @@ export async function invoicesView() {
 
   const billsInPeriod = allInvoices.filter((r) => !periodFilter || r.periodCode === periodFilter).length;
 
-  /** การ์ดตัวเลขของแท็บที่เปิดอยู่ — 3 ใบพอ ให้เหลือที่ไว้ดูตารางจริง */
+  /** การ์ดตัวเลขของแท็บที่เปิดอยู่ — แถวเดียวพอ ให้เหลือที่ไว้ดูตารางจริง */
   function statCards() {
     const scope = periodFilter ? `รอบ ${periodLabel(periodFilter)}` : 'ทุกรอบ';
 
@@ -2228,6 +2228,7 @@ export async function invoicesView() {
       stat(isSuper ? 'ยังไม่ได้รับ' : 'ยังค้างชำระ', money(shown.outstanding) + ' ฿',
         shown.overdueCount ? `เลยกำหนดแล้ว ${int(shown.overdueCount)} ใบ` : null,
         { tone: shown.outstanding > 0 ? 'due' : 'income', icon: shown.outstanding > 0 ? '⏳' : '✓', usd: shown.outstandingUsd }),
+      isSuper && currencySplitStat(active),
     ];
   }
 
@@ -2381,4 +2382,27 @@ export async function invoicesView() {
         : '',
 
     superTabBody ?? '');
+}
+
+/**
+ * ยอดเรียกเก็บแยกตามสกุลที่ให้ร้านจ่าย (แท็บบิลของส่วนกลาง) — บิล USD เป็นดอลลาร์จริงตามอัตราที่ตรึงไว้ ไม่ใช่ยอดเทียบ
+ * ใช้ payAmount/payOutstanding ตัวเดียวกับที่โชว์บนบิล ผลรวมจึงตรงกับที่ร้านต้องโอน
+ */
+function currencySplitStat(rows) {
+  const sum = (list, pick) => Number(list.reduce((t, r) => t + pick(r), 0).toFixed(2));
+  const groups = [
+    { label: 'USD', rows: rows.filter((r) => r.isUsd), fmt: dollars },
+    { label: 'บาท', rows: rows.filter((r) => !r.isUsd), fmt: (n) => `${money(n)} ฿` }, // ฿ ไม่หลุดไปขึ้นบรรทัดใหม่คนเดียว
+  ].map((g) => {
+    const billed = sum(g.rows, (r) => r.payAmount);
+    const left = sum(g.rows, (r) => r.payOutstanding);
+    return { ...g, billed, left, received: Number((billed - left).toFixed(2)) };
+  });
+  const both = (key) => groups.map((g) => g.fmt(g[key])).join(' · ');
+
+  return stat('เรียกเก็บแยกสกุลเงิน',
+    el('div', { class: 'value-split' }, ...groups.map((g) => el('div', {},
+      g.fmt(g.billed), el('span', { class: 'split-tag' }, `${g.label} · ${int(g.rows.length)} ใบ`)))),
+    [el('div', {}, `ได้รับแล้ว ${both('received')}`), el('div', {}, `ยังไม่ได้รับ ${both('left')}`)],
+    { tone: 'sales', icon: '💳' });
 }

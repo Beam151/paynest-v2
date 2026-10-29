@@ -408,6 +408,10 @@ tfoot .usd-note { font-size: var(--fs-xs); color: var(--muted); }
   .sb-grid .usd.total { border-top: 0; padding-top: 0; margin-top: 0; }
 }
 
+/* การ์ดแยกสกุลเงิน (หน้าบิล): ยอดสองสกุลซ้อนกัน เล็กกว่ายอดเดี่ยวเล็กน้อย ป้ายสกุลตัวเล็กต่อท้าย */
+.stat .value-split { font-size: 21px; display: grid; gap: 2px; }
+.stat .value-split .split-tag { font-size: var(--fs-xs); font-weight: 600; color: var(--muted); margin-left: 8px; white-space: nowrap; }
+
 .delta { font-size: var(--fs-sm); font-weight: 700; font-variant-numeric: tabular-nums; }
 .delta.up { color: var(--success); }
 .delta.down { color: var(--danger); }
