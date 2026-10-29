@@ -34,7 +34,16 @@ final class InvoiceService
                (SELECT COUNT(*) FROM invoice_attachments ia
                  WHERE ia.invoice_id = i.id AND ia.removed_at IS NULL) AS attachment_count,
                (SELECT COUNT(*) FROM invoice_adjustments iadj
-                 WHERE iadj.invoice_id = i.id AND iadj.sales_commission_id IS NULL AND iadj.closes_balance = 0) AS adjustment_count,
+                 WHERE iadj.invoice_id = i.id AND iadj.sales_commission_id IS NULL AND iadj.closes_balance = 0
+                   AND iadj.carried_from_id IS NULL) AS adjustment_count,
+               (SELECT COALESCE(SUM(cadj.amount_satang), 0) FROM invoice_adjustments cadj
+                 WHERE cadj.invoice_id = i.id AND cadj.carry_forward = 1) AS carried_out_satang,
+               (SELECT COALESCE(SUM(cadj.amount_satang), 0) FROM invoice_adjustments cadj
+                 WHERE cadj.invoice_id = i.id AND cadj.carry_forward = 1
+                   AND NOT EXISTS (SELECT 1 FROM invoice_adjustments ch JOIN invoices ni ON ni.id = ch.invoice_id
+                                    WHERE ch.carried_from_id = cadj.id AND ni.status <> 'VOID')) AS carry_pending_satang,
+               (SELECT COALESCE(SUM(cadj.amount_satang), 0) FROM invoice_adjustments cadj
+                 WHERE cadj.invoice_id = i.id AND cadj.carried_from_id IS NOT NULL) AS carried_in_satang,
                (SELECT COALESCE(SUM(sadj.amount_satang), 0) FROM invoice_adjustments sadj
                  WHERE sadj.invoice_id = i.id AND sadj.sales_commission_id IS NOT NULL) AS sales_deduction_satang
           FROM invoices i
@@ -361,6 +370,9 @@ final class InvoiceService
                 $deductions,
                 $user,
             );
+            // ยอดค้างที่บิลรอบก่อน "ยกไปเก็บงวดถัดไป" ไว้ (closeBalance) — ขึ้นบิลใบนี้เป็นค่าใช้จ่าย "ยอดค้างยกมา"
+            $carries = self::pendingCarries((int) $franchise['id'], $period['start_date']);
+            self::insertCarries($invoiceId, $carries, $user);
             self::recalc($invoiceId, $user);
 
             InvoiceAttachmentService::insert($invoiceId, $attachments, (int) $user['id']);
@@ -372,6 +384,7 @@ final class InvoiceService
                 'lineModes'   => $plan['audit'],
                 'attachments' => ['count' => count($attachments), 'urls' => array_column($attachments, 'url')],
                 ...($deducted !== [] ? ['salesDeductions' => $deducted] : []),
+                ...($carries !== [] ? ['carriedIn' => array_column($carries, 'invoice_no')] : []),
             ]);
 
             return self::get($invoiceId, $user);
@@ -919,6 +932,10 @@ final class InvoiceService
             // อ่านหลังล็อก — อีกจอเพิ่งลบแถวนี้ไปแล้ว = 404 ไม่ใช่คิดยอดใหม่ซ้ำ
             $row = Db::one('SELECT * FROM invoice_adjustments WHERE id = ? AND invoice_id = ?', [$adjustmentId, $invoiceId])
                 ?? throw ApiException::notFound('ไม่พบรายการในใบเรียกเก็บนี้');
+            // ยอดค้างยกมามีที่อยู่ได้ที่เดียว — ลบทิ้งแล้วยอดจะลอยกลับไปรอบิลใบถัดไปโดยไม่มีใครรู้ตัว
+            if ($row['carried_from_id'] !== null) {
+                throw ApiException::conflict('ยอดค้างยกมาจากบิลก่อนลบไม่ได้ — ถ้าไม่เก็บแล้วให้ใส่ส่วนลดแทน (ยกเลิกบิลนี้ = ยอดกลับไปรอขึ้นบิลใบถัดไป)');
+            }
             Db::exec('DELETE FROM invoice_adjustments WHERE id = ?', [$adjustmentId]);
             // บรรทัด "หักค่าคอมเซล": ถอนการหัก = บิลค่าคอมที่เกิดจากการหักถูกยกเลิก รายการกลับไปรอทำบิลค่าคอม/หักใหม่
             $salesCommissionId = $row['sales_commission_id'] === null ? null : (int) $row['sales_commission_id'];
@@ -1074,8 +1091,12 @@ final class InvoiceService
                 return $l;
             }, $lines);
         }
+        // บรรทัดยกไปงวดถัดไป: ขึ้นบิลใบไหนแล้ว (ใบที่ถูกยกเลิกไม่นับ) — null = ยังรอบิลใบถัดไป
         $adjustments = array_map([self::class, 'serializeAdjustment'], Db::all(
-            'SELECT * FROM invoice_adjustments WHERE invoice_id = ? ORDER BY kind DESC, id',
+            "SELECT ia.*,
+                    (SELECT ni.invoice_no FROM invoice_adjustments ch JOIN invoices ni ON ni.id = ch.invoice_id
+                      WHERE ch.carried_from_id = ia.id AND ni.status <> 'VOID' LIMIT 1) AS carried_to_no
+               FROM invoice_adjustments ia WHERE ia.invoice_id = ? ORDER BY ia.kind DESC, ia.id",
             [$id],
         ));
         $payments = array_map(static fn ($p) => [
@@ -1312,9 +1333,10 @@ final class InvoiceService
      * เฉพาะบิลชำระบางส่วน — ยังไม่มีเงินเข้าแก้บิล/ยกเลิกได้อยู่แล้ว · มีสลิปรอตรวจต้องตรวจก่อน (สลิปนั้นอาจปิดยอดได้เองด้วยเงินจริง)
      * ย้อนไม่ได้: บิลชำระครบที่มีเงินเข้าแล้วแก้รายการไม่ได้ ตามกติกาเดิม
      */
-    public static function closeBalance(int $id, string $note, array $user): array
+    public static function closeBalance(int $id, string $note, array $user, string $mode = 'DISCOUNT'): array
     {
-        $inv = self::row($id);
+        $carry = $mode === 'CARRY';
+        $inv   = self::row($id);
         if ($inv['status'] !== 'PARTIAL') {
             throw ApiException::conflict($inv['status'] === 'OPEN'
                 ? 'บิลนี้ยังไม่มีเงินเข้า — ใช้ "แก้ไขบิล" ใส่ส่วนลด หรือยกเลิกบิลแทน'
@@ -1322,7 +1344,7 @@ final class InvoiceService
         }
         self::assertShopNotDeleted(Db::one('SELECT username, status FROM franchises WHERE id = ?', [$inv['franchise_id']]) ?? []);
 
-        return Db::tx(static function () use ($id, $note, $user) {
+        return Db::tx(static function () use ($id, $note, $user, $carry) {
             // ล็อกก่อนอ่านยอดค้าง — สลิปที่เพิ่งอนุมัติจากอีกจอต้องไม่ถูกปิดยอดซ้ำเป็นส่วนลด
             Db::one('SELECT id FROM invoices WHERE id = ? FOR UPDATE', [$id]);
             if (Db::int("SELECT COUNT(*) FROM payment_submissions WHERE invoice_id = ? AND status = 'PENDING'", [$id]) > 0) {
@@ -1339,12 +1361,104 @@ final class InvoiceService
             }
             $remaining = (int) $inv['net_total_satang'] - (int) $inv['paid_satang'];
             $adjId     = Db::insert(
-                "INSERT INTO invoice_adjustments (invoice_id, kind, label, amount_satang, note, closes_balance, created_by_user_id, created_at)
-                 VALUES (?, 'DISCOUNT', 'ปิดยอด', ?, ?, 1, ?, UTC_TIMESTAMP())",
-                [$id, $remaining, $note, $user['id']],
+                "INSERT INTO invoice_adjustments (invoice_id, kind, label, amount_satang, note, closes_balance, carry_forward, created_by_user_id, created_at)
+                 VALUES (?, 'DISCOUNT', ?, ?, ?, 1, ?, ?, UTC_TIMESTAMP())",
+                [$id, $carry ? 'ยกไปเก็บงวดถัดไป' : 'ปิดยอด', $remaining, $note, $carry ? 1 : 0, $user['id']],
             );
             self::recalc($id, $user);
-            Audit::write((int) $user['id'], 'invoice.close_balance', 'invoice', $id, ['adjustmentId' => $adjId, 'amount' => $remaining, 'note' => $note]);
+            // ยกไปงวดถัดไป: บิลงวดหลังที่ออกไว้แล้วและยังแก้ได้ รับยอดไปเลย — ไม่มีก็รอขึ้นบิลใบถัดไปที่ออก (generate)
+            $carriedTo = $carry ? self::carryIntoNextBill((int) $inv['franchise_id'], (int) $inv['period_id'], $user) : null;
+            Audit::write((int) $user['id'], 'invoice.close_balance', 'invoice', $id, [
+                'adjustmentId' => $adjId,
+                'amount'       => $remaining,
+                'mode'         => $carry ? 'CARRY' : 'DISCOUNT',
+                'note'         => $note,
+                ...($carriedTo !== null ? ['carriedTo' => $carriedTo] : []),
+            ]);
+
+            return self::get($id, $user);
+        });
+    }
+
+    /**
+     * ยอดที่ปิดแบบ "ยกไปเก็บงวดถัดไป" ซึ่งยังไม่ได้ขึ้นบิลใบไหน — เฉพาะที่มาจากรอบก่อน $beforeStart (งวดถัดไปเท่านั้น ไม่ย้อนเข้าบิลรอบเก่า)
+     * บิลที่รับยอดไปถูกยกเลิก = ยอดกลับมารอเอง (นับเฉพาะบรรทัดยกมาในบิลที่ไม่ถูกยกเลิก)
+     */
+    private static function pendingCarries(int $franchiseId, string $beforeStart): array
+    {
+        return Db::all(
+            "SELECT co.id, co.amount_satang, co.note, i.invoice_no
+               FROM invoice_adjustments co
+               JOIN invoices i         ON i.id = co.invoice_id
+               JOIN billing_periods bp ON bp.id = i.period_id
+              WHERE i.franchise_id = ? AND co.carry_forward = 1 AND i.status <> 'VOID' AND bp.start_date < ?
+                AND NOT EXISTS (SELECT 1 FROM invoice_adjustments ch JOIN invoices ni ON ni.id = ch.invoice_id
+                                 WHERE ch.carried_from_id = co.id AND ni.status <> 'VOID')
+              ORDER BY bp.start_date, co.id",
+            [$franchiseId, $beforeStart],
+        );
+    }
+
+    /** บวกยอดค้างยกมาเข้าบิล — ค่าใช้จ่ายจำนวนคงที่ ชี้กลับบรรทัดปิดยอดต้นทาง · หมายเหตุตามต้นทาง ร้านจะได้รู้ว่ามาจากไหน (ผู้เรียก recalc เอง) */
+    private static function insertCarries(int $invoiceId, array $carries, array $user): void
+    {
+        foreach ($carries as $c) {
+            Db::insert(
+                "INSERT INTO invoice_adjustments (invoice_id, kind, label, amount_satang, note, carried_from_id, created_by_user_id, created_at)
+                 VALUES (?, 'CHARGE', ?, ?, ?, ?, ?, UTC_TIMESTAMP())",
+                [$invoiceId, "ยอดค้างยกมาจากบิล {$c['invoice_no']}", $c['amount_satang'], $c['note'], $c['id'], $user['id']],
+            );
+        }
+    }
+
+    /**
+     * ยอดยกไปที่รออยู่ → บิลงวดหลังใบแรกที่ยังแก้ได้ (ยังไม่มีเงินเข้า ไม่มีสลิปรอตรวจ) · คืนเลขบิลที่รับไป หรือ null = รอบิลใบถัดไป
+     * บิลที่ร้านจ่ายไปบางส่วนแล้วไม่รับ — ยอดที่ร้านเห็นตอนโอนต้องไม่เปลี่ยน (กติกาเดียวกับการแก้ยอด)
+     */
+    private static function carryIntoNextBill(int $franchiseId, int $fromPeriodId, array $user): ?string
+    {
+        $fromStart = (string) Db::val('SELECT start_date FROM billing_periods WHERE id = ?', [$fromPeriodId]);
+        $target    = Db::one(
+            "SELECT i.id, i.invoice_no, bp.start_date
+               FROM invoices i
+               JOIN billing_periods bp ON bp.id = i.period_id
+              WHERE i.franchise_id = ? AND i.status = 'OPEN' AND i.paid_satang = 0 AND bp.start_date > ?
+                AND NOT EXISTS (SELECT 1 FROM payment_submissions ps WHERE ps.invoice_id = i.id AND ps.status = 'PENDING')
+              ORDER BY bp.start_date
+              LIMIT 1
+                FOR UPDATE",
+            [$franchiseId, $fromStart],
+        );
+        if ($target === null) {
+            return null;
+        }
+        self::insertCarries((int) $target['id'], self::pendingCarries($franchiseId, $target['start_date']), $user);
+        self::recalc((int) $target['id'], $user);
+
+        return $target['invoice_no'];
+    }
+
+    /**
+     * ยอดที่ยกไปงวดถัดไปแต่ยังไม่ได้ขึ้นบิล → เปลี่ยนเป็นส่วนลด (ไม่เก็บแล้ว) เช่นร้านเลิกขาย ไม่มีบิลงวดถัดไปให้ยอดไปขึ้น
+     * บิลต้นทางคิดเหมือนเดิมทุกอย่าง (เป็นส่วนลดเท่ายอดค้างอยู่แล้ว) — แค่ยอดนี้ไม่ใช่หนี้ที่รอเก็บอีกต่อไป
+     * ขึ้นบิลไปแล้วทำไม่ได้: ไปจัดการที่บิลที่รับยอดไป (ใส่ส่วนลด หรือยกเลิกบิลนั้นแล้วค่อยมาเปลี่ยน)
+     */
+    public static function forgiveCarry(int $id, array $user): array
+    {
+        return Db::tx(static function () use ($id, $user) {
+            Db::one('SELECT id FROM invoices WHERE id = ? FOR UPDATE', [$id]);
+            $row = Db::one('SELECT * FROM invoice_adjustments WHERE invoice_id = ? AND carry_forward = 1', [$id])
+                ?? throw ApiException::notFound('บิลนี้ไม่มียอดที่ยกไปเก็บงวดถัดไป');
+            $to = Db::val(
+                "SELECT ni.invoice_no FROM invoice_adjustments ch JOIN invoices ni ON ni.id = ch.invoice_id
+                  WHERE ch.carried_from_id = ? AND ni.status <> 'VOID' LIMIT 1",
+                [$row['id']],
+            );
+            if ($to !== null) {
+                throw ApiException::conflict("ยอดนี้ขึ้นบิล {$to} ไปแล้ว — ถ้าไม่เก็บแล้วให้ใส่ส่วนลดที่บิลนั้นแทน");
+            }
+            Db::exec("UPDATE invoice_adjustments SET carry_forward = 0, label = 'ปิดยอด' WHERE id = ?", [$row['id']]);
+            Audit::write((int) $user['id'], 'invoice.carry_forgive', 'invoice', $id, ['adjustmentId' => (int) $row['id'], 'amount' => Money::toBaht($row['amount_satang'])]);
 
             return self::get($id, $user);
         });
@@ -1359,6 +1473,9 @@ final class InvoiceService
         $salesCommissionId = ($row['sales_commission_id'] ?? null) === null ? null : (int) $row['sales_commission_id'];
         // บรรทัด "ปิดยอด" — ส่วนลดเท่ายอดค้างตอนส่วนกลางปิดบิล เป็นเรื่องเฉพาะบิลใบนั้น ดึงไปใช้กับบิลอื่นไม่ได้
         $closesBalance = (bool) ($row['closes_balance'] ?? false);
+        // ปิดยอดแบบยกไปเก็บงวดถัดไป (ต้นทาง) / ยอดค้างยกมาจากบิลก่อน (ปลายทาง) — คู่กันผ่าน carried_from_id
+        $carryForward = (bool) ($row['carry_forward'] ?? false);
+        $carriedIn    = ($row['carried_from_id'] ?? null) !== null;
 
         return [
             'id'           => (int) $row['id'],
@@ -1366,8 +1483,17 @@ final class InvoiceService
             'salesCommissionId' => $salesCommissionId,
             'isSalesDeduction'  => $salesCommissionId !== null,
             'isCloseOut'        => $closesBalance,
+            'carryForward'      => $carryForward,
+            'carriedTo'         => $carryForward ? ($row['carried_to_no'] ?? null) : null,
+            'isCarriedIn'       => $carriedIn,
             'kind'         => $row['kind'],
-            'kindLabel'    => $salesCommissionId !== null ? 'หักค่าคอมเซล' : ($closesBalance ? 'ปิดยอด' : ($row['kind'] === 'DISCOUNT' ? 'ส่วนลด' : 'ค่าใช้จ่าย')),
+            'kindLabel'    => match (true) {
+                $salesCommissionId !== null => 'หักค่าคอมเซล',
+                $carryForward               => 'ยกไปเก็บงวดถัดไป',
+                $closesBalance              => 'ปิดยอด',
+                $carriedIn                  => 'ยอดค้างยกมา',
+                default                     => $row['kind'] === 'DISCOUNT' ? 'ส่วนลด' : 'ค่าใช้จ่าย',
+            },
             'label'        => $row['label'],
             'pct'          => $row['pct_bp'] === null ? null : Money::bpToPct($row['pct_bp']),
             'amount'       => Money::toBaht($amount),
@@ -1464,8 +1590,16 @@ final class InvoiceService
             // จำนวนรูปประกอบ — รายการบิลโชว์ 📎 N ได้โดยไม่ต้องเซ็นลิงก์ทุกรูปของทุกใบ
             'attachmentCount' => (int) ($row['attachment_count'] ?? 0),
             // จำนวนค่าใช้จ่าย/ส่วนลดในบิล — ตอนออกบิลใหม่ใช้หาบิลเก่าที่มีรายการให้ดึงมาอ้างอิง (นับตามแถว รายการ 0 บาทก็นับ)
-            // ไม่นับบรรทัด "หักค่าคอมเซล" กับ "ปิดยอด" — ดึงไปใช้กับบิลอื่นไม่ได้ (เป็นเรื่องเฉพาะบิลใบนั้น)
+            // ไม่นับบรรทัด "หักค่าคอมเซล" "ปิดยอด" และ "ยอดค้างยกมา" — ดึงไปใช้กับบิลอื่นไม่ได้ (เป็นเรื่องเฉพาะบิลใบนั้น)
             'adjustmentCount' => (int) ($row['adjustment_count'] ?? 0),
+            /*
+             * ยกยอดข้ามบิล — carriedOut/carriedIn รวมอยู่ใน discountTotal/chargeTotal แล้ว แยกออกมาให้หน้าเว็บไม่เรียกว่า "ส่วนลด"/"ค่าใช้จ่าย"
+             *   carriedOut   ยอดค้างที่ปิดแบบยกไปเก็บงวดถัดไป · carryPending ส่วนที่ยังไม่ได้ขึ้นบิลใบไหน (หนี้ที่รออยู่นอกบิล)
+             *   carriedIn    ยอดค้างยกมาจากบิลก่อนที่บวกเข้าใบนี้
+             */
+            'carriedOut'   => Money::toBaht((int) ($row['carried_out_satang'] ?? 0)),
+            'carryPending' => Money::toBaht((int) ($row['carry_pending_satang'] ?? 0)),
+            'carriedIn'    => Money::toBaht((int) ($row['carried_in_satang'] ?? 0)),
             /*
              * บัญชีที่บิลชี้อยู่ตรงกับที่ส่งเข้า Telegram ของร้านล่าสุดไหม (ไม่มีข้อมูลบัญชีในนี้ ร้านเห็นได้)
              *   MATCH ตรงกัน · NOT_SENT ยังไม่เคยส่ง · CHANGED บัญชีเปลี่ยนหลังส่ง → หน้าแจ้งชำระเตือนร้านห้ามโอน

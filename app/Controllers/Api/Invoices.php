@@ -296,24 +296,40 @@ class Invoices extends BaseApiController
         return $this->json($inv);
     }
 
-    /** ปิดยอดบิลที่ชำระบางส่วน — ยอดค้างที่เหลือกลายเป็นส่วนลด "ปิดยอด" (ไม่ใช่เงินเข้า) · หมายเหตุบังคับ ร้านเห็นในบิล */
+    /**
+     * ปิดยอดบิลที่ชำระบางส่วน — ยอดค้างที่เหลือเป็นบรรทัดปิดยอด (ไม่ใช่เงินเข้า) · หมายเหตุบังคับ ร้านเห็นในบิล
+     * mode: DISCOUNT = ส่วนลด ไม่เก็บแล้ว · CARRY = ยกไปเก็บงวดถัดไป (ขึ้นบิลงวดหลังเป็น "ยอดค้างยกมา")
+     */
     public function closeBalance(string $id)
     {
         $body = V::parse(V::object([
             'note' => V::string()->trim()->min(3, 'ต้องระบุหมายเหตุ (อย่างน้อย 3 ตัวอักษร)')->max(500),
+            'mode' => V::enum(['DISCOUNT', 'CARRY'])->optional(),
         ]), $this->bodyOrEmpty());
-        $inv = InvoiceService::closeBalance(V::parseId($id), $body['note'], $this->user());
-        // ยอดที่ยกให้ร้าน = บรรทัดปิดยอด (บิลหนึ่งใบปิดได้ครั้งเดียว) — เงินที่ไม่ได้รับจริง กลุ่มส่วนกลางต้องเห็นแบบเดียวกับยกเลิกบิล
-        $closeOut = array_values(array_filter($inv['adjustments'], static fn ($a) => $a['isCloseOut']));
-        $amount   = Money::fmt($closeOut[0]['amount'] ?? 0);
+        $carry = ($body['mode'] ?? 'DISCOUNT') === 'CARRY';
+        $inv   = InvoiceService::closeBalance(V::parseId($id), $body['note'], $this->user(), $carry ? 'CARRY' : 'DISCOUNT');
+        // ยอดที่ปิด = บรรทัดปิดยอด (บิลหนึ่งใบปิดได้ครั้งเดียว) — เงินที่ไม่ได้รับในบิลนี้ กลุ่มส่วนกลางต้องเห็นแบบเดียวกับยกเลิกบิล
+        $closeOut = array_values(array_filter($inv['adjustments'], static fn ($a) => $a['isCloseOut']))[0] ?? null;
+        $amount   = Money::fmt($closeOut['amount'] ?? 0);
         NotificationService::notify('invoice.closed', implode("\n", [
             '✅ <b>ปิดยอดบิล</b>',
             'บิล <b>' . TelegramService::escapeHtml($inv['invoiceNo']) . '</b> · ร้าน ' . TelegramService::escapeHtml($inv['franchiseUsername'])
                 . " · ยอดค้างที่ปิด {$amount} บาท",
+            $carry
+                ? '↪ ยกไปเก็บงวดถัดไป — ' . (($closeOut['carriedTo'] ?? null) !== null
+                    ? 'บวกเข้าบิล ' . TelegramService::escapeHtml($closeOut['carriedTo']) . ' แล้ว'
+                    : 'บวกเข้าบิลงวดถัดไปของร้านตอนออกบิล')
+                : 'เป็นส่วนลด (ไม่เก็บส่วนที่เหลือ)',
             'หมายเหตุ: ' . TelegramService::escapeHtml($body['note']),
             'โดย: ' . TelegramService::escapeHtml($this->user()['username']),
-        ]), ['line' => TelegramService::escapeHtml($inv['invoiceNo']) . ' (' . TelegramService::escapeHtml($inv['franchiseUsername']) . ") — {$amount} บาท"]);
+        ]), ['line' => TelegramService::escapeHtml($inv['invoiceNo']) . ' (' . TelegramService::escapeHtml($inv['franchiseUsername']) . ") — {$amount} บาท" . ($carry ? ' (ยกไปงวดถัดไป)' : '')]);
 
         return $this->json($inv);
+    }
+
+    /** ยอดที่ยกไปงวดถัดไปแต่ยังไม่ได้ขึ้นบิล → เปลี่ยนเป็นส่วนลด ไม่เก็บแล้ว (เช่นร้านเลิกขาย ไม่มีบิลงวดถัดไป) */
+    public function forgiveCarry(string $id)
+    {
+        return $this->json(InvoiceService::forgiveCarry(V::parseId($id), $this->user()));
     }
 }

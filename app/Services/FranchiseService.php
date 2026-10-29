@@ -365,6 +365,17 @@ final class FranchiseService
         if ($credit > 0) {
             throw ApiException::conflict('ทางเรายังมียอดยกมาค้างให้ร้านนี้ ' . Money::fmtSatang($credit) . ' บาท — ใช้หักบิลหรือยกเลิกยอดยกมาก่อน');
         }
+        // กลับด้านกับเครดิต: ยอดค้างที่ปิดบิลแบบ "ยกไปเก็บงวดถัดไป" แต่ยังไม่ได้ขึ้นบิลใบไหน — หนี้ที่อยู่นอกบิล ลบร้านแล้วหายเงียบ
+        $carry = Db::int(
+            "SELECT COALESCE(SUM(co.amount_satang), 0) FROM invoice_adjustments co JOIN invoices i ON i.id = co.invoice_id
+              WHERE i.franchise_id = ? AND co.carry_forward = 1 AND i.status <> 'VOID'
+                AND NOT EXISTS (SELECT 1 FROM invoice_adjustments ch JOIN invoices ni ON ni.id = ch.invoice_id
+                                 WHERE ch.carried_from_id = co.id AND ni.status <> 'VOID')",
+            [$id],
+        );
+        if ($carry > 0) {
+            throw ApiException::conflict("ร้าน {$u} มียอดค้างที่ยกไปเก็บงวดถัดไป " . Money::fmtSatang($carry) . ' บาท — ออกบิลงวดถัดไปให้ร้าน หรือกด "เปลี่ยนเป็นส่วนลด" ที่บิลต้นทางก่อน');
+        }
 
         return $f;
     }

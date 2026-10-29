@@ -106,6 +106,7 @@ $routes->group('api', ['namespace' => 'App\Controllers\Api'], static function (R
     $routes->post('invoices/(:segment)/sales-deductions', 'Invoices::addSalesDeduction/$1', $g('auth,staff,perm.bills,super'));
     $routes->post('invoices/(:segment)/void', 'Invoices::void/$1', $g('auth,staff,perm.bills,super'));
     $routes->post('invoices/(:segment)/close-balance', 'Invoices::closeBalance/$1', $g('auth,staff,perm.bills,super'));
+    $routes->post('invoices/(:segment)/carry-forgive', 'Invoices::forgiveCarry/$1', $g('auth,staff,perm.bills,super'));
 
     $routes->get('charge-items', 'ChargeItems::index', $g('auth,staff'));
     $routes->get('charge-items/(:segment)', 'ChargeItems::show/$1', $g('auth,staff'));

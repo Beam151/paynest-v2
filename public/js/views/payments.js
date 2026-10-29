@@ -1127,7 +1127,10 @@ export function breakdownTable(inv) {
       label: a.label,
       // หักค่าคอมเซล: ชื่อรายการบอกแล้วว่าเป็นอะไร — บรรทัดรองบอกว่าร้านจ่ายเซลเอง + เลขบิลค่าคอม (หมายเหตุจากเซิร์ฟเวอร์)
       // ปิดยอด: บรรทัดรองเป็นหมายเหตุที่ส่วนกลางใส่ตอนปิด ร้านจะได้รู้ว่าทำไมยอดค้างหายไป
-      detail: a.isSalesDeduction || a.isCloseOut ? (a.note ?? a.kindLabel) : a.pct !== null ? `${a.kindLabel} ${a.pct}% ของส่วนต่าง` : a.kindLabel,
+      // ยกไปงวดถัดไป / ยอดค้างยกมา: ชื่อรายการบอกแล้วว่ามาจาก/ไปบิลไหน บรรทัดรองเป็นหมายเหตุตอนปิดยอดเหมือนกัน
+      detail: a.isSalesDeduction || a.isCloseOut || a.isCarriedIn
+        ? [a.carryForward ? (a.carriedTo ? `ขึ้นบิล ${a.carriedTo}` : 'รอขึ้นบิลงวดถัดไป') : '', a.note].filter(Boolean).join(' · ') || a.kindLabel
+        : a.pct !== null ? `${a.kindLabel} ${a.pct}% ของส่วนต่าง` : a.kindLabel,
       amount: a.signedAmount,
     })),
     /*

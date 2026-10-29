@@ -1710,6 +1710,94 @@ await flushTelegram();
 const closeMsg = telegram.messages.slice(mark).find((m) => /ปิดยอดบิล/.test(m.text));
 check('ปิดยอดแล้ว กลุ่มส่วนกลางได้ข้อความแจ้ง (หมายเหตุ escape แล้ว)',
   closeMsg && closeMsg.chat_id === TG_CHAT && closeMsg.text.includes('&lt;ทดสอบ&gt;'), telegram.messages.slice(mark));
+
+/*
+ * ปิดยอดแบบ "ยกไปเก็บงวดถัดไป" — บิลต้นทางชำระครบ ยอดค้างไปขึ้นบิลงวดหลังเป็น "ยอดค้างยกมา"
+ * ใช้ร้านของตัวเอง (เหมือนเทสต์ยอดยกไปหักรอบถัดไป) — ยอดที่รอขึ้นบิลติดกับร้าน ถ้าใช้ shopA จะไปโผล่ในบิลของเทสต์อื่น
+ * รอบปี 2033 = ยังไม่ถึงกำหนด ไม่รบกวนเทสต์ทวงบิลเลยกำหนด · จบแล้วทุกใบชำระครบ/ยกเลิก ไม่มียอดค้างเหลือ
+ */
+const kShop = await api('POST', '/api/franchises', { token: admin, body: { username: 'shopcarry', password: 'carry12345' } });
+const kProduct = await api('POST', '/api/products', { token: admin, body: { sku: 'CARRY-01', name: 'สินค้าทดสอบยกยอด', commissionPct: 10 } });
+await api('POST', '/api/assignments', {
+  token: admin, body: { productId: kProduct.body.product.id, franchiseId: kShop.body.franchise.id, startDate: '2026-01-01' },
+});
+const kfid = kShop.body.franchise.id;
+const kBill = async (periodCode, gross) => {
+  await api('POST', '/api/sales-entries', { token: admin, body: { periodCode, productId: kProduct.body.product.id, grossAmount: gross } });
+  return api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: kfid, periodCode } });
+};
+const kPay = async (invoiceId, amount) => {
+  const sub = await api('POST', '/api/payments', { token: admin, body: { invoiceId, amount, paidAt: '2026-09-21', slipUrl: slip } });
+  return api('POST', `/api/payments/${sub.body.id}/approve`, { token: admin, body: {} });
+};
+const kGet = async (id) => (await api('GET', `/api/invoices/${id}`, { token: admin })).body;
+const kRow = async (id) => (await api('GET', `/api/invoices?franchiseId=${kfid}`, { token: admin })).body.items.find((r) => r.id === id);
+const kLine = (inv, pick) => inv.adjustments?.find(pick);
+
+// บิลแรก 1,000 จ่าย 600 แล้วยกที่เหลือ 400 ไป — ยังไม่มีบิลงวดถัดไป = รอขึ้นบิล
+const k1 = await kBill('2033-01-H1', 10000);
+await kPay(k1.body.id, 600);
+mark = telegram.messages.length;
+const k1Closed = await api('POST', `/api/invoices/${k1.body.id}/close-balance`, {
+  token: admin, body: { note: 'ร้านขอจ่ายรอบหน้า', mode: 'CARRY' },
+});
+const k1Out = kLine(k1Closed.body, (a) => a.isCloseOut);
+check('ยกไปงวดถัดไป: บิลต้นทางชำระครบ บรรทัดเป็น "ยกไปเก็บงวดถัดไป" รอขึ้นบิล',
+  k1Closed.status === 200 && k1Closed.body.status === 'PAID' && k1Closed.body.outstanding === 0
+    && k1Out?.carryForward === true && k1Out.kindLabel === 'ยกไปเก็บงวดถัดไป' && k1Out.amount === 400 && k1Out.carriedTo === null,
+  k1Closed.body);
+check('ยกไปงวดถัดไป: ตารางบิลแยกยอดยกไป/รอออกบิลออกจากส่วนลด',
+  (await kRow(k1.body.id))?.carriedOut === 400 && (await kRow(k1.body.id))?.carryPending === 400, await kRow(k1.body.id));
+await flushTelegram();
+check('ยกไปงวดถัดไป: กลุ่มส่วนกลางได้ข้อความแจ้งว่ายกไปบิลงวดถัดไป',
+  telegram.messages.slice(mark).some((m) => /ปิดยอดบิล/.test(m.text) && /ยกไปเก็บงวดถัดไป/.test(m.text)), telegram.messages.slice(mark));
+
+// ออกบิลงวดถัดไป → บวกยอดค้างยกมาให้เอง
+const k2 = await kBill('2033-01-H2', 20000);
+const k2In = kLine(k2.body, (a) => a.isCarriedIn);
+check('ออกบิลงวดถัดไป: บวก "ยอดค้างยกมา" 400 ให้เอง (ส่วนต่าง 2,000 → 2,400)',
+  k2.status === 201 && k2.body.netTotal === 2400 && k2.body.carriedIn === 400
+    && k2In?.kind === 'CHARGE' && k2In.amount === 400 && k2In.label === `ยอดค้างยกมาจากบิล ${k1.body.invoiceNo}` && k2In.note === 'ร้านขอจ่ายรอบหน้า',
+  k2.body);
+check('บิลต้นทางบอกว่ายอดไปขึ้นบิลไหนแล้ว และไม่ค้างรอขึ้นบิลอีก',
+  kLine(await kGet(k1.body.id), (a) => a.isCloseOut)?.carriedTo === k2.body.invoiceNo && (await kRow(k1.body.id))?.carryPending === 0);
+check('ยอดค้างยกมาลบออกจากบิลไม่ได้', (await api('DELETE', `/api/invoices/${k2.body.id}/adjustments/${k2In?.id}`, { token: admin })).status === 409);
+check('ยอดค้างยกมาไม่ถูกนับเป็นรายการที่ดึงไปใช้กับบิลอื่นได้', (await kRow(k2.body.id))?.adjustmentCount === 0);
+
+// ยกเลิกบิลที่รับยอดไป → ยอดกลับมารอ · ออกใหม่ก็บวกให้อีก
+await api('POST', `/api/invoices/${k2.body.id}/void`, { token: admin, body: { reason: 'ทดสอบยกเลิกบิลที่รับยอดยกมา' } });
+check('ยกเลิกบิลที่รับยอดยกมา → ยอดกลับไปรอขึ้นบิลใบถัดไป',
+  (await kRow(k1.body.id))?.carryPending === 400 && kLine(await kGet(k1.body.id), (a) => a.isCloseOut)?.carriedTo === null);
+const k2b = await api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: kfid, periodCode: '2033-01-H2' } });
+check('ออกบิลรอบเดิมใหม่ → บวกยอดค้างยกมาให้อีก', k2b.status === 201 && k2b.body.netTotal === 2400 && k2b.body.carriedIn === 400, k2b.body);
+
+// บิลงวดหลังออกไว้แล้วและยังแก้ได้ → ปิดยอดแบบยกไป บวกเข้าบิลนั้นทันที
+const k3 = await kBill('2033-02-H1', 30000);
+check('ออกบิลงวดหลังตอนไม่มียอดรอ = ไม่มียอดค้างยกมา', k3.body.netTotal === 3000 && k3.body.carriedIn === 0, k3.body);
+await kPay(k2b.body.id, 2000);
+mark = telegram.messages.length;
+const k2Closed = await api('POST', `/api/invoices/${k2b.body.id}/close-balance`, { token: admin, body: { note: 'ยกไปบิลถัดไปที่ออกแล้ว', mode: 'CARRY' } });
+check('บิลงวดหลังออกไว้แล้ว → ยอดยกไปบวกเข้าบิลนั้นทันที',
+  kLine(k2Closed.body, (a) => a.isCloseOut)?.carriedTo === k3.body.invoiceNo && (await kGet(k3.body.id)).netTotal === 3400,
+  { out: kLine(k2Closed.body, (a) => a.isCloseOut), k3: (await kGet(k3.body.id)).netTotal });
+await flushTelegram();
+check('ข้อความแจ้งบอกเลขบิลที่รับยอดไป',
+  telegram.messages.slice(mark).some((m) => /ปิดยอดบิล/.test(m.text) && m.text.includes(`บวกเข้าบิล ${k3.body.invoiceNo}`)), telegram.messages.slice(mark));
+check('ยอดที่ขึ้นบิลไปแล้ว เปลี่ยนเป็นส่วนลดไม่ได้ (ไปจัดการที่บิลที่รับไป)',
+  (await api('POST', `/api/invoices/${k2b.body.id}/carry-forgive`, { token: admin, body: {} })).status === 409);
+
+// ยอดยกไปที่ยังไม่มีบิลรับ: ลบร้านไม่ได้จนกว่าจะเก็บหรือเปลี่ยนเป็นส่วนลด
+await kPay(k3.body.id, 3000);
+await api('POST', `/api/invoices/${k3.body.id}/close-balance`, { token: admin, body: { note: 'ร้านจะเลิกขาย', mode: 'CARRY' } });
+const kDel = await api('DELETE', `/api/franchises/${kfid}`, { token: admin });
+check('ยังมียอดยกไปที่รอขึ้นบิล → ลบร้านไม่ได้', kDel.status === 409 && /ยกไปเก็บงวดถัดไป/.test(kDel.body?.error ?? JSON.stringify(kDel.body)), kDel.body);
+check('ร้านค้าเปลี่ยนยอดยกไปเป็นส่วนลดเองไม่ได้',
+  (await api('POST', `/api/invoices/${k3.body.id}/carry-forgive`, { token: tokenA, body: {} })).status === 403);
+const kForgiven = await api('POST', `/api/invoices/${k3.body.id}/carry-forgive`, { token: admin, body: {} });
+const k3Out = kLine(kForgiven.body, (a) => a.isCloseOut);
+check('เปลี่ยนยอดยกไปที่ยังไม่ขึ้นบิลเป็นส่วนลดได้ — ไม่รอขึ้นบิลอีก บิลยังชำระครบ',
+  kForgiven.status === 200 && kForgiven.body.status === 'PAID' && k3Out?.carryForward === false && k3Out.kindLabel === 'ปิดยอด'
+    && (await kRow(k3.body.id))?.carryPending === 0, kForgiven.body);
 check('มีสลิปรอตรวจ เปลี่ยนบัญชีไม่ได้', (await api('PATCH', `/api/invoices/${slipBill.body.id}`, {
   token: admin, body: { bankAccountId: bank2.body.id },
 })).status === 409);

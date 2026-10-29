@@ -45,7 +45,7 @@ final class NotificationService
         ['key' => 'payment.submitted', 'group' => 'money', 'label' => 'ร้านแจ้งชำระ (ส่งสลิป)', 'default' => 'instant'],
         ['key' => 'invoice.issued', 'group' => 'money', 'label' => 'ออกบิลใหม่', 'default' => 'digest'],
         ['key' => 'invoice.voided', 'group' => 'money', 'label' => 'ยกเลิกบิล', 'default' => 'instant'],
-        ['key' => 'invoice.closed', 'group' => 'money', 'label' => 'ปิดยอดบิล (ยอดค้างที่เหลือไม่ได้เก็บ)', 'default' => 'instant'],
+        ['key' => 'invoice.closed', 'group' => 'money', 'label' => 'ปิดยอดบิล (ส่วนลด / ยกไปเก็บงวดถัดไป)', 'default' => 'instant'],
 
         ['key' => 'system.started', 'group' => 'system', 'label' => 'ระบบเริ่มทำงานใหม่ (เปิดเครื่อง / รีสตาร์ต / ล่มแล้วฟื้น)', 'default' => 'instant'],
         ['key' => 'system.error', 'group' => 'system', 'label' => 'ระบบขัดข้อง (เกิดข้อผิดพลาดที่ไม่คาดคิด)', 'default' => 'instant'],

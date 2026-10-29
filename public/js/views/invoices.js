@@ -147,6 +147,15 @@ export async function invoicesView() {
   ]);
   const allInvoices = res.items;
 
+  /**
+   * ยอดที่บิลรอบก่อนยกไปเก็บงวดถัดไปแต่ยังไม่ได้ขึ้นบิล — ออกบิลรอบ periodCode ของร้านนี้แล้วเซิร์ฟเวอร์บวกเข้าให้เอง (pendingCarries)
+   * หน้าออกบิลต้องบอกก่อนกด ไม่งั้นยอดในบิลที่ออกมาไม่ตรงกับที่เห็นในหน้าต่าง
+   */
+  const carryInFor = (franchiseId, periodCode) => {
+    const from = allInvoices.filter((r) => String(r.franchiseId) === String(franchiseId) && r.carryPending > 0 && r.periodCode < periodCode);
+    return { total: Number(from.reduce((t, r) => t + r.carryPending, 0).toFixed(2)), invoiceNos: from.map((r) => r.invoiceNo) };
+  };
+
   /*
    * ตั้งต้นที่รอบล่าสุดที่มีบิลจริง ไม่ใช่ "ทุกรอบ"
    * งานประจำวันเกิดที่รอบปัจจุบัน ส่วนรอบเก่าเปิดดูตอนต้องการเท่านั้น
@@ -463,7 +472,12 @@ export async function invoicesView() {
             : r.pendingEntries
               ? el('div', {}, el('strong', {}, money(r.pendingCommission)),
                 // ยอดรวมนี้ใช้ยอดส่วนต่างที่กรอกไว้ในหน้ายอดขายแล้ว — บอกว่ากี่รายการ ไม่ให้งงว่าทำไมไม่เท่ายอดเต็ม × %
-                r.manualCount ? el('div', { class: 'sub-line' }, `ใช้ยอดที่กรอกไว้ ${int(r.manualCount)} รายการ`) : '')
+                r.manualCount ? el('div', { class: 'sub-line' }, `ใช้ยอดที่กรอกไว้ ${int(r.manualCount)} รายการ`) : '',
+                // ยอดค้างที่บิลรอบก่อนยกมา — ออกบิลแล้วบวกเข้าให้เอง (ออกหลายร้านก็เหมือนกัน)
+                r.status === 'READY' && carryInFor(r.franchiseId, data.periodCode).total
+                  ? el('div', { class: 'sub-line', style: 'color:var(--warn)' },
+                    `+ ยอดค้างยกมา ${money(carryInFor(r.franchiseId, data.periodCode).total)}`)
+                  : '')
               : '—'),
         },
         {
@@ -653,6 +667,7 @@ export async function invoicesView() {
      * นับใบที่ยกเลิกด้วย — ยกเลิกใบเดิมแล้วออกใหม่ คือกรณีที่อยากได้รายการเดิมกลับมามากที่สุด
      */
     let shopNow = '';        // ร้านที่กำลังออกบิลอยู่ (ตั้งจากพรีวิว)
+    let periodNow = '';      // รอบที่กำลังออกบิล — ใช้หายอดค้างยกมาจากบิลรอบก่อน
     let refNote = '';        // บอกว่าแถวที่มีอยู่ดึงมาจากบิลไหน
     const ref = { open: false, shopId: '', invoiceId: '', error: '' };
     const refAdjustments = new Map(); // id บิลเก่า -> รายการค่าใช้จ่าย/ส่วนลด (โหลดครั้งเดียวต่อหน้าต่าง)
@@ -683,7 +698,7 @@ export async function invoicesView() {
       try {
         const inv = await api.get(`/api/invoices/${id}`);
         // บรรทัด "หักค่าคอมเซล" ของบิลเก่าผูกกับบิลค่าคอมของใบนั้น — ดึงมาเป็นส่วนลดธรรมดาไม่ได้ (ใบใหม่ติ๊กหักเองในกล่องด้านล่าง)
-        refAdjustments.set(id, (inv.adjustments ?? []).filter((a) => !a.isSalesDeduction && !a.isCloseOut));
+        refAdjustments.set(id, (inv.adjustments ?? []).filter((a) => !a.isSalesDeduction && !a.isCloseOut && !a.isCarriedIn));
       } catch (e) {
         if (ref.invoiceId === id) ref.error = e.message || 'โหลดบิลไม่สำเร็จ';
       }
@@ -785,12 +800,19 @@ export async function invoicesView() {
       }
       // ค่าคอมเซลที่ติ๊กหัก — ระหว่างโหลดตัวเลขใหม่ยังโชว์ของเดิมไปก่อน (กดออกบิลไม่ได้จนกว่าจะโหลดเสร็จ)
       const sale = Math.round(salesPicked().reduce((t, a) => t + a.total, 0) * 100) / 100;
-      const net = Math.round((commission + charge - discount - sale) * 100) / 100;
+      // ยอดค้างที่บิลรอบก่อนยกมา — เซิร์ฟเวอร์บวกเข้าเองตอนออก ใส่ในยอดตรงนี้ให้ตัวเลขตรงกับบิลที่จะได้
+      const carryIn = shopNow && periodNow ? carryInFor(shopNow, periodNow) : { total: 0, invoiceNos: [] };
+      const net = Math.round((commission + charge - discount - sale + carryIn.total) * 100) / 100;
       totalLine.replaceChildren(
         el('strong', {}, `ยอดที่ลูกค้าต้องจ่าย ${money(net)} ฿`),
         el('div', { class: 'sub-line' },
           `ส่วนต่าง ${money(commission)} + ค่าใช้จ่าย ${money(charge)} − ส่วนลด ${money(discount)}`
-          + (sale ? ` − ค่าคอมเซล ${money(sale)}` : '')),
+          + (sale ? ` − ค่าคอมเซล ${money(sale)}` : '')
+          + (carryIn.total ? ` + ยอดค้างยกมา ${money(carryIn.total)}` : '')),
+        carryIn.total
+          ? el('div', { class: 'sub-line' },
+            `ยอดค้างยกมาจากบิล ${carryIn.invoiceNos.join(', ')} — บวกเข้าบิลนี้ให้เองตอนออก (ปิดยอดแบบยกไปเก็บงวดถัดไปไว้)`)
+          : '',
         // เซิร์ฟเวอร์ไม่ยอมให้หักเกินยอดบิล — บอกตั้งแต่ตรงนี้ ไม่ต้องรอกดแล้วเจอ error
         sale && net < 0
           ? el('div', { class: 'sub-line', style: 'color:var(--danger)' },
@@ -1084,6 +1106,7 @@ export async function invoicesView() {
       }
 
       available = billable;
+      periodNow = v.periodCode;
       // เปลี่ยนร้าน = บิลเก่าที่เปิดดูค้างไว้เป็นของร้านเดิม ปิดแผงอ้างอิงไปก่อน
       if (shopNow !== String(v.franchiseId)) {
         shopNow = String(v.franchiseId);
@@ -1448,7 +1471,14 @@ export async function invoicesView() {
     // ค่าคอมเซลที่หักในบิล (R25) กับส่วนลดจริง — สองก้อนนี้รวมกันคือ discountTotal
     const toSales = inv.salesDeductionTotal ?? 0;
     const closeOut = inv.adjustments.find((a) => a.isCloseOut);
-    const ownDiscount = Number((inv.discountTotal - toSales).toFixed(2));
+    /*
+     * ยกยอดข้ามบิลนับอยู่ใน discountTotal/chargeTotal — แยกออกมา: ยอดที่ยกไปยังเป็นหนี้ ไม่ใช่ส่วนลด
+     * ยอดที่ยกมาเป็นหนี้เก่า ไม่ใช่ค่าใช้จ่ายของรอบนี้ (และไม่ใช่ยอดที่ร้าน "เก็บไว้" ได้)
+     */
+    const carriedOut = inv.carriedOut ?? 0;
+    const carriedIn = inv.carriedIn ?? 0;
+    const ownCharge = Number((inv.chargeTotal - carriedIn).toFixed(2));
+    const ownDiscount = Number((inv.discountTotal - toSales - carriedOut).toFixed(2));
 
     /**
      * ส่วน "หักค่าคอมเซล" ของหน้าแก้ไขบิล — ขึ้นเสมอในโหมดแก้ไขของส่วนกลาง (ลืมติ๊กตอนออกบิลก็มาหักตรงนี้ได้)
@@ -1545,8 +1575,10 @@ export async function invoicesView() {
         stat('ยอดที่ต้องจ่าย', payMoney(inv, inv.payAmount),
           inv.isUsd
             ? `= ${money(inv.netTotal)} ฿ · อัตรา ${money(inv.usdRate)} ฿/USD`
-            : `ส่วนต่าง ${money(inv.commissionTotal)} + ค่าใช้จ่าย ${money(inv.chargeTotal)} − ส่วนลด ${money(ownDiscount)}`
-              + (toSales ? ` − ค่าคอมเซล ${money(toSales)}` : ''),
+            : `ส่วนต่าง ${money(inv.commissionTotal)} + ค่าใช้จ่าย ${money(ownCharge)} − ส่วนลด ${money(ownDiscount)}`
+              + (toSales ? ` − ค่าคอมเซล ${money(toSales)}` : '')
+              + (carriedIn ? ` + ยอดค้างยกมา ${money(carriedIn)}` : '')
+              + (carriedOut ? ` − ยกไปงวดถัดไป ${money(carriedOut)}` : ''),
           { usd: inv.isUsd ? null : usdOf(inv.netTotal, inv.fxRate) }),
         stat(isSuper ? 'ยังไม่ได้รับ' : 'คงเหลือต้องชำระ', money(inv.outstanding) + ' ฿', `ครบกำหนด ${dateTh(inv.dueDate)}`,
           { tone: inv.outstanding > 0 ? 'due' : 'income', icon: inv.outstanding > 0 ? '⏳' : '✓', usd: usdOf(inv.outstanding, inv.fxRate) })),
@@ -1555,15 +1587,18 @@ export async function invoicesView() {
       // ร้าน: เล่าบิลเป็นประโยคเดียวก่อนเจอตาราง — ขายได้เท่าไร จ่ายเราเท่าไร เหลือเป็นของร้านเท่าไร
       isSuper ? '' : el('div', { class: 'notice-box info-box', style: 'display:block' },
         `ร้านขายได้ ${money(inv.grossTotal)} ฿ · ส่วนต่างของทางเรา ${money(inv.commissionTotal)} ฿`,
-        inv.chargeTotal ? ` · ค่าใช้จ่ายอื่น +${money(inv.chargeTotal)} ฿` : '',
+        ownCharge ? ` · ค่าใช้จ่ายอื่น +${money(ownCharge)} ฿` : '',
         // ค่าคอมเซลที่หักในบิลนับอยู่ใน discountTotal — แยกออกมา: ร้านต้องจ่ายก้อนนี้ให้เซลเอง ไม่ใช่ส่วนลด และไม่ใช่เงินที่ร้านเก็บไว้
         ownDiscount ? ` · ส่วนลด −${money(ownDiscount)} ฿` : '',
         toSales ? ` · หักค่าคอมเซล −${money(toSales)} ฿` : '',
         inv.creditApplied ? ` · หักยอดยกมา −${money(inv.creditApplied)} ฿` : '',
+        carriedIn ? ` · ยอดค้างจากบิลก่อน +${money(carriedIn)} ฿` : '',
+        carriedOut ? ` · ยกไปเก็บงวดถัดไป −${money(carriedOut)} ฿` : '',
         el('div', { style: 'margin-top:4px' },
           `→ โอนให้ทางเรา `, el('strong', {}, `${money(inv.netTotal)} ฿`),
           toSales ? [' · จ่ายค่าคอมให้เซลเอง ', el('strong', {}, `${money(toSales)} ฿`)] : '',
-          ` · ร้านเก็บไว้ `, el('strong', {}, `${money(Math.max(0, inv.grossTotal - inv.netTotal - toSales))} ฿`))),
+          ` · ร้านเก็บไว้ `,
+          el('strong', {}, `${money(Math.max(0, inv.grossTotal - inv.netTotal - toSales - carriedOut + carriedIn))} ฿`))),
 
       // เปิดมาดูเฉย ๆ จะไม่มีปุ่มแก้อะไรเลย — ต้องกด "แก้ไขบิล" จากตารางถึงจะแก้ได้
       edit && !editable
@@ -1598,8 +1633,10 @@ export async function invoicesView() {
         {
           label: 'คิดจาก',
           render: (a) => (a.isSalesDeduction ? 'ค่าคอมตามดีลของเซล'
-            : a.isCloseOut ? 'ยอดค้างตอนปิดบิล'
-              : a.pct === null ? 'จำนวนเงินคงที่' : `${a.pct}% ของส่วนต่าง`),
+            : a.carryForward ? (a.carriedTo ? `ยอดค้าง → ขึ้นบิล ${a.carriedTo}` : 'ยอดค้าง → รอขึ้นบิลงวดถัดไป')
+              : a.isCloseOut ? 'ยอดค้างตอนปิดบิล'
+                : a.isCarriedIn ? 'ยอดค้างจากบิลก่อน'
+                  : a.pct === null ? 'จำนวนเงินคงที่' : `${a.pct}% ของส่วนต่าง`),
         },
         {
           label: 'จำนวน',
@@ -1609,7 +1646,8 @@ export async function invoicesView() {
         },
         {
           label: '',
-          render: (a) => (editable
+          // ยอดค้างยกมามีที่อยู่ที่เดียว ลบไม่ได้ (เซิร์ฟเวอร์ก็กัน) — ไม่เก็บแล้วให้ใส่ส่วนลดแทน
+          render: (a) => (editable && !a.isCarriedIn
             ? el('button', {
               class: 'btn ghost sm',
               // ถอนการหักค่าคอม = บิลค่าคอมของเซลถูกยกเลิกด้วย — บอกก่อนกด ไม่ใช่ลบเหมือนส่วนลดทั่วไป
@@ -1725,8 +1763,31 @@ export async function invoicesView() {
                 }, 'สลิปรอตรวจ →'))
               : el('span', {}, 'โอนเงินแล้วกดปุ่ม "ชำระเงิน" ที่บิลใบนี้ได้เลย'))
           : closeOut
-            ? el('div', { class: 'sub-line mt-4' }, `ปิดยอดค้าง ${money(closeOut.amount)} ฿ — ${closeOut.note ?? ''}`)
+            ? el('div', { class: 'sub-line mt-4' },
+              closeOut.carryForward
+                ? `ยกยอดค้าง ${money(closeOut.amount)} ฿ ไปเก็บ${closeOut.carriedTo ? `ที่บิล ${closeOut.carriedTo}` : 'ในบิลงวดถัดไป (ยังไม่ได้ออกบิล)'}`
+                : `ปิดยอดค้าง ${money(closeOut.amount)} ฿ เป็นส่วนลด`,
+              closeOut.note ? ` — ${closeOut.note}` : '')
             : '',
+        /*
+         * ยกไปงวดถัดไปแล้วแต่ยังไม่มีบิลไหนรับ (เช่นร้านเลิกขาย) — ทางออกเดียวคือไม่เก็บ เปลี่ยนเป็นส่วนลด
+         * ขึ้นบิลไปแล้วปุ่มนี้หาย: ไปจัดการที่บิลที่รับยอดไป
+         */
+        isSuper && closeOut?.carryForward && !closeOut.carriedTo
+          ? el('div', { class: 'btn-row', style: 'margin-top:10px;justify-content:center' },
+            el('button', {
+              class: 'btn ghost sm',
+              type: 'button',
+              onclick: () => confirmAction(
+                `ไม่เก็บยอด ${money(closeOut.amount)} ฿ ที่ยกไปงวดถัดไปแล้ว?\n\nยอดนี้จะเป็นส่วนลดของบิล ${inv.invoiceNo} และไม่ไปขึ้นบิลงวดถัดไปของร้าน`,
+                async () => {
+                  await api.post(`/api/invoices/${inv.id}/carry-forgive`, {});
+                  toast('เปลี่ยนเป็นส่วนลดแล้ว — ยอดนี้ไม่ไปขึ้นบิลงวดถัดไป', 'success');
+                  reopen();
+                },
+              ),
+            }, 'เปลี่ยนเป็นส่วนลด (ไม่เก็บแล้ว)'))
+          : '',
         /*
          * ปิดยอด — ข้อยกเว้นของ "เปิดดูไม่มีปุ่มแก้": บิลชำระบางส่วนเข้าโหมดแก้ไม่ได้ (ปุ่ม "แก้ไข" ในแถวเปิดแค่บัญชี/วันครบกำหนด)
          * และกล่องนี้คือที่ที่เห็นยอดค้างพอดี
@@ -1741,14 +1802,32 @@ export async function invoicesView() {
           : ''));
   };
 
+  /*
+   * บิลงวดหลังของร้านเดียวกันที่จะรับยอดยกไปทันที — ใบแรกที่ยังแก้ได้ (กติกาเดียวกับเซิร์ฟเวอร์ carryIntoNextBill)
+   * รหัสรอบเรียงตามตัวอักษรได้ตรงกับเวลา (2026-10-H1 < 2026-10-H2 < 2026-11-H1)
+   */
+  const nextEditableBill = (inv) => allInvoices
+    .filter((r) => r.franchiseId === inv.franchiseId && r.periodCode > inv.periodCode && canEditInvoice(r))
+    .sort((a, b) => a.periodCode.localeCompare(b.periodCode))[0] ?? null;
+
   /**
-   * ปิดยอดบิลที่ร้านทยอยจ่ายแล้วเหลือค้าง (เช่นเศษจากอัตราแลกเปลี่ยน) — ยอดค้างกลายเป็นส่วนลด "ปิดยอด" บิลจึงชำระครบ
+   * ปิดยอดบิลที่ร้านทยอยจ่ายแล้วเหลือค้าง (เช่นเศษจากอัตราแลกเปลี่ยน) — บิลจึงชำระครบ เลือกได้ว่ายอดค้างเป็น
+   *   ส่วนลด (ไม่เก็บแล้ว) หรือ ยกไปเก็บงวดถัดไป (ขึ้นบิลงวดหลังเป็น "ยอดค้างยกมา")
    * ไม่ใช่เงินเข้า รายงานเงินที่ได้รับไม่เปลี่ยน · หมายเหตุบังคับ ร้านเห็นในบิล · ย้อนไม่ได้ จึงบอกให้ครบก่อนกด
    */
   const closeBalanceModal = (inv) => formModal({
     title: `ปิดยอดบิล — ${inv.invoiceNo}`,
     submitLabel: 'ปิดยอด',
     fields: [{
+      name: 'mode',
+      label: 'ยอดค้างที่เหลือ',
+      type: 'select',
+      value: 'DISCOUNT',
+      options: [
+        { value: 'DISCOUNT', label: 'เป็นส่วนลด — ไม่เก็บส่วนที่เหลือ' },
+        { value: 'CARRY', label: 'ยกไปเก็บงวดถัดไป — บวกเข้าบิลงวดถัดไปของร้าน' },
+      ],
+    }, {
       name: 'note',
       label: 'หมายเหตุ',
       type: 'textarea',
@@ -1758,16 +1837,31 @@ export async function invoicesView() {
       placeholder: 'เช่น เศษจากอัตราแลกเปลี่ยนตอนโอนเหรียญ / ตกลงกับร้านแล้วว่าไม่เก็บส่วนที่เหลือ',
       hint: 'ร้านเห็นหมายเหตุนี้ในบิล และบันทึกไว้ในประวัติ',
     }],
-    preview: () => el('div', { class: 'alert-box m-0' },
-      `${inv.franchiseUsername} · ปิดยอดค้าง `,
-      el('strong', {}, `${money(inv.outstanding)} ฿`),
-      inv.isUsd ? ` ($${money(inv.payOutstanding)})` : '',
-      ` — ได้รับแล้ว ${money(inv.paid)} ฿ บิลจะเป็น "ชำระครบ"`,
-      el('div', { class: 'sub-line mt-4' },
-        'ยอดค้างกลายเป็นส่วนลด "ปิดยอด" ในบิล ไม่นับเป็นเงินที่ได้รับ · ย้อนกลับไม่ได้ · กลุ่ม Telegram ส่วนกลางได้รับแจ้ง')),
+    preview: (v) => {
+      const carry = v.mode === 'CARRY';
+      const next = carry ? nextEditableBill(inv) : null;
+      return el('div', { class: carry ? 'notice-box m-0' : 'alert-box m-0' },
+        `${inv.franchiseUsername} · ปิดยอดค้าง `,
+        el('strong', {}, `${money(inv.outstanding)} ฿`),
+        inv.isUsd ? ` ($${money(inv.payOutstanding)})` : '',
+        ` — ได้รับแล้ว ${money(inv.paid)} ฿ บิลจะเป็น "ชำระครบ"`,
+        el('div', { class: 'sub-line mt-4' }, carry
+          ? [
+            'ยอดค้างยังเป็นหนี้ของร้าน — ',
+            next
+              ? el('strong', {}, `บวกเข้าบิล ${next.invoiceNo} (${periodLabel(next.periodCode)}) ทันที`)
+              : el('strong', {}, 'บวกเข้าบิลงวดถัดไปของร้านตอนออกบิล'),
+            ` เป็นบรรทัด "ยอดค้างยกมา" (ยอดเป็นบาท${inv.isUsd ? ' — บิล USD ใบถัดไปแปลงด้วยอัตราของใบนั้น' : ''})`
+            + ' · ไม่นับเป็นเงินที่ได้รับ · ย้อนกลับไม่ได้ · กลุ่ม Telegram ส่วนกลางได้รับแจ้ง',
+          ]
+          : 'ยอดค้างกลายเป็นส่วนลด "ปิดยอด" ในบิล ไม่เก็บอีก · ไม่นับเป็นเงินที่ได้รับ · ย้อนกลับไม่ได้ · กลุ่ม Telegram ส่วนกลางได้รับแจ้ง'));
+    },
     onSubmit: async (v) => {
-      await api.post(`/api/invoices/${inv.id}/close-balance`, { note: v.note });
-      toast(`ปิดยอดบิล ${inv.invoiceNo} แล้ว`, 'success');
+      const closed = await api.post(`/api/invoices/${inv.id}/close-balance`, { note: v.note, mode: v.mode });
+      const line = closed.adjustments?.find((a) => a.isCloseOut);
+      toast(v.mode === 'CARRY'
+        ? `ปิดยอดบิล ${inv.invoiceNo} แล้ว — ยอดค้าง${line?.carriedTo ? `บวกเข้าบิล ${line.carriedTo}` : 'รอขึ้นบิลงวดถัดไป'}`
+        : `ปิดยอดบิล ${inv.invoiceNo} แล้ว`, 'success');
       render();
     },
   });
@@ -1959,8 +2053,28 @@ export async function invoicesView() {
     },
     { label: 'รอบบิล', render: (r) => el('div', {}, r.periodCode, el('div', { class: 'sub-line' }, `${r.periodStart} → ${r.periodEnd}`)) },
     { label: 'ส่วนต่าง', num: true, render: (r) => money(r.commissionTotal) },
-    { label: 'ค่าใช้จ่าย', num: true, render: (r) => (r.chargeTotal ? `+${money(r.chargeTotal)}` : el('span', { class: 'muted' }, '—')) },
-    { label: 'ส่วนลด', num: true, render: (r) => (r.discountTotal ? `−${money(r.discountTotal)}` : el('span', { class: 'muted' }, '—')) },
+    /*
+     * ยกยอดข้ามบิลนับอยู่ใน chargeTotal/discountTotal — แยกเป็นบรรทัดรองของมันเอง ไม่เรียกว่าค่าใช้จ่าย/ส่วนลด
+     * (ยอดที่ยกไปยังเป็นหนี้ของร้าน ไม่ใช่ส่วนลด · ยอดที่ยกมาเป็นหนี้เก่า ไม่ใช่ค่าใช้จ่ายของรอบนี้)
+     */
+    {
+      label: 'ค่าใช้จ่าย',
+      num: true,
+      render: (r) => {
+        const own = Number((r.chargeTotal - (r.carriedIn ?? 0)).toFixed(2));
+        return el('div', {}, own ? `+${money(own)}` : el('span', { class: 'muted' }, '—'),
+          r.carriedIn ? el('div', { class: 'sub-line' }, `ยอดค้างยกมา +${money(r.carriedIn)}`) : '');
+      },
+    },
+    {
+      label: 'ส่วนลด',
+      num: true,
+      render: (r) => {
+        const own = Number((r.discountTotal - (r.carriedOut ?? 0)).toFixed(2));
+        return el('div', {}, own ? `−${money(own)}` : el('span', { class: 'muted' }, '—'),
+          r.carriedOut ? el('div', { class: 'sub-line' }, `ยกไปงวดถัดไป ${money(r.carriedOut)}${r.carryPending ? ' (รอออกบิล)' : ''}`) : '');
+      },
+    },
     {
       label: 'ยอดที่ต้องจ่าย',
       num: true,
