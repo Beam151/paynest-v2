@@ -45,6 +45,7 @@ final class ActivityService
         'invoice.sales_deduction.remove' => 'ถอนการหักค่าคอมเซลจากบิลร้าน',
         'invoice.payment'                => 'ตัดยอดในบิลแล้ว',
         'invoice.void'                   => 'ยกเลิกใบเรียกเก็บ',
+        'invoice.close_balance'          => 'ปิดยอดบิล (ยอดค้างที่เหลือเป็นส่วนลด)',
         'invoice.update'                 => 'แก้ไขหัวบิล',
         'invoice.line.update'            => 'แก้วิธีคิดยอดรายสินค้าในบิล',
         'invoice.attachment.add'         => 'แนบรูปประกอบบิล',

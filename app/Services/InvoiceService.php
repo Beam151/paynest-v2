@@ -34,7 +34,7 @@ final class InvoiceService
                (SELECT COUNT(*) FROM invoice_attachments ia
                  WHERE ia.invoice_id = i.id AND ia.removed_at IS NULL) AS attachment_count,
                (SELECT COUNT(*) FROM invoice_adjustments iadj
-                 WHERE iadj.invoice_id = i.id AND iadj.sales_commission_id IS NULL) AS adjustment_count,
+                 WHERE iadj.invoice_id = i.id AND iadj.sales_commission_id IS NULL AND iadj.closes_balance = 0) AS adjustment_count,
                (SELECT COALESCE(SUM(sadj.amount_satang), 0) FROM invoice_adjustments sadj
                  WHERE sadj.invoice_id = i.id AND sadj.sales_commission_id IS NOT NULL) AS sales_deduction_satang
           FROM invoices i
@@ -1306,6 +1306,50 @@ final class InvoiceService
         });
     }
 
+    /**
+     * ปิดยอดบิลที่ร้านทยอยจ่ายแล้วเหลือค้าง (เช่นเศษจากอัตราแลกเปลี่ยนตอนโอนเหรียญ) — ใส่บรรทัดส่วนลด "ปิดยอด" เท่ากับยอดค้าง บิลจึงชำระครบ
+     * ไม่ใช่เงินเข้า: ไม่แตะ invoice_payments รายงานเงินที่ได้รับจริงไม่เพี้ยน · หมายเหตุบังคับ และร้านเห็นในบิล
+     * เฉพาะบิลชำระบางส่วน — ยังไม่มีเงินเข้าแก้บิล/ยกเลิกได้อยู่แล้ว · มีสลิปรอตรวจต้องตรวจก่อน (สลิปนั้นอาจปิดยอดได้เองด้วยเงินจริง)
+     * ย้อนไม่ได้: บิลชำระครบที่มีเงินเข้าแล้วแก้รายการไม่ได้ ตามกติกาเดิม
+     */
+    public static function closeBalance(int $id, string $note, array $user): array
+    {
+        $inv = self::row($id);
+        if ($inv['status'] !== 'PARTIAL') {
+            throw ApiException::conflict($inv['status'] === 'OPEN'
+                ? 'บิลนี้ยังไม่มีเงินเข้า — ใช้ "แก้ไขบิล" ใส่ส่วนลด หรือยกเลิกบิลแทน'
+                : 'ปิดยอดได้เฉพาะบิลที่ชำระบางส่วน (บิลนี้' . ($inv['status'] === 'PAID' ? 'ชำระครบแล้ว' : 'ถูกยกเลิกแล้ว') . ')');
+        }
+        self::assertShopNotDeleted(Db::one('SELECT username, status FROM franchises WHERE id = ?', [$inv['franchise_id']]) ?? []);
+
+        return Db::tx(static function () use ($id, $note, $user) {
+            // ล็อกก่อนอ่านยอดค้าง — สลิปที่เพิ่งอนุมัติจากอีกจอต้องไม่ถูกปิดยอดซ้ำเป็นส่วนลด
+            Db::one('SELECT id FROM invoices WHERE id = ? FOR UPDATE', [$id]);
+            if (Db::int("SELECT COUNT(*) FROM payment_submissions WHERE invoice_id = ? AND status = 'PENDING'", [$id]) > 0) {
+                throw ApiException::conflict('มีสลิปรอตรวจสอบอยู่ — ตรวจให้เสร็จก่อนจึงจะปิดยอดได้');
+            }
+            /*
+             * คิดยอดใหม่ก่อน 1 รอบ: recalc หักเครดิตที่ร้านมีค้าง (เราติดค้างร้าน) เข้าบิลเสมอ
+             * ถ้าปิดยอดจากตัวเลขเดิม รอบที่สองจะหักเครดิตซ้อนจนเงินที่จ่ายแล้วเกินยอดบิล — ใช้เครดิตก่อน ที่เหลือจึงปิดยอด
+             */
+            self::recalc($id, $user);
+            $inv = self::row($id);
+            if ($inv['status'] !== 'PARTIAL') {
+                throw ApiException::conflict('บิลนี้เพิ่งเปลี่ยนสถานะ (อาจมียอดยกมาจากรอบก่อนหักจนครบ) — ปิดหน้าต่างแล้วเปิดใหม่อีกครั้ง');
+            }
+            $remaining = (int) $inv['net_total_satang'] - (int) $inv['paid_satang'];
+            $adjId     = Db::insert(
+                "INSERT INTO invoice_adjustments (invoice_id, kind, label, amount_satang, note, closes_balance, created_by_user_id, created_at)
+                 VALUES (?, 'DISCOUNT', 'ปิดยอด', ?, ?, 1, ?, UTC_TIMESTAMP())",
+                [$id, $remaining, $note, $user['id']],
+            );
+            self::recalc($id, $user);
+            Audit::write((int) $user['id'], 'invoice.close_balance', 'invoice', $id, ['adjustmentId' => $adjId, 'amount' => $remaining, 'note' => $note]);
+
+            return self::get($id, $user);
+        });
+    }
+
     /* ── serializers ───────────────────────────────────────────── */
 
     public static function serializeAdjustment(array $row): array
@@ -1313,14 +1357,17 @@ final class InvoiceService
         $amount = (int) $row['amount_satang'];
         // บรรทัด "หักค่าคอมเซล" (R25) — เป็นส่วนลดในทางคิดเงิน แต่ลบแล้วบิลค่าคอมของเซลถูกยกเลิกตาม หน้าเว็บจึงต้องแยกออก
         $salesCommissionId = ($row['sales_commission_id'] ?? null) === null ? null : (int) $row['sales_commission_id'];
+        // บรรทัด "ปิดยอด" — ส่วนลดเท่ายอดค้างตอนส่วนกลางปิดบิล เป็นเรื่องเฉพาะบิลใบนั้น ดึงไปใช้กับบิลอื่นไม่ได้
+        $closesBalance = (bool) ($row['closes_balance'] ?? false);
 
         return [
             'id'           => (int) $row['id'],
             'chargeItemId' => $row['charge_item_id'] === null ? null : (int) $row['charge_item_id'],
             'salesCommissionId' => $salesCommissionId,
             'isSalesDeduction'  => $salesCommissionId !== null,
+            'isCloseOut'        => $closesBalance,
             'kind'         => $row['kind'],
-            'kindLabel'    => $salesCommissionId !== null ? 'หักค่าคอมเซล' : ($row['kind'] === 'DISCOUNT' ? 'ส่วนลด' : 'ค่าใช้จ่าย'),
+            'kindLabel'    => $salesCommissionId !== null ? 'หักค่าคอมเซล' : ($closesBalance ? 'ปิดยอด' : ($row['kind'] === 'DISCOUNT' ? 'ส่วนลด' : 'ค่าใช้จ่าย')),
             'label'        => $row['label'],
             'pct'          => $row['pct_bp'] === null ? null : Money::bpToPct($row['pct_bp']),
             'amount'       => Money::toBaht($amount),
@@ -1417,7 +1464,7 @@ final class InvoiceService
             // จำนวนรูปประกอบ — รายการบิลโชว์ 📎 N ได้โดยไม่ต้องเซ็นลิงก์ทุกรูปของทุกใบ
             'attachmentCount' => (int) ($row['attachment_count'] ?? 0),
             // จำนวนค่าใช้จ่าย/ส่วนลดในบิล — ตอนออกบิลใหม่ใช้หาบิลเก่าที่มีรายการให้ดึงมาอ้างอิง (นับตามแถว รายการ 0 บาทก็นับ)
-            // ไม่นับบรรทัด "หักค่าคอมเซล" — ดึงไปใช้กับบิลอื่นไม่ได้ (ผูกกับบิลค่าคอมของบิลใบนั้น)
+            // ไม่นับบรรทัด "หักค่าคอมเซล" กับ "ปิดยอด" — ดึงไปใช้กับบิลอื่นไม่ได้ (เป็นเรื่องเฉพาะบิลใบนั้น)
             'adjustmentCount' => (int) ($row['adjustment_count'] ?? 0),
             /*
              * บัญชีที่บิลชี้อยู่ตรงกับที่ส่งเข้า Telegram ของร้านล่าสุดไหม (ไม่มีข้อมูลบัญชีในนี้ ร้านเห็นได้)

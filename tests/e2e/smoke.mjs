@@ -1663,10 +1663,53 @@ const partSlip = await api('POST', '/api/payments', {
 check('ชำระบางส่วนแต่มีสลิปรอตรวจ แก้หัวบิลไม่ได้', (await api('PATCH', `/api/invoices/${paidBill.body.id}`, {
   token: admin, body: { dueDate: '2027-03-31' },
 })).status === 409);
+check('ชำระบางส่วนแต่มีสลิปรอตรวจ ปิดยอดไม่ได้ (สลิปนั้นอาจปิดยอดด้วยเงินจริง)', (await api('POST', `/api/invoices/${paidBill.body.id}/close-balance`, {
+  token: admin, body: { note: 'ทดสอบปิดยอด' },
+})).status === 409);
 await api('POST', `/api/payments/${partSlip.body.id}/cancel`, { token: tokenA });
 check('ชำระครบแล้ว แก้หัวบิลไม่ได้', (await api('PATCH', `/api/invoices/${inv.body.id}`, {
   token: admin, body: { dueDate: '2027-03-31' },
 })).status === 409);
+
+/*
+ * ปิดยอด — ร้านทยอยจ่ายแล้วเหลือเศษค้าง ส่วนกลางปิดบิลได้พร้อมหมายเหตุ
+ * ยอดค้างกลายเป็นส่วนลด "ปิดยอด" ไม่ใช่เงินเข้า: เงินที่ได้รับจริงต้องเท่าเดิม
+ */
+check('บิลที่ยังไม่มีเงินเข้า ปิดยอดไม่ได้ (แก้บิลใส่ส่วนลด/ยกเลิกแทน)', (await api('POST', `/api/invoices/${freshBill.body.id}/close-balance`, {
+  token: admin, body: { note: 'ทดสอบปิดยอด' },
+})).status === 409);
+check('ปิดยอดต้องใส่หมายเหตุ', (await api('POST', `/api/invoices/${paidBill.body.id}/close-balance`, {
+  token: admin, body: { note: ' ' },
+})).status === 400);
+check('ร้านค้าปิดยอดบิลของตัวเองไม่ได้', (await api('POST', `/api/invoices/${paidBill.body.id}/close-balance`, {
+  token: tokenA, body: { note: 'ร้านขอปิดเอง' },
+})).status === 403);
+const openBefore = (await api('GET', `/api/invoices/${paidBill.body.id}`, { token: admin })).body;
+const receivedBefore = (await api('GET', '/api/payments/received', { token: admin })).body.summary.total;
+mark = telegram.messages.length;
+const closedBill = await api('POST', `/api/invoices/${paidBill.body.id}/close-balance`, {
+  token: admin, body: { note: 'เศษจากอัตราแลกเปลี่ยน <ทดสอบ>' },
+});
+const closeLine = closedBill.body.adjustments?.find((a) => a.isCloseOut);
+check('ปิดยอดแล้ว บิลเป็นชำระครบ ยอดค้างเป็น 0 เงินที่ได้รับเท่าเดิม',
+  closedBill.status === 200 && closedBill.body.status === 'PAID' && closedBill.body.outstanding === 0
+    && closedBill.body.paid === openBefore.paid && closedBill.body.netTotal === openBefore.paid, closedBill.body);
+check('ปิดยอดแล้ว มีบรรทัดส่วนลด "ปิดยอด" เท่ายอดค้างเดิม พร้อมหมายเหตุ',
+  closeLine?.kind === 'DISCOUNT' && closeLine.kindLabel === 'ปิดยอด' && closeLine.amount === openBefore.outstanding
+    && closeLine.note === 'เศษจากอัตราแลกเปลี่ยน <ทดสอบ>', closeLine);
+check('ปิดยอดไม่นับเป็นเงินเข้า (ยอดเงินเข้าแล้วไม่เปลี่ยน)',
+  (await api('GET', '/api/payments/received', { token: admin })).body.summary.total === receivedBefore);
+check('ร้านเห็นบรรทัดปิดยอดและหมายเหตุในบิลของตัวเอง',
+  (await api('GET', `/api/invoices/${paidBill.body.id}`, { token: tokenA })).body.adjustments.some((a) => a.isCloseOut && a.note === closeLine?.note));
+check('บรรทัดปิดยอดไม่ถูกนับเป็นค่าใช้จ่าย/ส่วนลดที่ดึงไปใช้กับบิลอื่นได้',
+  (await api('GET', `/api/invoices?periodCode=2027-02-H1`, { token: admin })).body.items.find((r) => r.id === paidBill.body.id)?.adjustmentCount === 0);
+check('ปิดยอดซ้ำไม่ได้', (await api('POST', `/api/invoices/${paidBill.body.id}/close-balance`, {
+  token: admin, body: { note: 'ปิดซ้ำ' },
+})).status === 409);
+await flushTelegram();
+const closeMsg = telegram.messages.slice(mark).find((m) => /ปิดยอดบิล/.test(m.text));
+check('ปิดยอดแล้ว กลุ่มส่วนกลางได้ข้อความแจ้ง (หมายเหตุ escape แล้ว)',
+  closeMsg && closeMsg.chat_id === TG_CHAT && closeMsg.text.includes('&lt;ทดสอบ&gt;'), telegram.messages.slice(mark));
 check('มีสลิปรอตรวจ เปลี่ยนบัญชีไม่ได้', (await api('PATCH', `/api/invoices/${slipBill.body.id}`, {
   token: admin, body: { bankAccountId: bank2.body.id },
 })).status === 409);

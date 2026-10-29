@@ -47,6 +47,9 @@ const canEditInvoice = (inv) => inv.status === 'OPEN' && inv.paid === 0 && !inv.
  */
 const canEditBillHeader = (inv) => canEditInvoice(inv) || (inv.status === 'PARTIAL' && !inv.pendingSubmissions);
 
+/** ปิดยอดได้เฉพาะบิลชำระบางส่วนที่ไม่มีสลิปรอตรวจ (ยังไม่มีเงินเข้า = แก้บิลใส่ส่วนลด/ยกเลิกได้อยู่แล้ว) — กติกาเดียวกับเซิร์ฟเวอร์ */
+const canCloseBalance = (inv) => inv.status === 'PARTIAL' && !inv.pendingSubmissions;
+
 /** ยกเลิกได้ตราบใดที่ยังไม่มีเงินเข้า (เงินเข้าแล้วต้องคืนเงินก่อน ระบบยังไม่รองรับ) */
 const canVoidInvoice = (inv) => inv.status !== 'VOID' && inv.paid === 0;
 
@@ -680,7 +683,7 @@ export async function invoicesView() {
       try {
         const inv = await api.get(`/api/invoices/${id}`);
         // บรรทัด "หักค่าคอมเซล" ของบิลเก่าผูกกับบิลค่าคอมของใบนั้น — ดึงมาเป็นส่วนลดธรรมดาไม่ได้ (ใบใหม่ติ๊กหักเองในกล่องด้านล่าง)
-        refAdjustments.set(id, (inv.adjustments ?? []).filter((a) => !a.isSalesDeduction));
+        refAdjustments.set(id, (inv.adjustments ?? []).filter((a) => !a.isSalesDeduction && !a.isCloseOut));
       } catch (e) {
         if (ref.invoiceId === id) ref.error = e.message || 'โหลดบิลไม่สำเร็จ';
       }
@@ -1444,6 +1447,7 @@ export async function invoicesView() {
     const attachments = inv.attachments ?? [];
     // ค่าคอมเซลที่หักในบิล (R25) กับส่วนลดจริง — สองก้อนนี้รวมกันคือ discountTotal
     const toSales = inv.salesDeductionTotal ?? 0;
+    const closeOut = inv.adjustments.find((a) => a.isCloseOut);
     const ownDiscount = Number((inv.discountTotal - toSales).toFixed(2));
 
     /**
@@ -1593,7 +1597,9 @@ export async function invoicesView() {
         { label: 'รายการ', render: (a) => el('div', {}, a.label, el('div', { class: 'sub-line' }, a.note ?? a.kindLabel)) },
         {
           label: 'คิดจาก',
-          render: (a) => (a.isSalesDeduction ? 'ค่าคอมตามดีลของเซล' : a.pct === null ? 'จำนวนเงินคงที่' : `${a.pct}% ของส่วนต่าง`),
+          render: (a) => (a.isSalesDeduction ? 'ค่าคอมตามดีลของเซล'
+            : a.isCloseOut ? 'ยอดค้างตอนปิดบิล'
+              : a.pct === null ? 'จำนวนเงินคงที่' : `${a.pct}% ของส่วนต่าง`),
         },
         {
           label: 'จำนวน',
@@ -1718,8 +1724,53 @@ export async function invoicesView() {
                   onclick: (e) => { e.preventDefault(); modal.close(); jumpToTab('slips'); },
                 }, 'สลิปรอตรวจ →'))
               : el('span', {}, 'โอนเงินแล้วกดปุ่ม "ชำระเงิน" ที่บิลใบนี้ได้เลย'))
+          : closeOut
+            ? el('div', { class: 'sub-line mt-4' }, `ปิดยอดค้าง ${money(closeOut.amount)} ฿ — ${closeOut.note ?? ''}`)
+            : '',
+        /*
+         * ปิดยอด — ข้อยกเว้นของ "เปิดดูไม่มีปุ่มแก้": บิลชำระบางส่วนเข้าโหมดแก้ไม่ได้ (ปุ่ม "แก้ไข" ในแถวเปิดแค่บัญชี/วันครบกำหนด)
+         * และกล่องนี้คือที่ที่เห็นยอดค้างพอดี
+         */
+        isSuper && canCloseBalance(inv)
+          ? el('div', { class: 'btn-row', style: 'margin-top:10px;justify-content:center' },
+            el('button', {
+              class: 'btn ghost sm',
+              type: 'button',
+              onclick: () => { modal.close(); closeBalanceModal(inv); },
+            }, '✅ ปิดยอดบิล'))
           : ''));
   };
+
+  /**
+   * ปิดยอดบิลที่ร้านทยอยจ่ายแล้วเหลือค้าง (เช่นเศษจากอัตราแลกเปลี่ยน) — ยอดค้างกลายเป็นส่วนลด "ปิดยอด" บิลจึงชำระครบ
+   * ไม่ใช่เงินเข้า รายงานเงินที่ได้รับไม่เปลี่ยน · หมายเหตุบังคับ ร้านเห็นในบิล · ย้อนไม่ได้ จึงบอกให้ครบก่อนกด
+   */
+  const closeBalanceModal = (inv) => formModal({
+    title: `ปิดยอดบิล — ${inv.invoiceNo}`,
+    submitLabel: 'ปิดยอด',
+    fields: [{
+      name: 'note',
+      label: 'หมายเหตุ',
+      type: 'textarea',
+      rows: 3,
+      maxlength: 500,
+      required: true,
+      placeholder: 'เช่น เศษจากอัตราแลกเปลี่ยนตอนโอนเหรียญ / ตกลงกับร้านแล้วว่าไม่เก็บส่วนที่เหลือ',
+      hint: 'ร้านเห็นหมายเหตุนี้ในบิล และบันทึกไว้ในประวัติ',
+    }],
+    preview: () => el('div', { class: 'alert-box m-0' },
+      `${inv.franchiseUsername} · ปิดยอดค้าง `,
+      el('strong', {}, `${money(inv.outstanding)} ฿`),
+      inv.isUsd ? ` ($${money(inv.payOutstanding)})` : '',
+      ` — ได้รับแล้ว ${money(inv.paid)} ฿ บิลจะเป็น "ชำระครบ"`,
+      el('div', { class: 'sub-line mt-4' },
+        'ยอดค้างกลายเป็นส่วนลด "ปิดยอด" ในบิล ไม่นับเป็นเงินที่ได้รับ · ย้อนกลับไม่ได้ · กลุ่ม Telegram ส่วนกลางได้รับแจ้ง')),
+    onSubmit: async (v) => {
+      await api.post(`/api/invoices/${inv.id}/close-balance`, { note: v.note });
+      toast(`ปิดยอดบิล ${inv.invoiceNo} แล้ว`, 'success');
+      render();
+    },
+  });
 
   /**
    * แก้ข้อมูลหัวบิลที่ไม่ใช่ตัวเลข — บัญชีปลายทาง วันครบกำหนด หมายเหตุ
