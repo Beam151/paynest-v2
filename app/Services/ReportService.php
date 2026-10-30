@@ -308,6 +308,19 @@ final class ReportService
               WHERE i.status IN ('OPEN', 'PARTIAL') {$where}",
             $params,
         );
+        /*
+         * ยอดที่ปิดแบบยกไปเก็บงวดถัดไปแต่ยังไม่ขึ้นบิลใบไหน — ร้านยังเป็นหนี้อยู่ แต่บิลต้นทางชำระครบแล้วจึงไม่อยู่ในยอดค้างข้างบน
+         * เงื่อนไขเดียวกับ InvoiceService::pendingCarries (บิลที่รับยอดไปถูกยกเลิก = ยอดกลับมารอ)
+         */
+        $carry = Db::one(
+            "SELECT COALESCE(SUM(co.amount_satang), 0) AS amount, COUNT(DISTINCT i.franchise_id) AS shops
+               FROM invoice_adjustments co
+               JOIN invoices i ON i.id = co.invoice_id
+              WHERE co.carry_forward = 1 AND i.status <> 'VOID' {$where}
+                AND NOT EXISTS (SELECT 1 FROM invoice_adjustments ch JOIN invoices ni ON ni.id = ch.invoice_id
+                                 WHERE ch.carried_from_id = co.id AND ni.status <> 'VOID')",
+            $params,
+        );
         $slipUsd = Usd::sqlCents('ps.amount_satang', 'i.usd_rate_satang', 'bp.usd_rate_satang');
         $pending = Db::one(
             "SELECT COUNT(*) AS n, COALESCE(SUM(ps.amount_satang), 0) AS amount,
@@ -330,6 +343,9 @@ final class ReportService
                 'amount'    => Money::toBaht((int) $outstanding['amount']),
                 'invoices'  => (int) $outstanding['invoices'],
                 'amountUsd' => Usd::fromCents($outstanding['usd_cents']),
+                // ไม่รวมใน amount ข้างบน — หน้าเว็บโชว์เป็นบรรทัดแยก
+                'carryPending' => Money::toBaht((int) $carry['amount']),
+                'carryShops'   => (int) $carry['shops'],
             ],
             'pendingPayments' => [
                 'count'     => (int) $pending['n'],

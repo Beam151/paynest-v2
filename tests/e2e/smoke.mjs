@@ -1746,6 +1746,10 @@ check('ยกไปงวดถัดไป: บิลต้นทางชำ�
   k1Closed.body);
 check('ยกไปงวดถัดไป: ตารางบิลแยกยอดยกไป/รอออกบิลออกจากส่วนลด',
   (await kRow(k1.body.id))?.carriedOut === 400 && (await kRow(k1.body.id))?.carryPending === 400, await kRow(k1.body.id));
+const kDashOut = async () => (await api('GET', `/api/reports/dashboard?periodCode=2033-01-H2&franchiseId=${kfid}`, { token: admin })).body.outstanding;
+const kDash1 = await kDashOut();
+check('ภาพรวม: ยอดยกไปที่รอออกบิลแยกบอก ไม่ปนกับยอดค้างในบิล (บิลต้นทางชำระครบแล้ว)',
+  kDash1.carryPending === 400 && kDash1.carryShops === 1 && kDash1.amount === 0, kDash1);
 await flushTelegram();
 check('ยกไปงวดถัดไป: กลุ่มส่วนกลางได้ข้อความแจ้งว่ายกไปบิลงวดถัดไป',
   telegram.messages.slice(mark).some((m) => /ปิดยอดบิล/.test(m.text) && /ยกไปเก็บงวดถัดไป/.test(m.text)), telegram.messages.slice(mark));
@@ -1759,6 +1763,9 @@ check('ออกบิลงวดถัดไป: บวก "ยอดค้า
   k2.body);
 check('บิลต้นทางบอกว่ายอดไปขึ้นบิลไหนแล้ว และไม่ค้างรอขึ้นบิลอีก',
   kLine(await kGet(k1.body.id), (a) => a.isCloseOut)?.carriedTo === k2.body.invoiceNo && (await kRow(k1.body.id))?.carryPending === 0);
+const kDash2 = await kDashOut();
+check('ภาพรวม: ยอดยกไปขึ้นบิลแล้ว → ย้ายไปอยู่ในยอดค้างของบิลใบใหม่ ไม่รอออกบิลอีก',
+  kDash2.carryPending === 0 && kDash2.carryShops === 0 && kDash2.amount === 2400, kDash2);
 check('ยอดค้างยกมาลบออกจากบิลไม่ได้', (await api('DELETE', `/api/invoices/${k2.body.id}/adjustments/${k2In?.id}`, { token: admin })).status === 409);
 check('ยอดค้างยกมาไม่ถูกนับเป็นรายการที่ดึงไปใช้กับบิลอื่นได้', (await kRow(k2.body.id))?.adjustmentCount === 0);
 

@@ -143,7 +143,14 @@ export async function dashboardView() {
         { tone: 'income', icon: '💰', usd: data.current.commissionAmountUsd }),
       // ยอดค้างเป็นของทุกรอบ ไม่ใช่รอบนี้ — บอกไว้บนการ์ดเลย ไม่งั้นดูเหมือนตัวเลขของรอบที่เลือก
       stat('ร้านยังไม่จ่าย (ทุกรอบ)', money(data.outstanding.amount) + ' ฿',
-        `${int(data.outstanding.invoices)} ใบเรียกเก็บ`, { tone: 'due', icon: '⏳', usd: data.outstanding.amountUsd }),
+        [
+          el('div', {}, `${int(data.outstanding.invoices)} ใบเรียกเก็บ`),
+          // ยอดยกไปที่ยังไม่ขึ้นบิลใบไหน — ร้านยังเป็นหนี้ แต่บิลต้นทางชำระครบแล้ว ยอดบนจึงไม่นับ
+          data.outstanding.carryPending
+            ? el('div', {}, `+ ยอดยกไปรอออกบิล ${money(data.outstanding.carryPending)} ฿ · ${int(data.outstanding.carryShops)} ร้าน (ยังไม่อยู่ในบิล)`)
+            : null,
+        ],
+        { tone: 'due', icon: '⏳', usd: data.outstanding.amountUsd }),
       balanceStat(ledger.summary),
       surplusStat(data.current, ledger.summary)),
 
@@ -241,15 +248,25 @@ const signed = (n) => `${n < 0 ? '−' : ''}${money(Math.abs(n))}`;
 /** ยอดเข้า/ออกในตารางที่มา — ติด +/− ให้เห็นทิศ ยอดศูนย์ไม่ติดเครื่องหมาย (เลี่ยง "−0.00") */
 const plusMinus = (n) => `${n > 0 ? '+' : ''}${signed(n)}`;
 
-/** คอลัมน์ค่าใช้จ่าย/ส่วนลด — เลี่ยง "+0.00 / −0.00" ที่อ่านแล้วต้องหยุดคิดว่าแปลว่าอะไร */
+/**
+ * คอลัมน์ค่าใช้จ่าย/ส่วนลด — เลี่ยง "+0.00 / −0.00" ที่อ่านแล้วต้องหยุดคิดว่าแปลว่าอะไร
+ * ยกยอดข้ามบิลนับอยู่ใน chargeTotal/discountTotal — แยกเป็นบรรทัดรองของมันเอง เหมือนตารางหน้าบิล
+ * (ยอดที่ยกไปยังเป็นหนี้ของร้าน ไม่ใช่ส่วนลด · ยอดที่ยกมาเป็นหนี้เก่า ไม่ใช่ค่าใช้จ่ายของรอบนี้)
+ */
 const adjustmentColumn = {
   label: 'ค่าใช้จ่าย/ส่วนลด',
   num: true,
   sortValue: (r) => r.chargeTotal - r.discountTotal,
-  render: (r) => (r.chargeTotal || r.discountTotal
-    ? [r.chargeTotal ? `+${money(r.chargeTotal)}` : null,
-      r.discountTotal ? `−${money(r.discountTotal)}` : null].filter(Boolean).join(' / ')
-    : el('span', { class: 'muted' }, '—')),
+  render: (r) => {
+    const charge = Number((r.chargeTotal - (r.carriedIn ?? 0)).toFixed(2));
+    const discount = Number((r.discountTotal - (r.carriedOut ?? 0)).toFixed(2));
+    return el('div', {},
+      charge || discount
+        ? [charge ? `+${money(charge)}` : null, discount ? `−${money(discount)}` : null].filter(Boolean).join(' / ')
+        : el('span', { class: 'muted' }, '—'),
+      r.carriedIn ? el('div', { class: 'sub-line' }, `ยอดค้างยกมา +${money(r.carriedIn)}`) : '',
+      r.carriedOut ? el('div', { class: 'sub-line' }, `ยกไปงวดถัดไป ${money(r.carriedOut)}${r.carryPending ? ' (รอออกบิล)' : ''}`) : '');
+  },
 };
 
 /**
