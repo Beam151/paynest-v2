@@ -2229,6 +2229,7 @@ export async function invoicesView() {
         shown.overdueCount ? `เลยกำหนดแล้ว ${int(shown.overdueCount)} ใบ` : null,
         { tone: shown.outstanding > 0 ? 'due' : 'income', icon: shown.outstanding > 0 ? '⏳' : '✓', usd: shown.outstandingUsd }),
       isSuper && currencySplitStat(active),
+      isSuper && carryOutStat(active),
     ];
   }
 
@@ -2405,4 +2406,26 @@ function currencySplitStat(rows) {
       g.fmt(g.billed), el('span', { class: 'split-tag' }, `${g.label} · ${int(g.rows.length)} ใบ`)))),
     [el('div', {}, `ได้รับแล้ว ${both('received')}`), el('div', {}, `ยังไม่ได้รับ ${both('left')}`)],
     { tone: 'sales', icon: '💳' });
+}
+
+/**
+ * ยอดที่บิลชุดนี้ปิดแบบยกไปเก็บงวดถัดไป (แท็บบิลของส่วนกลาง) — ตัวเลขเดียวกับบรรทัด "ยกไปงวดถัดไป" ใต้ช่องส่วนลดในตาราง
+ * แยก "รอออกบิล" (carryPending ยังไม่ขึ้นบิลใบไหน = หนี้ที่รออยู่นอกบิล) ออกจากส่วนที่ขึ้นบิลงวดถัดไปแล้ว
+ */
+function carryOutStat(rows) {
+  const carried = rows.filter((r) => (r.carriedOut ?? 0) > 0);
+  const total = Number(carried.reduce((t, r) => t + r.carriedOut, 0).toFixed(2));
+  const pending = Number(carried.reduce((t, r) => t + (r.carryPending ?? 0), 0).toFixed(2));
+  const billed = Number((total - pending).toFixed(2));
+  const waiting = carried.filter((r) => (r.carryPending ?? 0) > 0).length;
+
+  return stat('ยกไปงวดถัดไป', money(total) + ' ฿',
+    carried.length
+      ? [
+        el('div', {}, `${int(carried.length)} ใบ`),
+        pending ? el('div', {}, `รอออกบิล ${money(pending)} ฿ · ${int(waiting)} ใบ`) : null,
+        billed ? el('div', {}, `ขึ้นบิลงวดถัดไปแล้ว ${money(billed)} ฿`) : null,
+      ]
+      : 'ไม่มีบิลที่ยกยอดไป',
+    { tone: pending ? 'due' : 'muted', icon: '➡', usd: sumUsd(carried, (r) => r.carriedOut) });
 }

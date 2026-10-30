@@ -82,6 +82,7 @@ const EMOJI_ICON = {
   '➕': 'plus', '💳': 'credit-card', '📨': 'send', '📱': 'smartphone', '🔑': 'key-round', '🔐': 'lock', '🔓': 'lock-open',
   '🔔': 'bell', '🌙': 'moon', '🕗': 'clock', '🛡': 'shield-check',
   '🏠': 'house', '📣': 'megaphone', '📅': 'calendar', '📌': 'pin', '🎉': 'party-popper', '📖': 'book-open',
+  '➡': 'arrow-right',
 };
 export const iconFor = (emoji) => {
   const name = EMOJI_ICON[String(emoji ?? '').replace(/\uFE0F/g, '').trim()];
