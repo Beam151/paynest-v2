@@ -430,6 +430,30 @@ export async function invoicesView() {
 
     const goSales = () => { setWorkingPeriod(data.periodCode); location.hash = '#/sales'; };
 
+    /*
+     * ยอดที่บิลรอบก่อนยกไปเก็บงวดถัดไป แต่จะไม่ขึ้นบิลรอบนี้ — ร้านพร้อมออกบิลไม่ต้องเตือน ยอดบวกเข้าให้เองตอนออก ("+ ยอดค้างยกมา" ในตาราง)
+     * ร้านที่ไม่มียอดขายออกบิลไม่ได้ ยอดจะค้างรอไปเรื่อย ๆ โดยไม่มีใครเห็น ต้องบอกให้กรอกยอด หรือเปลี่ยนเป็นส่วนลดที่บิลต้นทาง
+     */
+    const statusOf = new Map(data.items.map((r) => [String(r.franchiseId), r.status]));
+    const CARRY_STUCK = {
+      NO_SALES: 'ยังไม่กรอกยอดรอบนี้ — ออกบิลไม่ได้จนกว่าจะมียอดขาย',
+      INVOICED: 'บิลรอบนี้ออกไปแล้วและรับยอดเพิ่มไม่ได้ (มีเงินหรือสลิปเข้าแล้ว) — จะไปขึ้นบิลรอบถัดไป',
+    };
+    const stuckCarries = allInvoices.filter((r) => r.status !== 'VOID' && r.carryPending > 0
+      && r.periodCode < data.periodCode && statusOf.get(String(r.franchiseId)) !== 'READY');
+    const stuckTotal = Number(stuckCarries.reduce((t, r) => t + r.carryPending, 0).toFixed(2));
+    const carryNotice = stuckCarries.length
+      ? el('div', { class: 'notice-box' },
+        el('div', {}, `ยอดค้างยกมาที่จะไม่ขึ้นบิลรอบนี้ ${int(new Set(stuckCarries.map((r) => r.franchiseId)).size)} ร้าน · ${money(stuckTotal)} ฿`),
+        el('div', { class: 'sub-line' },
+          'กรอกยอดขายแล้วออกบิลให้ร้าน หรือเปิดบิลต้นทางแล้วกด "เปลี่ยนเป็นส่วนลด (ไม่เก็บแล้ว)"'),
+        ...stuckCarries.map((r) => el('div', { class: 'carry-notice-row' },
+          el('strong', {}, r.franchiseUsername), ` ${money(r.carryPending)} ฿ จาก `,
+          el('button', { class: 'btn ghost sm', type: 'button', onclick: () => detailModal(r) }, r.invoiceNo),
+          el('span', { class: 'sub-line' },
+            CARRY_STUCK[statusOf.get(String(r.franchiseId))] ?? 'ร้านไม่มีสินค้าที่ต้องขายในรอบนี้ — ไม่มีบิลให้ยอดไปขึ้น'))))
+      : '';
+
     return el('div', {},
       el('div', { class: 'toolbar' },
         el('h2', { class: 'section-title' },
@@ -438,6 +462,7 @@ export async function invoicesView() {
       !periodFilter
         ? el('div', { class: 'notice-box' }, `ตัวกรองเป็น "ทุกรอบ" — แสดงรอบที่กำลังทำงาน (${periodLabel(data.periodCode)}) · เลือกรอบอื่นได้ที่แถบรอบบิลด้านบน`)
         : '',
+      carryNotice,
       // ออกหลายร้านไม่มีที่ให้เลือกวิธีคิดรายสินค้า — บอกก่อนว่ายอดที่กรอกไว้ในหน้ายอดขายจะถูกใช้ และแก้ทีหลังได้ที่ไหน
       readyRows.some((r) => r.manualCount > 0)
         ? el('div', { class: 'notice-box info-box' },
@@ -486,7 +511,11 @@ export async function invoicesView() {
                   ? el('div', { class: 'sub-line', style: 'color:var(--warn)' },
                     `+ ยอดค้างยกมา ${money(carryInFor(r.franchiseId, data.periodCode).total)}`)
                   : '')
-              : '—'),
+              // ยังไม่มียอดขาย = ออกบิลไม่ได้ ยอดค้างยกมาของร้านรออยู่ (รายละเอียดที่แถบเตือนด้านบน)
+              : r.status === 'NO_SALES' && carryInFor(r.franchiseId, data.periodCode).total
+                ? el('span', { class: 'sub-line', style: 'color:var(--warn)' },
+                  `ยอดค้างยกมา ${money(carryInFor(r.franchiseId, data.periodCode).total)} รอออกบิล`)
+                : '—'),
         },
         {
           label: '',
@@ -2229,7 +2258,7 @@ export async function invoicesView() {
         shown.overdueCount ? `เลยกำหนดแล้ว ${int(shown.overdueCount)} ใบ` : null,
         { tone: shown.outstanding > 0 ? 'due' : 'income', icon: shown.outstanding > 0 ? '⏳' : '✓', usd: shown.outstandingUsd }),
       isSuper && currencySplitStat(active),
-      isSuper && carryOutStat(active),
+      isSuper && carryStat(active),
     ];
   }
 
@@ -2414,19 +2443,30 @@ function currencySplitStat(rows) {
 }
 
 /**
- * ยอดที่บิลชุดนี้ปิดแบบยกไปเก็บงวดถัดไป แยกตามสกุลของบิลต้นทาง (แท็บบิลของส่วนกลาง) — ตัวเลขเดียวกับบรรทัด "ยกไปงวดถัดไป" ใต้ช่องส่วนลดในตาราง
- * ยอดนี้ถูกหักออกจาก payAmount ของบิลต้นทางแล้ว จึงไม่อยู่ในการ์ดเรียกเก็บแยกสกุลเงิน
- * (ไม่บวกกลับเข้าไป — ยอดบนต้องตรงกับการ์ดยอดเรียกเก็บรวม และพอยอดไปขึ้นบิลงวดหลังแล้ว ดูทุกรอบจะนับซ้ำ)
- * บิล USD: carriedOut เป็นบาท แปลงด้วย fxRate ของบิล (บิล USD = อัตราที่ตรึงไว้ ตัวเดียวกับ payAmount)
+ * ยอดยกข้ามงวดของบิลชุดนี้ แยกตามสกุลของบิล (แท็บบิลของส่วนกลาง) — ตัวเลขเดียวกับบรรทัดรองใต้ช่องส่วนลด/ค่าใช้จ่ายในตาราง
+ *   ยกไปงวดถัดไป   carriedOut — หักออกจาก payAmount ของบิลต้นทางแล้ว จึงไม่อยู่ในการ์ดเรียกเก็บแยกสกุลเงิน
+ *                  (ไม่บวกกลับเข้าไป — ยอดบนต้องตรงกับการ์ดยอดเรียกเก็บรวม และพอยอดไปขึ้นบิลงวดหลังแล้ว ดูทุกรอบจะนับซ้ำ)
+ *   ยกมาจากงวดก่อน carriedIn — บวกเข้าบิลรอบนี้เป็นค่าใช้จ่าย จึงอยู่ในยอดเรียกเก็บแล้ว
+ * งวดที่ปิดยอดเห็นยอดยกไป งวดถัดไปเห็นยอดยกมา — admin ตามยอดเดียวกันได้ทั้งสองฝั่ง
+ * บิล USD: ยอดยกเป็นบาท แปลงด้วย fxRate ของบิล (บิล USD = อัตราที่ตรึงไว้ ตัวเดียวกับ payAmount)
  */
-function carryOutStat(rows) {
-  const groups = payCurrencyGroups(rows.filter((r) => (r.carriedOut ?? 0) > 0)).map((g) => ({
-    ...g,
-    carried: sumOf(g.rows, (r) => (r.isUsd ? usdOf(r.carriedOut, r.fxRate) ?? 0 : r.carriedOut)),
-  }));
-  const any = groups.some((g) => g.rows.length);
+function carryStat(rows) {
+  const block = (key) => payCurrencyGroups(rows.filter((r) => (r[key] ?? 0) > 0))
+    .filter((g) => g.rows.length)
+    .map((g) => ({ ...g, amount: sumOf(g.rows, (r) => (r.isUsd ? usdOf(r[key], r.fxRate) ?? 0 : r[key])) }));
+  const out = block('carriedOut');
+  const carriedIn = block('carriedIn');
+  const section = (caption, groups) => (groups.length
+    ? [el('div', { class: 'split-caption' }, caption), splitValue(groups, 'amount')]
+    : []);
 
-  return stat('ยกไปงวดถัดไป', splitValue(groups, 'carried'),
-    any ? 'ไม่รวมในยอดเรียกเก็บ' : 'ไม่มีบิลที่ยกยอดไป',
-    { tone: any ? 'due' : 'muted', icon: '➡' });
+  if (!out.length && !carriedIn.length) {
+    return stat('ยอดยกข้ามงวด', '—', 'ไม่มีบิลที่ยกยอดไปหรือรับยอดยกมา', { icon: '➡' });
+  }
+  return stat('ยอดยกข้ามงวด',
+    el('div', {},
+      ...section('ยกไปงวดถัดไป · ไม่รวมในยอดเรียกเก็บ', out),
+      ...section('ยกมาจากงวดก่อน · รวมในยอดเรียกเก็บแล้ว', carriedIn)),
+    null,
+    { tone: out.length ? 'due' : 'sales', icon: '➡' });
 }

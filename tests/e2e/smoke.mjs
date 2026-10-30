@@ -1768,6 +1768,11 @@ check('ยกเลิกบิลที่รับยอดยกมา → �
   (await kRow(k1.body.id))?.carryPending === 400 && kLine(await kGet(k1.body.id), (a) => a.isCloseOut)?.carriedTo === null);
 const k2b = await api('POST', '/api/invoices/generate', { token: admin, body: { franchiseId: kfid, periodCode: '2033-01-H2' } });
 check('ออกบิลรอบเดิมใหม่ → บวกยอดค้างยกมาให้อีก', k2b.status === 201 && k2b.body.netTotal === 2400 && k2b.body.carriedIn === 400, k2b.body);
+const kLedger = async (code) => (await api('GET', `/api/ledger?periodCode=${code}`, { token: admin })).body.summary;
+const [kLedgerFrom, kLedgerTo] = [await kLedger('2033-01-H1'), await kLedger('2033-01-H2')];
+check('สมุดรายรับ-รายจ่าย: รอบต้นทางบอกยอดยกไป รอบที่รับบอกยอดค้างยกมา (บิลที่ยกเลิกไม่นับ)',
+  kLedgerFrom.carriedOut === 400 && kLedgerFrom.carriedIn === 0 && kLedgerTo.carriedIn === 400 && kLedgerTo.carriedOut === 0,
+  { from: kLedgerFrom, to: kLedgerTo });
 
 // บิลงวดหลังออกไว้แล้วและยังแก้ได้ → ปิดยอดแบบยกไป บวกเข้าบิลนั้นทันที
 const k3 = await kBill('2033-02-H1', 30000);

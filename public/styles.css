@@ -411,6 +411,9 @@ tfoot .usd-note { font-size: var(--fs-xs); color: var(--muted); }
 /* การ์ดแยกสกุลเงิน (หน้าบิล): ยอดสองสกุลซ้อนกัน เล็กกว่ายอดเดี่ยวเล็กน้อย ป้ายสกุลตัวเล็กต่อท้าย */
 .stat .value-split { font-size: 21px; display: grid; gap: 2px; }
 .stat .value-split .split-tag { font-size: var(--fs-xs); font-weight: 600; color: var(--muted); margin-left: 8px; white-space: nowrap; }
+/* การ์ดยอดยกข้ามงวด: หัวข้อเล็กคั่นกลุ่ม "ยกไป" กับ "ยกมา" */
+.stat .split-caption { font-size: var(--fs-xs); font-weight: 600; color: var(--muted); margin-bottom: 2px; }
+.stat .split-caption:not(:first-child) { margin-top: 8px; }
 
 .delta { font-size: var(--fs-sm); font-weight: 700; font-variant-numeric: tabular-nums; }
 .delta.up { color: var(--success); }
@@ -522,6 +525,9 @@ td .btn-row .btn { white-space: nowrap; }
 .error-box { background: var(--danger-soft); color: var(--danger); padding: 10px 14px; border-radius: var(--radius-md); font-size: var(--fs-sm); margin-bottom: 14px; }
 /* กล่องแจ้งเตือน — คนละความหมายกับ error-box ที่แปลว่าทำงานพลาด */
 .notice-box { background: var(--warn-soft); color: var(--warn); padding: 10px 14px; border-radius: var(--radius-md); font-size: var(--fs-sm); font-weight: 600; margin-bottom: 14px; }
+/* แท็บพร้อมออกบิล: ยอดค้างยกมาที่จะไม่ขึ้นบิลรอบนี้ — แถวละร้าน ปุ่มเลขบิลเปิดบิลต้นทาง */
+.carry-notice-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 6px; color: var(--text); font-weight: 500; }
+.carry-notice-row .sub-line { flex-basis: 100%; }
 .loading { padding: 40px; text-align: center; color: var(--muted); }
 .muted { color: var(--muted); }
 .nowrap { white-space: nowrap; }

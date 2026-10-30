@@ -265,7 +265,13 @@ function ledgerCard(ledger, periodCode) {
   return card('รายรับ-รายจ่ายของเราในรอบนี้',
     el('div', {},
       el('div', { class: 'stat-grid m-0' },
-        stat('เก็บเงินได้จริง', money(s.collected) + ' ฿', `จากที่เรียกเก็บไป ${money(s.billed)} ฿${usdText(s.billedUsd)}`,
+        stat('เก็บเงินได้จริง', money(s.collected) + ' ฿',
+          [
+            el('div', {}, `จากที่เรียกเก็บไป ${money(s.billed)} ฿${usdText(s.billedUsd)}`),
+            // ยอดยกข้ามงวดนับเป็นเงินเข้าของรอบที่รับยอดไป (หน้ารายรับ-รายจ่ายบอกละเอียดกว่า)
+            s.carriedOut ? el('div', {}, `ยกไปเก็บงวดถัดไป ${money(s.carriedOut)} ฿`) : null,
+            s.carriedIn ? el('div', {}, `มียอดค้างยกมาจากงวดก่อน ${money(s.carriedIn)} ฿`) : null,
+          ],
           { tone: 'sales', icon: '🏦', usd: s.collectedUsd }),
         stat('รายรับอื่น', money(s.income) + ' ฿', 'เงินเข้าที่ไม่ได้มาจากบิล', { tone: 'income', icon: '➕', usd: s.incomeUsd }),
         stat('รายจ่ายของเรา', money(s.expense) + ' ฿', `${int(ledger.items.filter((i) => i.kind === 'EXPENSE').length)} รายการ`,

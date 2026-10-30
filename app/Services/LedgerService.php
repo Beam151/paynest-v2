@@ -140,6 +140,7 @@ final class LedgerService
         $billed    = 0;
         $collected = 0;
         $row       = null;
+        $carry     = null;
         if ($period !== null) {
             // ดอลลาร์ของเงินจากบิล: ปัดทีละบิลตามอัตราที่ตรึงไว้กับบิลนั้น (ไม่มี = อัตราของรอบ) — ตรงกับยอดที่หน้าบิลรวม
             $billedCents    = Usd::sqlCents('i.commission_total_satang', 'i.usd_rate_satang', 'bp.usd_rate_satang');
@@ -156,6 +157,18 @@ final class LedgerService
             );
             $billed    = Money::toBaht((int) $row['billed']);
             $collected = Money::toBaht((int) $row['collected']);
+            /*
+             * ยอดค้างที่ปิดแบบยกไปเก็บงวดถัดไป — เงินส่วนนี้นับเป็น "เก็บได้จริง" ของรอบบิลที่รับยอดไป ไม่ใช่รอบต้นทาง
+             * รอบต้นทางจึงเก็บได้น้อยกว่าที่เรียกเก็บ ส่วนรอบที่รับอาจเก็บได้มากกว่า — สองตัวนี้ไว้บอกที่มาของส่วนต่าง
+             */
+            $carry = Db::one(
+                "SELECT COALESCE(SUM(CASE WHEN a.carry_forward = 1 THEN a.amount_satang END), 0)            AS carried_out,
+                        COALESCE(SUM(CASE WHEN a.carried_from_id IS NOT NULL THEN a.amount_satang END), 0) AS carried_in
+                   FROM invoice_adjustments a
+                   JOIN invoices i ON i.id = a.invoice_id
+                  WHERE i.period_id = ? AND i.status <> 'VOID'",
+                [$period['id']],
+            );
         }
         $expenseUsd   = Usd::sum($expenses, 'amount');
         $incomeUsd    = Usd::sum($incomes, 'amount');
@@ -168,6 +181,9 @@ final class LedgerService
                 'income'    => Money::round2($income),
                 'billed'    => $billed,
                 'collected' => $collected,
+                // ยกไป = บิลรอบนี้ปิดยอดค้างไปเก็บงวดถัดไป · ยกมา = บิลรอบนี้รับยอดค้างของงวดก่อนมาเก็บ
+                'carriedOut' => Money::toBaht((int) ($carry['carried_out'] ?? 0)),
+                'carriedIn'  => Money::toBaht((int) ($carry['carried_in'] ?? 0)),
                 // กำไรจริง = เงินที่เก็บเข้ามาได้จริง + รายรับอื่น − รายจ่าย
                 'net' => Money::round2($collected + $income - $expense),
                 // สมดุลของสมุดเอง = รายรับอื่น − รายจ่าย (ไม่นับเงินจากบิล) — การ์ด "รายรับ-รายจ่าย" หน้าภาพรวม
