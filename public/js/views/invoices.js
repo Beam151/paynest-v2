@@ -2388,23 +2388,30 @@ export async function invoicesView() {
 /**
  * ยอดเรียกเก็บแยกตามสกุลที่ให้ร้านจ่าย (แท็บบิลของส่วนกลาง) — บิล USD เป็นดอลลาร์จริงตามอัตราที่ตรึงไว้ ไม่ใช่ยอดเทียบ
  * ใช้ payAmount/payOutstanding ตัวเดียวกับที่โชว์บนบิล ผลรวมจึงตรงกับที่ร้านต้องโอน
+ * ยอดยกไปงวดถัดไปถูกหักออกจาก payAmount ของบิลต้นทางแล้ว — โชว์เป็นบรรทัดแยกในสกุลของบิล ไม่บวกกลับเข้ายอดบน
+ * (ยอดบนต้องตรงกับการ์ดยอดเรียกเก็บรวม และพอยอดไปขึ้นบิลงวดหลังแล้ว ดูทุกรอบจะนับซ้ำ)
  */
 function currencySplitStat(rows) {
   const sum = (list, pick) => Number(list.reduce((t, r) => t + pick(r), 0).toFixed(2));
   const groups = [
-    { label: 'USD', rows: rows.filter((r) => r.isUsd), fmt: dollars },
-    { label: 'บาท', rows: rows.filter((r) => !r.isUsd), fmt: (n) => `${money(n)} ฿` }, // ฿ ไม่หลุดไปขึ้นบรรทัดใหม่คนเดียว
+    // บิล USD: carriedOut เป็นบาท แปลงด้วย fxRate ของบิล (บิล USD = อัตราที่ตรึงไว้ ตัวเดียวกับ payAmount)
+    { label: 'USD', rows: rows.filter((r) => r.isUsd), fmt: dollars, carry: (r) => usdOf(r.carriedOut ?? 0, r.fxRate) ?? 0 },
+    { label: 'บาท', rows: rows.filter((r) => !r.isUsd), fmt: (n) => `${money(n)} ฿`, carry: (r) => r.carriedOut ?? 0 }, // ฿ ไม่หลุดไปขึ้นบรรทัดใหม่คนเดียว
   ].map((g) => {
     const billed = sum(g.rows, (r) => r.payAmount);
     const left = sum(g.rows, (r) => r.payOutstanding);
-    return { ...g, billed, left, received: Number((billed - left).toFixed(2)) };
+    return { ...g, billed, left, received: Number((billed - left).toFixed(2)), carried: sum(g.rows, g.carry) };
   });
   const both = (key) => groups.map((g) => g.fmt(g[key])).join(' · ');
 
   return stat('เรียกเก็บแยกสกุลเงิน',
     el('div', { class: 'value-split' }, ...groups.map((g) => el('div', {},
       g.fmt(g.billed), el('span', { class: 'split-tag' }, `${g.label} · ${int(g.rows.length)} ใบ`)))),
-    [el('div', {}, `ได้รับแล้ว ${both('received')}`), el('div', {}, `ยังไม่ได้รับ ${both('left')}`)],
+    [
+      el('div', {}, `ได้รับแล้ว ${both('received')}`),
+      el('div', {}, `ยังไม่ได้รับ ${both('left')}`),
+      groups.some((g) => g.carried) ? el('div', {}, `ยกไปงวดถัดไป ${both('carried')} (หักออกจากยอดบนแล้ว)`) : null,
+    ],
     { tone: 'sales', icon: '💳' });
 }
 
