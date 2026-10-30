@@ -2385,54 +2385,48 @@ export async function invoicesView() {
     superTabBody ?? '');
 }
 
+/** บิลแยกตามสกุลที่ให้ร้านจ่าย — fmt = รูปแบบยอดในสกุลนั้น */
+const payCurrencyGroups = (rows) => [
+  { label: 'USD', rows: rows.filter((r) => r.isUsd), fmt: dollars },
+  { label: 'บาท', rows: rows.filter((r) => !r.isUsd), fmt: (n) => `${money(n)} ฿` }, // ฿ ไม่หลุดไปขึ้นบรรทัดใหม่คนเดียว
+];
+const sumOf = (list, pick) => Number(list.reduce((t, r) => t + pick(r), 0).toFixed(2));
+
+/** ยอดใหญ่ของการ์ดแยกสกุล — บรรทัดละสกุล ต่อท้ายด้วยสกุลและจำนวนใบ */
+const splitValue = (groups, key) => el('div', { class: 'value-split' }, ...groups.map((g) => el('div', {},
+  g.fmt(g[key]), el('span', { class: 'split-tag' }, `${g.label} · ${int(g.rows.length)} ใบ`))));
+
 /**
  * ยอดเรียกเก็บแยกตามสกุลที่ให้ร้านจ่าย (แท็บบิลของส่วนกลาง) — บิล USD เป็นดอลลาร์จริงตามอัตราที่ตรึงไว้ ไม่ใช่ยอดเทียบ
  * ใช้ payAmount/payOutstanding ตัวเดียวกับที่โชว์บนบิล ผลรวมจึงตรงกับที่ร้านต้องโอน
- * ยอดยกไปงวดถัดไปถูกหักออกจาก payAmount ของบิลต้นทางแล้ว — โชว์เป็นบรรทัดแยกในสกุลของบิล ไม่บวกกลับเข้ายอดบน
- * (ยอดบนต้องตรงกับการ์ดยอดเรียกเก็บรวม และพอยอดไปขึ้นบิลงวดหลังแล้ว ดูทุกรอบจะนับซ้ำ)
  */
 function currencySplitStat(rows) {
-  const sum = (list, pick) => Number(list.reduce((t, r) => t + pick(r), 0).toFixed(2));
-  const groups = [
-    // บิล USD: carriedOut เป็นบาท แปลงด้วย fxRate ของบิล (บิล USD = อัตราที่ตรึงไว้ ตัวเดียวกับ payAmount)
-    { label: 'USD', rows: rows.filter((r) => r.isUsd), fmt: dollars, carry: (r) => usdOf(r.carriedOut ?? 0, r.fxRate) ?? 0 },
-    { label: 'บาท', rows: rows.filter((r) => !r.isUsd), fmt: (n) => `${money(n)} ฿`, carry: (r) => r.carriedOut ?? 0 }, // ฿ ไม่หลุดไปขึ้นบรรทัดใหม่คนเดียว
-  ].map((g) => {
-    const billed = sum(g.rows, (r) => r.payAmount);
-    const left = sum(g.rows, (r) => r.payOutstanding);
-    return { ...g, billed, left, received: Number((billed - left).toFixed(2)), carried: sum(g.rows, g.carry) };
+  const groups = payCurrencyGroups(rows).map((g) => {
+    const billed = sumOf(g.rows, (r) => r.payAmount);
+    const left = sumOf(g.rows, (r) => r.payOutstanding);
+    return { ...g, billed, left, received: Number((billed - left).toFixed(2)) };
   });
   const both = (key) => groups.map((g) => g.fmt(g[key])).join(' · ');
 
-  return stat('เรียกเก็บแยกสกุลเงิน',
-    el('div', { class: 'value-split' }, ...groups.map((g) => el('div', {},
-      g.fmt(g.billed), el('span', { class: 'split-tag' }, `${g.label} · ${int(g.rows.length)} ใบ`)))),
-    [
-      el('div', {}, `ได้รับแล้ว ${both('received')}`),
-      el('div', {}, `ยังไม่ได้รับ ${both('left')}`),
-      groups.some((g) => g.carried) ? el('div', {}, `ยกไปงวดถัดไป ${both('carried')} (หักออกจากยอดบนแล้ว)`) : null,
-    ],
+  return stat('เรียกเก็บแยกสกุลเงิน', splitValue(groups, 'billed'),
+    [el('div', {}, `ได้รับแล้ว ${both('received')}`), el('div', {}, `ยังไม่ได้รับ ${both('left')}`)],
     { tone: 'sales', icon: '💳' });
 }
 
 /**
- * ยอดที่บิลชุดนี้ปิดแบบยกไปเก็บงวดถัดไป (แท็บบิลของส่วนกลาง) — ตัวเลขเดียวกับบรรทัด "ยกไปงวดถัดไป" ใต้ช่องส่วนลดในตาราง
- * แยก "รอออกบิล" (carryPending ยังไม่ขึ้นบิลใบไหน = หนี้ที่รออยู่นอกบิล) ออกจากส่วนที่ขึ้นบิลงวดถัดไปแล้ว
+ * ยอดที่บิลชุดนี้ปิดแบบยกไปเก็บงวดถัดไป แยกตามสกุลของบิลต้นทาง (แท็บบิลของส่วนกลาง) — ตัวเลขเดียวกับบรรทัด "ยกไปงวดถัดไป" ใต้ช่องส่วนลดในตาราง
+ * ยอดนี้ถูกหักออกจาก payAmount ของบิลต้นทางแล้ว จึงไม่อยู่ในการ์ดเรียกเก็บแยกสกุลเงิน
+ * (ไม่บวกกลับเข้าไป — ยอดบนต้องตรงกับการ์ดยอดเรียกเก็บรวม และพอยอดไปขึ้นบิลงวดหลังแล้ว ดูทุกรอบจะนับซ้ำ)
+ * บิล USD: carriedOut เป็นบาท แปลงด้วย fxRate ของบิล (บิล USD = อัตราที่ตรึงไว้ ตัวเดียวกับ payAmount)
  */
 function carryOutStat(rows) {
-  const carried = rows.filter((r) => (r.carriedOut ?? 0) > 0);
-  const total = Number(carried.reduce((t, r) => t + r.carriedOut, 0).toFixed(2));
-  const pending = Number(carried.reduce((t, r) => t + (r.carryPending ?? 0), 0).toFixed(2));
-  const billed = Number((total - pending).toFixed(2));
-  const waiting = carried.filter((r) => (r.carryPending ?? 0) > 0).length;
+  const groups = payCurrencyGroups(rows.filter((r) => (r.carriedOut ?? 0) > 0)).map((g) => ({
+    ...g,
+    carried: sumOf(g.rows, (r) => (r.isUsd ? usdOf(r.carriedOut, r.fxRate) ?? 0 : r.carriedOut)),
+  }));
+  const any = groups.some((g) => g.rows.length);
 
-  return stat('ยกไปงวดถัดไป', money(total) + ' ฿',
-    carried.length
-      ? [
-        el('div', {}, `${int(carried.length)} ใบ`),
-        pending ? el('div', {}, `รอออกบิล ${money(pending)} ฿ · ${int(waiting)} ใบ`) : null,
-        billed ? el('div', {}, `ขึ้นบิลงวดถัดไปแล้ว ${money(billed)} ฿`) : null,
-      ]
-      : 'ไม่มีบิลที่ยกยอดไป',
-    { tone: pending ? 'due' : 'muted', icon: '➡', usd: sumUsd(carried, (r) => r.carriedOut) });
+  return stat('ยกไปงวดถัดไป', splitValue(groups, 'carried'),
+    any ? 'ไม่รวมในยอดเรียกเก็บ' : 'ไม่มีบิลที่ยกยอดไป',
+    { tone: any ? 'due' : 'muted', icon: '➡' });
 }
