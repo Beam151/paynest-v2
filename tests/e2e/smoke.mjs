@@ -2965,7 +2965,7 @@ section('วิธีคิดยอดรายสินค้าในบิ�
  * ลิงก์รูปที่ระบบเซ็นให้เป็นกุญแจในตัว — ร้านได้ลิงก์เฉพาะรูปของบิลตัวเอง (ผ่าน GET บิลที่ตรวจสิทธิ์แล้ว)
  * ไฟล์ที่อัปโหลดไม่มีเจ้าของ จึงห้ามหยิบไฟล์ที่ผูกกับเรื่องอื่นอยู่แล้ว (สลิปของร้าน) มาแนบ
  */
-section('รูปประกอบบิล (ร้านเห็นเฉพาะบิลของตัวเอง · สูงสุด 10 รูป)');
+section('รูปประกอบบิล (ร้านเห็นเฉพาะบิลของตัวเอง · สูงสุด 30 รูป)');
 {
   const as = await api('POST', '/api/franchises', { token: admin, body: { username: 'attshop', password: 'attshop-pass-1' } });
   const afid = as.body.franchise?.id;
@@ -3008,17 +3008,17 @@ section('รูปประกอบบิล (ร้านเห็นเฉพ
   check('ชื่อไฟล์ที่ไม่มีอยู่จริงแนบไม่ได้', (await attach([{ url: `/api/uploads/${'0'.repeat(32)}.png` }])).status === 400);
   check('ไฟล์ที่เป็นสลิปแจ้งชำระอยู่แล้ว เอามาแนบบิลไม่ได้', (await attach([{ url: slip }])).status === 400);
   check('ไฟล์ที่แนบบิลไปแล้ว เอามาแนบซ้ำไม่ได้', (await attach([{ url: first }])).status === 400);
-  const eight = [];
-  for (let i = 0; i < 8; i++) eight.push({ url: await uploadSlip() });
-  const ten = await attach(eight);
-  const eleventh = await attach([{ url: await uploadSlip() }]);
-  check('แนบได้สูงสุด 10 รูปต่อบิล (รูปที่ 11 ไม่รับ)',
-    ten.status === 201 && ten.body.attachments?.length === 10 && eleventh.status === 400, { ten: ten.status, eleventh: eleventh.body });
+  const rest = [];
+  for (let i = 0; i < 28; i++) rest.push({ url: await uploadSlip() });
+  const full = await attach(rest);
+  const over = await attach([{ url: await uploadSlip() }]);
+  check('แนบได้สูงสุด 30 รูปต่อบิล (รูปที่ 31 ไม่รับ)',
+    full.status === 201 && full.body.attachments?.length === 30 && over.status === 400, { full: full.status, over: over.body });
 
   const removeFirst = () => api('DELETE', `/api/invoices/${bill.body.id}/attachments/${bill.body.attachments?.[0]?.id}`, { token: admin });
   const removed = await removeFirst();
   check('ลบรูปแล้วไม่แสดงในบิลอีก',
-    removed.status === 200 && removed.body.attachments?.length === 9
+    removed.status === 200 && removed.body.attachments?.length === 29
       && !removed.body.attachments.some((a) => a.id === bill.body.attachments[0].id), removed.body.attachments?.length);
   check('ลบซ้ำ → ไม่พบ (404)', (await removeFirst()).status === 404);
   check('การลบรูปถูกจดประวัติ',

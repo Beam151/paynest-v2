@@ -137,7 +137,7 @@ class Invoices extends BaseApiController
             // สกุลที่ให้ร้านจ่าย — ยอดในระบบยังเป็นบาทเสมอ
             'currency' => V::enum(['THB', 'USD'])->optional(),
             'lines'       => self::lineModesSchema()->optional(),
-            'attachments' => self::attachmentsSchema()->max(InvoiceAttachmentService::MAX_PER_INVOICE, 'แนบได้สูงสุด 10 รูปต่อบิล')->optional(),
+            'attachments' => self::attachmentsSchema()->max(InvoiceAttachmentService::MAX_PER_INVOICE, 'แนบได้สูงสุด ' . InvoiceAttachmentService::MAX_PER_INVOICE . ' รูปต่อบิล')->optional(),
             // ค่าคอมเซลปกติทำ "บิลค่าคอม" ทีหลัง (POST /api/sales-agents/:id/commission-bills) — ยกเว้นเซลที่ติ๊กมาตรงนี้:
             // ร้านเป็นคนจ่ายเซลเอง หักออกจากบิลร้านใบนี้และทำบิลค่าคอมสถานะจ่ายแล้วให้เลย
             'salesDeductions' => V::array(self::salesDeductionSchema())->max(50)->optional(),
@@ -204,7 +204,7 @@ class Invoices extends BaseApiController
         $body = V::parse(V::object([
             'files' => self::attachmentsSchema()
                 ->min(1, 'เลือกไฟล์อย่างน้อย 1 ไฟล์')
-                ->max(InvoiceAttachmentService::MAX_PER_INVOICE, 'แนบได้สูงสุด 10 รูปต่อบิล'),
+                ->max(InvoiceAttachmentService::MAX_PER_INVOICE, 'แนบได้สูงสุด ' . InvoiceAttachmentService::MAX_PER_INVOICE . ' รูปต่อบิล'),
         ]), $this->body());
 
         return $this->json(InvoiceAttachmentService::add(V::parseId($id), $body['files'], $this->user()), 201);

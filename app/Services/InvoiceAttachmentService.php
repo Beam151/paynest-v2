@@ -19,7 +19,7 @@ final class InvoiceAttachmentService
     /** แบบเดียวกับสลิป/QR · D = ห้ามมีขึ้นบรรทัดใหม่ต่อท้าย ($ เฉย ๆ ยอม "\n" ท้ายสตริง) */
     public const UPLOAD_RE = '/^\/api\/uploads\/[0-9a-f]{32}\.(jpg|png|gif|webp|pdf)$/D';
 
-    public const MAX_PER_INVOICE = 10;
+    public const MAX_PER_INVOICE = 30;
 
     /**
      * ตรวจไฟล์ก่อนผูกกับบิล — ใช้ทั้งตอนออกบิล (ยังไม่มี id บิล) และแนบเพิ่มทีหลัง
@@ -80,7 +80,7 @@ final class InvoiceAttachmentService
         }
 
         return Db::tx(static function () use ($invoiceId, $files, $user) {
-            // ล็อกบิลก่อนนับ — แนบพร้อมกันสองหน้าต่างต้องไม่ทะลุเพดาน 10 รูป
+            // ล็อกบิลก่อนนับ — แนบพร้อมกันสองหน้าต่างต้องไม่ทะลุเพดาน MAX_PER_INVOICE
             Db::one('SELECT id FROM invoices WHERE id = ? FOR UPDATE', [$invoiceId]);
             $prepared = self::prepare($invoiceId, $files);
             self::insert($invoiceId, $prepared, (int) $user['id']);

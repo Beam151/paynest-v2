@@ -81,7 +81,7 @@ const lineSourceNote = (t, { wrap = false } = {}) => {
 };
 
 // แนบรูปประกอบได้ไม่เกินเท่านี้ต่อบิล (เซิร์ฟเวอร์ตรวจซ้ำ) — เตือนตั้งแต่ตอนเลือกไฟล์
-const MAX_ATTACHMENTS = 10;
+const MAX_ATTACHMENTS = 30;
 const ATTACH_ACCEPT = 'image/*,application/pdf';
 
 /**
