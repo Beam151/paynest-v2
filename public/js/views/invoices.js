@@ -8,7 +8,9 @@ import {
   accountCheckNotice, attachmentGrid, bankAccountBox, breakdownTable, currencyTag, fxLine, payCenterView, payMoney, paymentTotals,
   receivedMoneyTab, slipReviewTab, slipStatusPicker,
 } from './payments.js';
-import { billLineEditor, commissionOf, dealTerms, lineProductCell, parseAmount, parsePct, presetOf } from './billLines.js';
+import {
+  billLineEditor, commissionOf, dealTerms, filledOthers, lineProductCell, otherCommissionResult, parseAmount, parsePct, presetOf, sumBaht,
+} from './billLines.js';
 import { elevated } from '../elevation.js';
 import { hashParam, render } from '../app.js';
 import { activityButton } from './activity.js';
@@ -287,54 +289,238 @@ export async function invoicesView() {
   const salesDeductPlaceholder = (...body) => el('div', { class: 'adj-block' },
     el('div', { class: 'sales-deduct solo' }, el('h3', {}, '🤝 หักค่าคอมเซล'), ...body));
 
+  // ค่าคอมอื่น ๆ ต่อการหักหนึ่งครั้ง — เพดานเดียวกับเซิร์ฟเวอร์ (และหน้าต่าง "ตั้งค่าคอม" ของเซล)
+  const MAX_DEDUCT_OTHERS = 50;
+  const OTHERS_HINT = 'ร้านจ่ายก้อนพิเศษให้เซลด้วย (โบนัส ค่าเดินทาง · ติดลบ = หักคืน) กด "💰 + ค่าคอมอื่น ๆ" '
+    + '— รวมในยอดหักก้อนเดียวกับค่าคอมตามดีล และอยู่ในบิลค่าคอมใบเดียวกัน';
+
+  /** บรรทัดหักค่าคอมเซลในบิลคิดจากอะไร — salesOtherAmount = ส่วนที่เป็นค่าคอมอื่น ๆ (ที่เหลือคือค่าคอมตามดีล) */
+  const salesDeductionSource = (a) => {
+    const other = a.salesOtherAmount ?? 0;
+    if (!other) return 'ค่าคอมตามดีลของเซล';
+    const deal = Math.round((a.amount - other) * 100) / 100;
+    return deal
+      ? `ค่าคอมตามดีล ${money(deal)} ${other > 0 ? '+' : '−'} ค่าคอมอื่น ๆ ${money(Math.abs(other))}`
+      : 'ค่าคอมอื่น ๆ ของเซล';
+  };
+
   /**
    * หักค่าคอมเซลเพิ่มในบิลที่ออกไปแล้วและยังแก้ได้ (R25) — ลืมติ๊กตอนออกบิล หรือเพิ่มรายการเข้าบิลทีหลัง
-   * deductible = เซลที่ยังหักได้ของบิลนี้ (เซิร์ฟเวอร์คิดยอดให้ · คนที่หักไปแล้วไม่อยู่ในนี้)
+   * choice = คำตอบของ GET …/sales-deductions — items: เซลที่ยังมีค่าคอมตามดีลในบิลนี้ (เซิร์ฟเวอร์คิดยอดให้) · deducted: เซลที่หักไปแล้ว
+   *
+   * ค่าคอมอื่น ๆ (เจ้าของระบบ 2 พ.ย. 69: ปุ่มเพิ่มค่าคอมอื่น ๆ แบบหน้าเซล "ดึงมาบวกลบกันในรอบบิลเดียวกัน")
+   *   เซลที่ติ๊กใส่ก้อนพิเศษได้ (โบนัส ค่าเดินทาง · ติดลบ = หักคืน) — ยอดหักของคนนั้น = ค่าคอมตามดีล + ค่าคอมอื่น ๆ ต้องเป็นบวก
+   *   เซลที่หักตามดีลไปแล้วก็ขึ้นในนี้ — หักค่าคอมอื่น ๆ เพิ่มได้ (บิลค่าคอมใบใหม่ที่มีแต่ค่าคอมอื่น ๆ)
+   * focus.addOther — เปิดจากปุ่ม "+ ค่าคอมอื่น ๆ": เปิดแถวว่างรอพิมพ์ให้เซลที่ติ๊กไว้ตั้งแต่เปิด (มีหลายคนให้ติ๊กเองก่อน)
+   *
    * หักทีละคนเป็นคำขอแยก — คนไหนไม่ผ่าน (เช่นหักแล้วเกินยอดบิล) คนก่อนหน้าที่ผ่านแล้วยังอยู่ และข้อความบอกว่าติดที่ใคร
+   * คนที่ผ่านแล้วล็อกไว้ในหน้าต่างนี้ — กดซ้ำต้องไม่หักค่าคอมอื่น ๆ ของคนเดิมซ้ำอีกก้อน (เซิร์ฟเวอร์กันได้เฉพาะส่วนตามดีล)
    */
-  const salesDeductModal = (invoice, deductible) => formModal({
-    title: `หักค่าคอมเซล — ${invoice.invoiceNo}`,
-    submitLabel: 'หักออกจากบิล',
-    fields: [{
-      name: 'agents',
-      label: 'เซลที่ร้านเป็นคนจ่ายค่าคอมให้เอง',
-      type: 'checklist',
-      // มีคนเดียวติ๊กให้เลย — กดปุ่มมาเพื่อหักคนนี้อยู่แล้ว
-      value: deductible.length === 1 ? [String(deductible[0].salesAgentId)] : [],
-      options: deductible.map((a) => ({
-        value: String(a.salesAgentId),
-        label: `${a.username} — ${a.name} · หัก ${money(a.total)} ฿`,
-        hint: salesBreakdown(a),
-      })),
-      hint: 'หักทั้งหมดของเซลคนนั้นในบิลนี้ · ระบบทำบิลค่าคอมของเซลเป็น "จ่ายแล้ว" ให้ ไม่ต้องจ่ายซ้ำที่หน้าเซล',
-    }],
-    preview: (v) => {
-      const picked = deductible.filter((a) => (v.agents ?? []).includes(String(a.salesAgentId)));
-      const total = Math.round(picked.reduce((t, a) => t + a.total, 0) * 100) / 100;
-      if (!picked.length) return { node: el('div', { class: 'notice-box m-0' }, 'ติ๊กเซลที่จะหักค่าคอมออกจากบิลนี้'), canSubmit: false };
-      const left = Math.round((invoice.netTotal - total) * 100) / 100;
-      return el('div', { class: left < 0 ? 'alert-box m-0' : 'notice-box m-0' },
-        `หักค่าคอมเซล ${money(total)} ฿ → ยอดที่ร้านต้องจ่าย ${money(invoice.netTotal)} → `, el('strong', {}, `${money(Math.max(left, 0))} ฿`),
-        left < 0 ? el('div', { class: 'sub-line mt-4' }, 'มากกว่ายอดที่ร้านต้องจ่าย — ระบบจะไม่ยอมให้หัก ให้ทำบิลค่าคอมจ่ายเซลตามปกติแทน') : '');
-    },
-    onSubmit: async (v) => {
-      const picked = deductible.filter((a) => (v.agents ?? []).includes(String(a.salesAgentId)));
-      if (!picked.length) throw new Error('ติ๊กเซลอย่างน้อยหนึ่งคน');
-      let done = 0;
-      try {
-        for (const a of picked) {
-          await api.post(`/api/invoices/${invoice.id}/sales-deductions`, { salesAgentId: a.salesAgentId, amount: a.total });
-          done += 1;
-        }
-      } catch (e) {
-        // บางคนหักไปแล้ว — วาดหน้าใหม่ให้เห็นของจริงก่อนโยน error (ปุ่มในหน้าต่างนี้จะกดซ้ำคนเดิมไม่ได้)
-        if (done) render();
-        throw new Error(`${picked[done].username}: ${e.message}${done ? ` (หักไปแล้ว ${done} คน — ปิดหน้าต่างนี้แล้วเปิดบิลดูอีกครั้ง)` : ''}`);
+  const salesDeductModal = (invoice, choice, focus = {}) => {
+    const states = (choice.items ?? []).map((a) => ({ a, deducted: 0 }));
+    for (const d of choice.deducted ?? []) {
+      const s = states.find((x) => x.a.salesAgentId === d.salesAgentId);
+      if (s) {
+        s.deducted = d.total;
+      } else {
+        // หักตามดีลครบแล้ว — ไม่มีค่าคอมตามดีลเหลือ หักได้เฉพาะค่าคอมอื่น ๆ
+        states.push({
+          a: { salesAgentId: d.salesAgentId, username: d.username, name: d.name, items: [], fixedAmount: null, total: 0, deductible: false },
+          deducted: d.total,
+        });
       }
-      toast(`หักค่าคอมเซล ${done} คนแล้ว — ยอดที่ร้านต้องจ่ายคำนวณใหม่ให้`, 'success');
-      render();
-    },
-  });
+    }
+    for (const s of states) Object.assign(s, { on: false, done: false, others: [], refs: null });
+
+    // มีคนเดียวที่ชัดเจนติ๊กให้เลย — กดปุ่มมาเพื่อหักคนนี้อยู่แล้ว
+    const withDeal = states.filter((s) => s.a.deductible);
+    const first = withDeal.length === 1 ? withDeal[0] : states.length === 1 ? states[0] : null;
+    if (first) {
+      first.on = true;
+      if (focus.addOther) first.others.push({ label: '', amount: '' });
+    }
+
+    const resultOf = (s) => {
+      const rows = filledOthers(s.others).map((o) => ({ o, ...otherCommissionResult(o) }));
+      const bad = rows.find((r) => r.error);
+      const othersTotal = sumBaht(rows.map((r) => r.amount));
+      const total = sumBaht([s.a.total, othersTotal]);
+      let error = null;
+      if (bad) error = `ค่าคอมอื่น ๆ แถวที่ ${s.others.indexOf(bad.o) + 1}: ${bad.error}`;
+      else if (total <= 0 && !rows.length && !s.a.total) error = 'ค่าคอมตามดีลในบิลนี้หักไปแล้ว — กด "+ เพิ่มรายการ" ใส่ค่าคอมอื่น ๆ ที่จะหักเพิ่ม';
+      else if (total <= 0) error = 'ยอดที่จะหักรวมแล้วต้องมากกว่า 0';
+      return { rows, othersTotal, total, error };
+    };
+    const compute = () => {
+      const picked = states.filter((s) => s.on && !s.done).map((s) => ({ s, ...resultOf(s) }));
+      return {
+        picked,
+        deal: sumBaht(picked.map((p) => p.s.a.total)),
+        others: sumBaht(picked.map((p) => p.othersTotal)),
+        total: sumBaht(picked.map((p) => p.total)),
+        error: picked.map((p) => p.error && `${p.s.a.username}: ${p.error}`).find(Boolean) ?? null,
+      };
+    };
+
+    const totalBox = el('div', { class: 'notice-box m-0' });
+
+    /** อัปเดตเฉพาะตัวเลข/ข้อความของการ์ด — ไม่สร้างช่องกรอกใหม่ระหว่างพิมพ์ (เคอร์เซอร์ไม่หลุด) */
+    function paintCard(s) {
+      const r = s.refs;
+      const res = resultOf(s);
+      r.box.disabled = s.done;
+      // ไม่ได้ติ๊ก = โชว์แค่ค่าคอมตามดีล (ค่าคอมอื่น ๆ ที่พิมพ์ค้างไว้ซ่อนอยู่และไม่ถูกส่ง)
+      const shown = s.on ? res.total : s.a.total;
+      r.amount.textContent = s.done ? '✓ หักแล้ว' : shown > 0 ? `−${money(shown)}` : '—';
+      r.error.textContent = s.on && !s.done && res.error ? `⚠ ${res.error}` : '';
+    }
+
+    function paint() {
+      for (const s of states) paintCard(s);
+      const t = compute();
+      if (!t.picked.length) {
+        totalBox.className = 'notice-box m-0';
+        totalBox.replaceChildren(states.some((s) => s.done) ? 'หักครบตามที่ติ๊กแล้ว — ปิดหน้าต่างนี้ได้' : 'ติ๊กเซลที่จะหักค่าคอมออกจากบิลนี้');
+        return;
+      }
+      const left = Math.round((invoice.netTotal - t.total) * 100) / 100;
+      totalBox.className = t.error || left < 0 ? 'alert-box m-0' : 'notice-box m-0';
+      totalBox.replaceChildren(
+        el('div', {},
+          `หักค่าคอมเซล ${money(t.total)} ฿ → ยอดที่ร้านต้องจ่าย ${money(invoice.netTotal)} → `, el('strong', {}, `${money(Math.max(left, 0))} ฿`)),
+        t.others
+          ? el('div', { class: 'sub-line mt-4' }, `ค่าคอมตามดีล ${money(t.deal)} ${t.others > 0 ? '+' : '−'} ค่าคอมอื่น ๆ ${money(Math.abs(t.others))}`)
+          : '',
+        t.error ? el('div', { class: 'sub-line mt-4' }, `⚠ ${t.error}`) : '',
+        left < 0 ? el('div', { class: 'sub-line mt-4' }, 'มากกว่ายอดที่ร้านต้องจ่าย — ระบบจะไม่ยอมให้หัก ให้ทำบิลค่าคอมจ่ายเซลตามปกติแทน') : '');
+    }
+
+    /** ค่าคอมอื่น ๆ ของเซลคนหนึ่ง — วาดใหม่เฉพาะตอนเพิ่ม/ลบแถว หรือติ๊กเซล (พิมพ์แล้วแค่อัปเดตตัวเลข) */
+    function drawOthers(s) {
+      const r = s.refs;
+      if (!s.on || s.done) {
+        r.othersBox.replaceChildren();
+        return;
+      }
+      r.othersBox.replaceChildren(el('div', { class: 'deduct-others' },
+        el('div', { class: 'adj-block-head' },
+          el('div', {},
+            el('strong', {}, `💰 ค่าคอมอื่น ๆ ของ ${s.a.username} (${s.others.length})`),
+            el('div', { class: 'sub-line' }, 'ก้อนพิเศษที่ร้านจ่ายเซลพร้อมกัน เช่นโบนัส ค่าเดินทาง · ใส่ติดลบได้ถ้าเป็นการหักคืน · ไม่ต้องเลือกรอบ')),
+          el('button', {
+            class: 'btn sm',
+            type: 'button',
+            disabled: s.others.length >= MAX_DEDUCT_OTHERS,
+            onclick: () => {
+              s.others.push({ label: '', amount: '' });
+              drawOthers(s);
+              paint();
+              [...r.othersBox.querySelectorAll('.adj-row input[type="text"]')].pop()?.focus();
+            },
+          }, '+ เพิ่มรายการ')),
+        ...s.others.map((o, i) => {
+          const labelBox = el('input', {
+            type: 'text', placeholder: 'ชื่อรายการ', value: o.label, maxlength: 200,
+            style: 'flex:1 1 200px;min-width:140px', 'aria-label': `ชื่อค่าคอมอื่น ๆ แถวที่ ${i + 1}`,
+          });
+          labelBox.addEventListener('input', () => { o.label = labelBox.value; paint(); });
+          const amountBox = el('input', {
+            type: 'number', step: '0.01', inputmode: 'decimal', placeholder: 'จำนวนเงิน ฿', value: o.amount,
+            style: 'width:140px', 'aria-label': `จำนวนเงินค่าคอมอื่น ๆ แถวที่ ${i + 1}`,
+          });
+          amountBox.addEventListener('input', () => { o.amount = amountBox.value; paint(); });
+          return el('div', { class: 'adj-row' },
+            labelBox,
+            amountBox,
+            el('button', {
+              class: 'btn ghost sm danger',
+              type: 'button',
+              onclick: () => { s.others.splice(i, 1); drawOthers(s); paint(); },
+            }, 'ลบ'));
+        }),
+        s.others.length ? '' : el('div', { class: 'sub-line' }, 'ไม่มี — กด "+ เพิ่มรายการ" ถ้าร้านจ่ายก้อนพิเศษให้เซลคนนี้ด้วย หรือจะหักคืน')));
+    }
+
+    function drawCard(s) {
+      const a = s.a;
+      const hasDeal = a.items.length > 0 || a.fixedAmount !== null;
+      const box = el('input', { type: 'checkbox', checked: s.on });
+      box.addEventListener('change', () => {
+        s.on = box.checked;
+        drawOthers(s);
+        paint();
+      });
+      s.refs = {
+        box,
+        amount: el('span', { class: 'adj-amount', style: 'color:var(--success)' }),
+        error: el('div', { class: 'sub-line text-danger' }),
+        othersBox: el('div'),
+      };
+      return el('div', { class: 'deduct-agent' },
+        el('label', { class: 'check-item' },
+          box,
+          el('div', { style: 'flex:1;min-width:0' },
+            el('strong', {}, `${a.username} — ${a.name}`),
+            el('div', { class: 'sub-line' }, hasDeal
+              ? `ค่าคอมตามดีล: ${salesBreakdown(a)}`
+              : 'ค่าคอมตามดีลในบิลนี้หักไปแล้ว — ใส่ค่าคอมอื่น ๆ เพื่อหักเพิ่ม'),
+            hasDeal && !a.deductible
+              ? el('div', { class: 'sub-line text-danger' }, 'ค่าคอมตามดีลรวมไม่เป็นบวก (รอบคืนของ) — หักได้เมื่อรวมค่าคอมอื่น ๆ แล้วเป็นบวก')
+              : '',
+            s.deducted > 0 ? el('div', { class: 'sub-line' }, `หักไปแล้วในบิลนี้ ${money(s.deducted)} ฿`) : '',
+            s.refs.error),
+          s.refs.amount),
+        s.refs.othersBox);
+    }
+
+    const root = el('div', {},
+      el('div', { class: 'sub-line', style: 'margin-bottom:8px' },
+        'ติ๊กเซลที่ร้านเป็นคนจ่ายค่าคอมให้เอง — หักทั้งหมดของเซลคนนั้นในบิลนี้ · ระบบทำบิลค่าคอมของเซลเป็น "จ่ายแล้ว" ให้ ไม่ต้องจ่ายซ้ำที่หน้าเซล'),
+      el('div', { class: 'checklist' }, ...states.map(drawCard)),
+      el('div', { style: 'margin-top:12px' }, totalBox));
+    for (const s of states) drawOthers(s);
+    paint();
+
+    formModal({
+      title: `หักค่าคอมเซล — ${invoice.invoiceNo}`,
+      submitLabel: 'หักออกจากบิล',
+      width: 680,
+      // ช่องทั้งหมดอยู่ในกล่องพรีวิวของเราเอง — แถวค่าคอมอื่น ๆ เพิ่ม/ลบได้ และไม่ถูกวาดใหม่ทุกครั้งที่พิมพ์
+      fields: [],
+      preview: () => ({ node: root, canSubmit: true }),
+      onSubmit: async () => {
+        const t = compute();
+        if (!t.picked.length) throw new Error(states.some((s) => s.done) ? 'หักครบตามที่ติ๊กแล้ว — ปิดหน้าต่างนี้ได้' : 'ติ๊กเซลอย่างน้อยหนึ่งคน');
+        if (t.error) throw new Error(t.error);
+        let done = 0;
+        try {
+          for (const p of t.picked) {
+            const others = p.rows.map(({ label, amount }) => ({ label, amount }));
+            // ส่งยอดที่เห็นบนจอ (ตามดีล + ค่าคอมอื่น ๆ) — ดีลถูกแก้ระหว่างเปิดหน้าต่างค้างไว้ เซิร์ฟเวอร์จะไม่หักด้วยตัวเลขที่ไม่เคยเห็น
+            await api.post(`/api/invoices/${invoice.id}/sales-deductions`, {
+              salesAgentId: p.s.a.salesAgentId,
+              amount: p.total,
+              ...(others.length ? { others } : {}),
+            });
+            p.s.done = true;
+            done += 1;
+          }
+        } catch (e) {
+          // บางคนหักไปแล้ว — ล็อกคนนั้นในหน้าต่างนี้ แล้ววาดหน้าข้างหลังใหม่ให้เห็นของจริงก่อนโยน error
+          if (done) {
+            for (const s of states) drawOthers(s);
+            paint();
+            render();
+          }
+          throw new Error(`${t.picked[done].s.a.username}: ${e.message}${done ? ` (หักไปแล้ว ${done} คน — ปิดหน้าต่างนี้แล้วเปิดบิลดูอีกครั้ง)` : ''}`);
+        }
+        toast(`หักค่าคอมเซล ${done} คนแล้ว — ยอดที่ร้านต้องจ่ายคำนวณใหม่ให้`, 'success');
+        render();
+      },
+    });
+    // แถวว่างที่เปิดรอไว้ — พิมพ์ชื่อรายการได้เลย (พรีวิวถูกใส่ลงหน้าต่างหลังรอบนี้ จึงรอหนึ่งจังหวะ)
+    if (first && focus.addOther) setTimeout(() => first.refs.othersBox.querySelector('input')?.focus(), 0);
+  };
 
   // กรองฝั่งเบราว์เซอร์ เพราะ "เลยกำหนด" คิดจากวันที่ ไม่ใช่คอลัมน์สถานะในฐานข้อมูล
   // แท็บ "ที่ต้องจ่าย" ใช้หน้าชำระเงินเดิมทั้งดุ้น (ฟอร์มแนบสลิป + ประวัติการแจ้ง)
@@ -1520,12 +1706,19 @@ export async function invoicesView() {
     /**
      * ส่วน "หักค่าคอมเซล" ของหน้าแก้ไขบิล — ขึ้นเสมอในโหมดแก้ไขของส่วนกลาง (ลืมติ๊กตอนออกบิลก็มาหักตรงนี้ได้)
      * มีเซลให้หัก = รายชื่อ + ปุ่ม · ไม่มี = บอกเหตุผล (หักครบแล้ว / สินค้าตัวไหนยังไม่มีเซลถือดีล / บิลล็อกแล้ว)
+     * ปุ่ม "💰 + ค่าคอมอื่น ๆ" (2 พ.ย. 69) — เปิดหน้าต่างเดียวกันพร้อมแถวค่าคอมอื่น ๆ ว่างรอพิมพ์ · หักครบแล้วยังหักค่าคอมอื่น ๆ เพิ่มได้
      * โหมดดูเฉย ๆ ไม่มีส่วนนี้ ตามกติกา "เปิดดูไม่มีปุ่มแก้" — บรรทัดที่หักไปแล้วอยู่ในตารางด้านบนอยู่แล้ว
      */
     const salesDeductSection = () => {
       if (!edit || !isSuper || inv.status === 'VOID') return '';
       const done = inv.adjustments.filter((a) => a.isSalesDeduction);
       const noDealSkus = salesChoice?.noDealSkus ?? [];
+      const othersButton = (label) => el('button', {
+        class: 'btn ghost sm',
+        type: 'button',
+        title: 'ก้อนพิเศษของเซล (โบนัส ค่าเดินทาง · ติดลบ = หักคืน) ที่ร้านจ่ายพร้อมกัน — รวมในยอดหักก้อนเดียวกับค่าคอมตามดีล',
+        onclick: () => { modal.close(); salesDeductModal(inv, salesChoice, { addOther: true }); },
+      }, label);
       let body;
       if (!editable) {
         body = el('div', { class: 'sub-line' },
@@ -1546,8 +1739,10 @@ export async function invoicesView() {
             el('button', {
               class: 'btn sm',
               type: 'button',
-              onclick: () => { modal.close(); salesDeductModal(inv, deductible); },
-            }, `🤝 หักค่าคอมเซลออกจากบิลนี้ (${int(deductible.length)} คน)`)),
+              onclick: () => { modal.close(); salesDeductModal(inv, salesChoice); },
+            }, `🤝 หักค่าคอมเซลออกจากบิลนี้ (${int(deductible.length)} คน)`),
+            othersButton('💰 + ค่าคอมอื่น ๆ')),
+          el('div', { class: 'sub-line mt-6' }, OTHERS_HINT),
         ];
       } else if (done.length) {
         body = [
@@ -1555,6 +1750,10 @@ export async function invoicesView() {
             `หักค่าคอมเซลของบิลนี้ครบแล้ว (${int(done.length)} รายการ รวม ${money(toSales)} ฿) — ดูบรรทัด "หักค่าคอมเซล …" ในตารางด้านบน · ติ๊กผิดกด "ถอนการหัก" ที่บรรทัดนั้น`),
           noDealSkus.length
             ? el('div', { class: 'sub-line mt-6' }, `สินค้าที่ไม่มีเซลถือดีล (ไม่มีค่าคอมให้หัก): ${noDealSkus.join(', ')}`)
+            : '',
+          // ลืมใส่ก้อนพิเศษตอนหัก — หักค่าคอมอื่น ๆ ของเซลคนเดิมเพิ่มได้ (บิลค่าคอมใบใหม่ + บรรทัดหักใหม่)
+          salesChoice.deducted?.length
+            ? el('div', { class: 'btn-row', style: 'margin-top:10px' }, othersButton('💰 หักค่าคอมอื่น ๆ เพิ่ม'))
             : '',
         ];
       } else {
@@ -1669,7 +1868,7 @@ export async function invoicesView() {
         { label: 'รายการ', render: (a) => el('div', {}, a.label, el('div', { class: 'sub-line' }, a.note ?? a.kindLabel)) },
         {
           label: 'คิดจาก',
-          render: (a) => (a.isSalesDeduction ? 'ค่าคอมตามดีลของเซล'
+          render: (a) => (a.isSalesDeduction ? salesDeductionSource(a)
             : a.carryForward ? (a.carriedTo ? `ยอดค้าง → ขึ้นบิล ${a.carriedTo}` : 'ยอดค้าง → รอขึ้นบิลงวดถัดไป')
               : a.isCloseOut ? 'ยอดค้างตอนปิดบิล'
                 : a.isCarriedIn ? 'ยอดค้างจากบิลก่อน'
@@ -1691,6 +1890,8 @@ export async function invoicesView() {
               onclick: () => confirmAction(a.isSalesDeduction
                 ? `ถอนการ "${a.label}" ${money(a.amount)} ฿ ออกจากบิล?\n\nร้านจะต้องจ่ายยอดนี้ตามเดิม และบิลค่าคอมของเซลที่เกิดจากการหักนี้จะถูกยกเลิก `
                   + '(รายการกลับไปรอทำบิลค่าคอมที่หน้าเซลตามปกติ)'
+                  // ค่าคอมอื่น ๆ ไม่มีที่ให้กลับไปรอ — หายไปกับบิลค่าคอมใบนั้น ต้องใส่ใหม่เองถ้ายังจะจ่าย
+                  + (a.salesOtherAmount ? `\n\nค่าคอมอื่น ๆ ${money(a.salesOtherAmount)} ฿ ที่รวมอยู่ในการหักนี้ถูกยกเลิกไปด้วย — ถ้ายังจะจ่าย ต้องใส่ใหม่` : '')
                 : `ลบรายการ "${a.label}" ออกจากบิล?`, async () => {
                 await api.del(`/api/invoices/${inv.id}/adjustments/${a.id}`);
                 toast(a.isSalesDeduction ? 'ถอนการหักค่าคอมเซลแล้ว — บิลค่าคอมของเซลถูกยกเลิก' : 'ลบรายการแล้ว', 'success');

@@ -839,33 +839,7 @@ final class SalesAgentService
             ];
         }
 
-        foreach ($others as $n => $o) {
-            $label = trim((string) ($o['label'] ?? ''));
-            if ($label === '' || mb_strlen($label) > 200) {
-                throw ApiException::badRequest('ค่าคอมอื่น ๆ แถวที่ ' . ($n + 1) . ': ต้องมีชื่อรายการ (ไม่เกิน 200 ตัวอักษร)');
-            }
-            // ติดลบได้ = หักคืน (เช่นจ่ายเกินรอบก่อน) · ศูนย์ไม่มีผลอะไร
-            $amount = self::typedSatang($o['amount'] ?? null, "ค่าคอมอื่น ๆ \"{$label}\"");
-            if ($amount === 0) {
-                throw ApiException::badRequest("ค่าคอมอื่น ๆ \"{$label}\": จำนวนเงินต้องไม่เป็นศูนย์ — ใส่ติดลบได้ถ้าเป็นการหักคืน");
-            }
-            $lines[] = [
-                'kind'               => 'OTHER',
-                'sales_entry_id'     => null,
-                'invoice_id'         => null,
-                'franchise_id'       => null,
-                'period_id'          => null,
-                'product_id'         => null,
-                'link_id'            => null,
-                'label'              => $label,
-                'mode'               => null,
-                'base_amount_satang' => 0,
-                'pct_bp'             => null,
-                'amount_satang'      => $amount,
-                'active_entry_id'    => null,
-                'active_fixed_key'   => null,
-            ];
-        }
+        $lines = [...$lines, ...self::otherLines($others)];
 
         $header = self::headerOf($lines);
         if ($header['total_satang'] <= 0) {
@@ -902,6 +876,46 @@ final class SalesAgentService
         }
 
         return self::getCommission($id, $user);
+    }
+
+    /**
+     * ค่าคอมอื่น ๆ (OTHER) — ชื่อรายการ + จำนวนเงินที่พิมพ์เอง ไม่ผูกสินค้า ไม่มีรอบ · ติดลบได้ = หักคืน (เช่นจ่ายเกินรอบก่อน)
+     * ตัวตรวจเดียวของทั้งบิลค่าคอมที่หน้าเซล (createCommissionBill) และค่าคอมอื่น ๆ ที่ร้านจ่ายพร้อมการหักจากบิลร้าน (settleFromInvoice)
+     *
+     * @return list<array> แถว sales_commission_lines ที่พร้อมเขียน
+     */
+    private static function otherLines(array $others): array
+    {
+        $lines = [];
+        foreach ($others as $n => $o) {
+            $label = trim((string) ($o['label'] ?? ''));
+            if ($label === '' || mb_strlen($label) > 200) {
+                throw ApiException::badRequest('ค่าคอมอื่น ๆ แถวที่ ' . ($n + 1) . ': ต้องมีชื่อรายการ (ไม่เกิน 200 ตัวอักษร)');
+            }
+            // ติดลบได้ = หักคืน (เช่นจ่ายเกินรอบก่อน) · ศูนย์ไม่มีผลอะไร
+            $amount = self::typedSatang($o['amount'] ?? null, "ค่าคอมอื่น ๆ \"{$label}\"");
+            if ($amount === 0) {
+                throw ApiException::badRequest("ค่าคอมอื่น ๆ \"{$label}\": จำนวนเงินต้องไม่เป็นศูนย์ — ใส่ติดลบได้ถ้าเป็นการหักคืน");
+            }
+            $lines[] = [
+                'kind'               => 'OTHER',
+                'sales_entry_id'     => null,
+                'invoice_id'         => null,
+                'franchise_id'       => null,
+                'period_id'          => null,
+                'product_id'         => null,
+                'link_id'            => null,
+                'label'              => $label,
+                'mode'               => null,
+                'base_amount_satang' => 0,
+                'pct_bp'             => null,
+                'amount_satang'      => $amount,
+                'active_entry_id'    => null,
+                'active_fixed_key'   => null,
+            ];
+        }
+
+        return $lines;
     }
 
     /**
@@ -1109,6 +1123,7 @@ final class SalesAgentService
             'fixedAmount'  => $c['fixed'] === null ? null : Money::toBaht($c['fixed']['amount_satang']),
             'total'        => Money::toBaht($c['total_satang']),
             // ยอดรวมไม่เป็นบวก (รอบคืนของ) หักจากบิลร้านไม่ได้ — หน้าเว็บโชว์เหตุผลแทนช่องติ๊ก
+            // (หน้าแก้ไขบิลยังหักได้ถ้าใส่ค่าคอมอื่น ๆ แล้วรวมเป็นบวก — settleFromInvoice ตัดสินจากยอดรวม)
             'deductible'   => $c['total_satang'] > 0,
         ], $byAgent));
     }
@@ -1120,9 +1135,14 @@ final class SalesAgentService
      * เรียกในทรานแซกชันของ InvoiceService ที่ล็อก/เพิ่งสร้างบิลร้านแล้วเท่านั้น (ยกเลิกบิลร้านล็อกแถวเดียวกัน สองทางจึงไม่สวนกัน)
      * $expectedSatang = ยอดที่หน้าจอโชว์ตอนติ๊ก — ดีลถูกแก้ระหว่างนั้นแล้วยอดไม่ตรง = 409 ไม่หักด้วยตัวเลขที่คนกดไม่เคยเห็น
      *
-     * @return array{commissionId: int, billNo: string, total_satang: int, agent: array}
+     * $others = ค่าคอมอื่น ๆ ของเซลคนนี้ที่ร้านจ่ายพร้อมกัน (เจ้าของระบบ 2 พ.ย. 69: "ดึงมาบวกลบกันในรอบบิลเดียวกัน")
+     *   อยู่ในบิลค่าคอมใบเดียวกับรายการตามดีล ยอดหัก = ค่าคอมตามดีล + ค่าคอมอื่น ๆ · ติดลบได้ (หักคืน) แต่ยอดรวมต้องเป็นบวก
+     *   มีค่าคอมอื่น ๆ = หักได้แม้ไม่มีค่าคอมตามดีลเหลือในบิล (หักตามดีลไปแล้ว ลืมใส่ก้อนพิเศษ) — บิลค่าคอมใบนั้นมีแต่ค่าคอมอื่น ๆ
+     *   $expectedSatang จึงเป็นยอดรวมทั้งสองส่วน
+     *
+     * @return array{commissionId: int, billNo: string, total_satang: int, others_satang: int, others_count: int, agent: array}
      */
-    public static function settleFromInvoice(array $invoice, int $agentId, ?int $expectedSatang, array $user): array
+    public static function settleFromInvoice(array $invoice, int $agentId, ?int $expectedSatang, array $user, array $others = []): array
     {
         $agent = self::agentRow($agentId);
         // ล็อกเซลไว้ — เลขบิลค่าคอมนับต่อวันต่อเซล (แบบเดียวกับ createCommissionBill)
@@ -1131,23 +1151,32 @@ final class SalesAgentService
         $franchiseId = (int) $invoice['franchise_id'];
         $periodId    = (int) $invoice['period_id'];
         $entryIds    = array_column(Db::all('SELECT id FROM sales_entries WHERE invoice_id = ?', [$invoiceId]), 'id');
-        $c           = self::dealCommissions($franchiseId, $periodId, $entryIds)[$agentId]
-            ?? throw ApiException::badRequest(
+        $c           = self::dealCommissions($franchiseId, $periodId, $entryIds)[$agentId] ?? null;
+        $otherLines  = self::otherLines($others);
+        if ($c === null && $otherLines === []) {
+            throw ApiException::badRequest(
                 "เซล {$agent['username']} ไม่มีค่าคอมจากบิล {$invoice['invoice_no']} ให้หัก — ไม่ได้ถือดีลของสินค้าในบิลนี้อยู่ หรือรายการถูกทำบิลค่าคอมไปแล้ว",
             );
-        $total = (int) $c['total_satang'];
+        }
+        $dealTotal   = (int) ($c['total_satang'] ?? 0);
+        $othersTotal = array_sum(array_column($otherLines, 'amount_satang'));
+        $total       = $dealTotal + $othersTotal;
+        // มีค่าคอมอื่น ๆ = แจกแจงให้เห็นว่ายอดมาจากไหน (หักคืนจนยอดติดลบ ต้องรู้ว่าเพราะก้อนไหน)
+        $what = $otherLines === []
+            ? "ค่าคอมของเซล {$agent['username']} จากบิลนี้"
+            : "ยอดที่จะหักของเซล {$agent['username']} (ค่าคอมตามดีล " . Money::fmtSatang($dealTotal) . ' + ค่าคอมอื่น ๆ ' . Money::fmtSatang($othersTotal) . ')';
         if ($total <= 0) {
-            throw ApiException::badRequest("ค่าคอมของเซล {$agent['username']} จากบิลนี้รวมแล้วไม่เป็นบวก (" . Money::fmtSatang($total) . ' บาท) — หักจากบิลร้านไม่ได้');
+            throw ApiException::badRequest("{$what} รวมแล้วไม่เป็นบวก (" . Money::fmtSatang($total) . ' บาท) — หักจากบิลร้านไม่ได้');
         }
         if ($expectedSatang !== null && $expectedSatang !== $total) {
             throw ApiException::conflict(
-                "ค่าคอมของเซล {$agent['username']} จากบิลนี้คือ " . Money::fmtSatang($total) . ' บาท ไม่ตรงกับที่หน้าจอแสดง ('
+                "{$what} คือ " . Money::fmtSatang($total) . ' บาท ไม่ตรงกับที่หน้าจอแสดง ('
                 . Money::fmtSatang($expectedSatang) . ' บาท) — ดีลหรือรายการอาจเพิ่งเปลี่ยน ตรวจตัวเลขใหม่แล้วกดอีกครั้ง',
             );
         }
 
         $lines = [];
-        foreach ($c['rows'] as $r) {
+        foreach ($c['rows'] ?? [] as $r) {
             if ($r['amount_satang'] === 0) {
                 continue;
             }
@@ -1168,7 +1197,7 @@ final class SalesAgentService
                 'active_fixed_key'   => null,
             ];
         }
-        if ($c['fixed'] !== null) {
+        if (($c['fixed'] ?? null) !== null) {
             $lines[] = [
                 'kind'               => 'FIXED',
                 'sales_entry_id'     => null,
@@ -1186,6 +1215,7 @@ final class SalesAgentService
                 'active_fixed_key'   => $c['fixed']['key'],
             ];
         }
+        $lines = [...$lines, ...$otherLines];
 
         try {
             // ไม่ใส่หมายเหตุ — "หักจากบิลร้านใบไหน" อ่านจากลิงก์ของบรรทัดในบิลร้าน (settledByInvoice) ที่เดียว ไม่ให้มีข้อความซ้ำที่อาจไม่ตรงกัน
@@ -1198,7 +1228,14 @@ final class SalesAgentService
             throw $e;
         }
 
-        return ['commissionId' => $bill['id'], 'billNo' => $bill['billNo'], 'total_satang' => $total, 'agent' => $c['agent']];
+        return [
+            'commissionId'  => $bill['id'],
+            'billNo'        => $bill['billNo'],
+            'total_satang'  => $total,
+            'others_satang' => $othersTotal,
+            'others_count'  => count($otherLines),
+            'agent'         => $c['agent'] ?? ['id' => (int) $agent['id'], 'username' => $agent['username'], 'name' => $agent['name']],
+        ];
     }
 
     /**

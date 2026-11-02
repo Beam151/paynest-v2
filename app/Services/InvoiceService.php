@@ -981,7 +981,7 @@ final class InvoiceService
 
     /**
      * หักค่าคอมของเซลที่เลือกออกจากบิลร้าน — เรียกในทรานแซกชันหลังสร้าง/ล็อกบิลแล้ว และก่อน recalc
-     * ต่อเซลหนึ่งคน: SalesAgentService ทำบิลค่าคอมสถานะจ่ายแล้วจากทุกรายการของเซลคนนั้นในบิลนี้
+     * ต่อเซลหนึ่งคน: SalesAgentService ทำบิลค่าคอมสถานะจ่ายแล้วจากทุกรายการของเซลคนนั้นในบิลนี้ (+ ค่าคอมอื่น ๆ ที่ส่งมาด้วย)
      * แล้วเพิ่มบรรทัดส่วนลด "หักค่าคอมเซล" ที่ผูกกับบิลค่าคอมใบนั้น (sales_commission_id) — ยอดสองฝั่งมาจากตัวเลขเดียวกันเสมอ
      * ยอดรวมของบิล (รวมด่าน "ส่วนลดเกินยอด") ให้ recalc ของคนเรียกคิดทางเดิม
      *
@@ -994,33 +994,63 @@ final class InvoiceService
         $done = [];
         foreach ($deductions as $d) {
             $expected = ($d['amount'] ?? null) === null ? null : Money::toSatang($d['amount'], 'salesDeductions.amount');
-            $settled  = SalesAgentService::settleFromInvoice($inv, (int) $d['salesAgentId'], $expected, $user);
+            $settled  = SalesAgentService::settleFromInvoice($inv, (int) $d['salesAgentId'], $expected, $user, $d['others'] ?? []);
             $agent    = $settled['agent'];
+            // ร้านเห็นหมายเหตุนี้ในบิล — มีค่าคอมอื่น ๆ ปนอยู่ต้องบอก ไม่งั้นร้านเทียบยอดกับ % ของดีลแล้วไม่ตรง (ชื่อรายการอยู่ในบิลค่าคอมของเซล)
+            $others = $settled['others_count'] > 0
+                ? " · รวมค่าคอมอื่น ๆ {$settled['others_count']} รายการ " . ($settled['others_satang'] > 0 ? '+' : '') . Money::fmtSatang($settled['others_satang']) . ' บาท'
+                : '';
             Db::insert(
                 "INSERT INTO invoice_adjustments
                    (invoice_id, charge_item_id, sales_commission_id, kind, label, pct_bp, amount_satang, note, created_by_user_id, created_at)
                  VALUES (?, NULL, ?, 'DISCOUNT', ?, NULL, ?, ?, ?, UTC_TIMESTAMP())",
                 [
                     $inv['id'], $settled['commissionId'], "หักค่าคอมเซล {$agent['username']}", $settled['total_satang'],
-                    "ร้านจ่ายค่าคอมให้เซล {$agent['name']} เอง · บิลค่าคอม {$settled['billNo']}", $user['id'],
+                    "ร้านจ่ายค่าคอมให้เซล {$agent['name']} เอง · บิลค่าคอม {$settled['billNo']}{$others}", $user['id'],
                 ],
             );
-            $done[] = ['agent' => $agent['username'], 'billNo' => $settled['billNo'], 'amount' => Money::toBaht($settled['total_satang'])];
+            $done[] = [
+                'agent'  => $agent['username'],
+                'billNo' => $settled['billNo'],
+                'amount' => Money::toBaht($settled['total_satang']),
+                ...($settled['others_count'] > 0 ? ['others' => $settled['others_count'], 'othersAmount' => Money::toBaht($settled['others_satang'])] : []),
+            ];
         }
 
         return $done;
     }
 
-    /** เซลที่ยังหักค่าคอมจากบิลใบนี้ได้ + ยอดของแต่ละคน — หน้าต่างแก้บิลของส่วนกลาง (คนที่หักไปแล้วไม่โผล่ รายการถูกล็อกแล้ว) */
+    /**
+     * เซลที่ยังหักค่าคอมจากบิลใบนี้ได้ + ยอดของแต่ละคน — หน้าต่างแก้บิลของส่วนกลาง (คนที่หักไปแล้วไม่โผล่ รายการถูกล็อกแล้ว)
+     * deducted = เซลที่หักไปแล้วในบิลนี้ — หักค่าคอมอื่น ๆ ของคนเดิมเพิ่มได้ แม้ค่าคอมตามดีลจะหักครบแล้ว (ลืมใส่ก้อนพิเศษตอนหัก)
+     */
     public static function salesDeductible(int $invoiceId): array
     {
         $inv = self::row($invoiceId);
         if ($inv['status'] === 'VOID') {
-            return ['items' => [], 'noDealSkus' => []];
+            return ['items' => [], 'noDealSkus' => [], 'deducted' => []];
         }
         $entryIds = array_column(Db::all('SELECT id FROM sales_entries WHERE invoice_id = ?', [$invoiceId]), 'id');
+        $deducted = Db::all(
+            'SELECT a.id, a.username, a.name, SUM(ia.amount_satang) AS total_satang
+               FROM invoice_adjustments ia
+               JOIN sales_commissions c ON c.id = ia.sales_commission_id
+               JOIN sales_agents a      ON a.id = c.sales_agent_id
+              WHERE ia.invoice_id = ?
+              GROUP BY a.id, a.username, a.name
+              ORDER BY a.username',
+            [$invoiceId],
+        );
 
-        return self::salesDeductionChoices((int) $inv['franchise_id'], (int) $inv['period_id'], $entryIds);
+        return [
+            ...self::salesDeductionChoices((int) $inv['franchise_id'], (int) $inv['period_id'], $entryIds),
+            'deducted' => array_map(static fn ($r) => [
+                'salesAgentId' => (int) $r['id'],
+                'username'     => $r['username'],
+                'name'         => $r['name'],
+                'total'        => Money::toBaht($r['total_satang']),
+            ], $deducted),
+        ];
     }
 
     /**
@@ -1099,10 +1129,13 @@ final class InvoiceService
             }, $lines);
         }
         // บรรทัดยกไปงวดถัดไป: ขึ้นบิลใบไหนแล้ว (ใบที่ถูกยกเลิกไม่นับ) — null = ยังรอบิลใบถัดไป
+        // บรรทัดหักค่าคอมเซล: ค่าคอมอื่น ๆ ที่รวมอยู่ในยอดนั้น (ที่เหลือคือค่าคอมตามดีล)
         $adjustments = array_map([self::class, 'serializeAdjustment'], Db::all(
             "SELECT ia.*,
                     (SELECT ni.invoice_no FROM invoice_adjustments ch JOIN invoices ni ON ni.id = ch.invoice_id
-                      WHERE ch.carried_from_id = ia.id AND ni.status <> 'VOID' LIMIT 1) AS carried_to_no
+                      WHERE ch.carried_from_id = ia.id AND ni.status <> 'VOID' LIMIT 1) AS carried_to_no,
+                    (SELECT COALESCE(SUM(scl.amount_satang), 0) FROM sales_commission_lines scl
+                      WHERE scl.commission_id = ia.sales_commission_id AND scl.kind = 'OTHER') AS sales_other_satang
                FROM invoice_adjustments ia WHERE ia.invoice_id = ? ORDER BY ia.kind DESC, ia.id",
             [$id],
         ));
@@ -1512,6 +1545,8 @@ final class InvoiceService
             'chargeItemId' => $row['charge_item_id'] === null ? null : (int) $row['charge_item_id'],
             'salesCommissionId' => $salesCommissionId,
             'isSalesDeduction'  => $salesCommissionId !== null,
+            // ค่าคอมอื่น ๆ ที่หักรวมมาในบรรทัดนี้ (0 = ค่าคอมตามดีลล้วน) · null = ไม่ใช่บรรทัดหักค่าคอมเซล
+            'salesOtherAmount'  => $salesCommissionId === null ? null : Money::toBaht((int) ($row['sales_other_satang'] ?? 0)),
             'isCloseOut'        => $closesBalance,
             'carryForward'      => $carryForward,
             'carriedTo'         => $carryForward ? ($row['carried_to_no'] ?? null) : null,

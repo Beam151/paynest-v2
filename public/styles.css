@@ -876,6 +876,15 @@ tr.row-flash > td { animation: row-flash 1.5s ease-out 1; }
 .sales-deduct h3 { font-size: var(--fs-base); margin: 0 0 2px; }
 .sales-deduct .check-item { align-items: center; }
 .sales-deduct .check-item .sub-line { overflow-wrap: anywhere; }
+/* ค่าคอมอื่น ๆ ของเซลที่ติ๊กหัก (หน้าต่างหักค่าคอมเซลของหน้าแก้ไขบิล) — ย่อหน้าใต้ชื่อเซล ให้รู้ว่าเป็นของคนนั้น */
+.deduct-agent { display: grid; gap: 6px; }
+.deduct-others {
+  margin-left: 26px; padding: 8px 10px;
+  border: 1px dashed var(--border-strong); border-radius: var(--radius); background: var(--bg);
+}
+.deduct-others .adj-block-head { margin-bottom: 6px; }
+.deduct-others .adj-row { margin-bottom: 6px; background: var(--surface); }
+@media (max-width: 600px) { .deduct-others { margin-left: 0; } }
 
 /* ── แถวค่าใช้จ่าย/ส่วนลดในฟอร์มออกบิล ─────────────────────── */
 .adj-row {

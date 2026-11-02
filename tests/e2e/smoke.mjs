@@ -4809,6 +4809,71 @@ section('หักค่าคอมเซลจากบิลร้าน (ร
   const lateRemove = await api('DELETE', `/api/invoices/${inv2.body.id}/adjustments/${topUp.body.adjustments?.find((a) => a.isSalesDeduction)?.id}`, { token: admin });
   check('ร้านจ่ายเงินเข้ามาแล้ว ถอนการหักค่าคอมไม่ได้ (บิลล็อกตามกติกาเดิม) และบิลค่าคอมยังเป็นจ่ายแล้ว',
     lateRemove.status === 409 && (await commsOf(s1?.id)).filter((c) => c.status === 'PAID').length === 2, lateRemove.body);
+
+  /*
+   * ค่าคอมอื่น ๆ ในการหัก (2 พ.ย. 69 · "ดึงมาบวกลบกันในรอบบิลเดียวกัน") — ก้อนพิเศษของเซล (ติดลบ = หักคืน)
+   * รวมในยอดหักก้อนเดียวกับค่าคอมตามดีล และอยู่ในบิลค่าคอมใบเดียวกัน · หักตามดีลไปแล้วยังหักค่าคอมอื่น ๆ เพิ่มได้
+   */
+  section('หักค่าคอมเซลจากบิลร้าน + ค่าคอมอื่น ๆ (บวกลบในบิลเดียวกัน)');
+  const P3 = '2031-07-H1';
+  await sell(d1, 50000, P3);                 // เซล 1: 2% = 1,000 + เหมา 300
+  await sell(d3, 30000, P3);                 // เซล 2: 4% = 1,200 · ส่วนต่างของร้านรวม 8,000
+  const inv3 = await generate({ periodCode: P3 });
+  const dedPath = `/api/invoices/${inv3.body.id}/sales-deductions`;
+  const others1 = [{ label: 'โบนัสเปิดร้าน', amount: 500 }, { label: 'หักคืนจ่ายเกินรอบก่อน', amount: -200 }];
+  const staleOthers = await api('POST', dedPath, { token: admin, body: { salesAgentId: s1?.id, amount: 1300, others: others1 } });
+  const zeroOther = await api('POST', dedPath, { token: admin, body: { salesAgentId: s1?.id, others: [{ label: 'ลืมใส่ยอด', amount: 0 }] } });
+  const noLabel = await api('POST', dedPath, { token: admin, body: { salesAgentId: s1?.id, others: [{ label: '  ', amount: 100 }] } });
+  const negative = await api('POST', dedPath, { token: admin, body: { salesAgentId: s2?.id, others: [{ label: 'หักคืนก้อนใหญ่', amount: -1500 }] } });
+  check('ค่าคอมอื่น ๆ: ยอดที่หน้าจอส่งมาต้องเป็นยอดรวม (ตามดีล + ค่าคอมอื่น ๆ) ไม่ตรง = 409 · ยอด 0 / ไม่มีชื่อ / รวมแล้วไม่เป็นบวก = 400',
+    inv3.status === 201 && inv3.body.netTotal === 8000
+      && staleOthers.status === 409 && zeroOther.status === 400 && noLabel.status === 400 && negative.status === 400,
+    { inv3: inv3.body.netTotal, staleOthers: staleOthers.body, zeroOther: zeroOther.body, noLabel: noLabel.body, negative: negative.body });
+  check('ค่าคอมอื่น ๆ ตรวจไม่ผ่านแล้วไม่มีอะไรถูกบันทึก (ยอดบิลเท่าเดิม ไม่มีบิลค่าคอมที่หักจากบิลนี้)',
+    (await billOf(inv3.body.id)).netTotal === 8000
+      && ![...await commsOf(s1?.id), ...await commsOf(s2?.id)].some((c) => c.settledByInvoice?.invoiceNo === inv3.body.invoiceNo));
+
+  const withOthers = await api('POST', dedPath, { token: admin, body: { salesAgentId: s1?.id, amount: 1600, others: others1 } });
+  const dedO = withOthers.body.adjustments?.find((a) => a.isSalesDeduction);
+  check('หักค่าคอมเซลพร้อมค่าคอมอื่น ๆ: ยอดหัก = ตามดีล 1,300 + โบนัส 500 − หักคืน 200 = 1,600 ก้อนเดียว (บิลร้าน 8,000 → 6,400)',
+    withOthers.status === 201 && withOthers.body.netTotal === 6400 && dedO?.amount === 1600 && dedO.salesOtherAmount === 300
+      && dedO.label === 'หักค่าคอมเซล dsale1' && String(dedO.note).includes('รวมค่าคอมอื่น ๆ 2 รายการ +300.00 บาท'), withOthers.body);
+  const cO = (await commsOf(s1?.id)).find((c) => c.id === dedO?.salesCommissionId);
+  check('บิลค่าคอมใบเดียวกันมีทั้งรายการตามดีลและค่าคอมอื่น ๆ (ติดลบได้) · จ่ายแล้ว · บอกว่าหักจากบิลร้านใบไหน',
+    cO?.status === 'PAID' && cO.totalAmount === 1600 && cO.settledByInvoice?.invoiceNo === inv3.body.invoiceNo
+      && cO.lines.map((l) => `${l.kind}:${l.amount}${l.label ? `:${l.label}` : ''}`).sort().join()
+        === 'FIXED:300,ITEM:1000,OTHER:-200:หักคืนจ่ายเกินรอบก่อน,OTHER:500:โบนัสเปิดร้าน', cO);
+
+  const choice3 = (await api('GET', dedPath, { token: admin })).body;
+  check('เซลที่หักไปแล้วขึ้นในรายชื่อ deducted (หักค่าคอมอื่น ๆ เพิ่มได้) · เซลที่ยังไม่หักยังขึ้นให้หักตามเดิม',
+    choice3.deducted?.length === 1 && choice3.deducted[0].salesAgentId === s1?.id && choice3.deducted[0].total === 1600
+      && choice3.items?.length === 1 && of(choice3.items, s2)?.total === 1200, choice3);
+  const noMore = await api('POST', dedPath, { token: admin, body: { salesAgentId: s1?.id } });
+  const extra = await api('POST', dedPath, { token: admin, body: { salesAgentId: s1?.id, amount: 250, others: [{ label: 'ค่าเดินทาง', amount: 250 }] } });
+  const extraLine = extra.body.adjustments?.find((a) => a.isSalesDeduction && a.id !== dedO?.id);
+  const cExtra = (await commsOf(s1?.id)).find((c) => c.id === extraLine?.salesCommissionId);
+  check('ค่าคอมตามดีลหักครบแล้ว: ไม่ใส่ค่าคอมอื่น ๆ → 400 · ใส่ค่าคอมอื่น ๆ → หักเพิ่มได้ (บิลค่าคอมใบใหม่มีแต่ค่าคอมอื่น ๆ · 6,400 → 6,150)',
+    noMore.status === 400 && extra.status === 201 && extra.body.netTotal === 6150 && extraLine?.amount === 250 && extraLine.salesOtherAmount === 250
+      && cExtra?.status === 'PAID' && cExtra.lines.map((l) => `${l.kind}:${l.amount}`).join() === 'OTHER:250',
+    { noMore: noMore.body, extra: extra.body.adjustments, cExtra });
+  const shopView = await billOf(inv3.body.id, shopTok);
+  check('ร้านเห็นหมายเหตุว่ายอดหักรวมค่าคอมอื่น ๆ (เทียบกับ % ของดีลแล้วไม่ตรงก็รู้ว่าเพราะอะไร)',
+    shopView.adjustments?.some((a) => a.isSalesDeduction && a.amount === 250 && String(a.note).includes('รวมค่าคอมอื่น ๆ 1 รายการ +250.00 บาท')),
+    shopView.adjustments);
+
+  const undo = await api('DELETE', `/api/invoices/${inv3.body.id}/adjustments/${dedO?.id}`, { token: admin });
+  const s1After = await commsOf(s1?.id);
+  check('ถอนการหักที่มีค่าคอมอื่น ๆ: บิลค่าคอมทั้งใบ (รวมค่าคอมอื่น ๆ) ถูกยกเลิก · ค่าคอมตามดีลกลับมาให้หักใหม่ · ก้อนที่หักแยกยังอยู่',
+    undo.status === 200 && undo.body.netTotal === 7750 && s1After.find((c) => c.id === cO?.id)?.status === 'VOID'
+      && s1After.find((c) => c.id === cExtra?.id)?.status === 'PAID' && of(await deductibleOf(inv3.body.id), s1)?.total === 1300,
+    { net: undo.body.netTotal, s1After: s1After.map((c) => [c.id, c.status]) });
+
+  // API ออกบิลรับค่าคอมอื่น ๆ ในการหักได้เหมือนกัน (หน้าต่างออกบิลยังไม่มีช่อง — ใส่ที่หน้าแก้ไขบิล)
+  const P4 = '2031-07-H2';
+  await sell(d3, 10000, P4);                 // เซล 2: 4% = 400 · ส่วนต่าง 1,000
+  const inv4 = await generate({ periodCode: P4, salesDeductions: [{ salesAgentId: s2?.id, amount: 500, others: [{ label: 'โบนัส', amount: 100 }] }] });
+  check('ออกบิลพร้อมหักค่าคอมเซล + ค่าคอมอื่น ๆ: 1,000 − (ตามดีล 400 + โบนัส 100) = 500',
+    inv4.status === 201 && inv4.body.netTotal === 500 && inv4.body.adjustments?.find((a) => a.isSalesDeduction)?.salesOtherAmount === 100, inv4.body);
 }
 
 /* ── สัญญาเริ่มกลางรอบ · เปลี่ยนสัญญากลางรอบ (รุ่น 2.7.2 · R26) ─────────

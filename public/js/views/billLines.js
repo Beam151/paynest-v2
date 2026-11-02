@@ -64,6 +64,25 @@ export function parseAmount(raw, gross, { capAtGross = true } = {}) {
 }
 
 /**
+ * แถว "ค่าคอมอื่น ๆ" ของเซล { label, amount } ที่พิมพ์ไว้ — คืน { amount, label } | { amount: 0, error }
+ * ใช้ทั้งหน้าต่าง "ตั้งค่าคอม" ของเซล และการหักค่าคอมเซลในหน้าแก้ไขบิล — กติกาเดียวกับ SalesAgentService::otherLines
+ */
+export function otherCommissionResult(o) {
+  const label = String(o.label ?? '').trim();
+  // ติดลบได้ (หักคืนค่าคอมที่จ่ายเกิน) — ส่งตัวเองเป็น "ยอดเต็ม" เพื่อข้ามการตรวจเครื่องหมาย
+  const r = parseAmount(o.amount, o.amount, { capAtGross: false });
+  if (!label) return { amount: 0, error: 'ต้องมีชื่อรายการ' };
+  if (label.length > 200) return { amount: 0, error: 'ชื่อรายการยาวเกิน 200 ตัวอักษร' };
+  if (r.empty) return { amount: 0, error: 'ต้องใส่จำนวนเงิน' };
+  if (r.error) return { amount: 0, error: r.error };
+  if (r.value === 0) return { amount: 0, error: 'จำนวนเงินต้องไม่เป็น 0 (ติดลบได้ ถ้าเป็นการหักคืน)' };
+  return { amount: r.value, label };
+}
+
+/** แถวค่าคอมอื่น ๆ ที่ว่างทั้งแถว (กดเพิ่มไว้เฉย ๆ) ไม่นับ — กรอกครึ่งเดียวถึงจะเตือน */
+export const filledOthers = (others) => others.filter((o) => String(o.label ?? '').trim() !== '' || String(o.amount ?? '').trim() !== '');
+
+/**
  * ยอดเงินเต็มที่พิมพ์ในหน้ายอดขาย — คืน { empty } | { value } | { error }
  * ติดลบได้ (รอบที่คืนของ) · ทศนิยมเท่าเซิร์ฟเวอร์ — ตรวจตรงนี้ให้รู้ตั้งแต่ยังไม่กดบันทึก
  * ยอดเต็มไม่มีเพดาน 100 ล้านแบบยอดที่กรอกเอง (MAX_AMOUNT) — เซิร์ฟเวอร์รับยอดเต็มเกินนั้น และหน้านี้ก่อนรุ่น 2.3.0 ก็ไม่กัน

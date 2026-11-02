@@ -11,7 +11,9 @@ import { avatar } from '../charts.js';
 import { commissionDetail, commissionSubtitle, commissionTitle, isBill } from './commissionLines.js';
 // ตัวคิดเลข/ตรวจตัวเลขชุดเดียวกับหน้าออกบิล — พรีวิวต้องปัดเศษและเตือนเหมือนเซิร์ฟเวอร์เป๊ะ
 // componentsLine: บรรทัด "ประกอบด้วย" ของสินค้ากลุ่ม คำเดียวกับบิลร้าน (ตัวช่วยกลางที่เดียว)
-import { commissionOf, componentsLine, dealTerms, parseAmount, parsePct, sumBaht } from './billLines.js';
+import {
+  commissionOf, componentsLine, dealTerms, filledOthers, otherCommissionResult, parseAmount, parsePct, sumBaht,
+} from './billLines.js';
 
 const TAB_KEY = 'franchise.agentTab';
 const COMM_STATUS_KEY = 'franchise.commStatus';
@@ -516,26 +518,12 @@ export async function salesAgentsView() {
       return { amount: 0, error: r.error && !r.error.startsWith('ค่าคอมต้อง') ? r.error : 'ต้องมากกว่า 0' };
     };
 
-    const otherResult = (o) => {
-      const label = o.label.trim();
-      // ติดลบได้ (หักคืนค่าคอมที่จ่ายเกิน) — ส่งตัวเองเป็น "ยอดเต็ม" เพื่อข้ามการตรวจเครื่องหมาย
-      const r = parseAmount(o.amount, o.amount, { capAtGross: false });
-      if (!label) return { amount: 0, error: 'ต้องมีชื่อรายการ' };
-      if (label.length > 200) return { amount: 0, error: 'ชื่อรายการยาวเกิน 200 ตัวอักษร' };
-      if (r.empty) return { amount: 0, error: 'ต้องใส่จำนวนเงิน' };
-      if (r.error) return { amount: 0, error: r.error };
-      if (r.value === 0) return { amount: 0, error: 'จำนวนเงินต้องไม่เป็น 0 (ติดลบได้ ถ้าเป็นการหักคืน)' };
-      return { amount: r.value, label };
-    };
-
     function compute() {
       const onItems = [...items.values()].filter((s) => s.on);
       const onFixed = [...fixed.values()].filter((s) => s.on);
-      // แถวค่าคอมอื่น ๆ ที่ว่างทั้งแถว (กดเพิ่มไว้เฉย ๆ) ไม่นับ — กรอกครึ่งเดียวถึงจะเตือน
-      const filled = others.filter((o) => o.label.trim() !== '' || String(o.amount).trim() !== '');
       const itemRes = onItems.map((s) => ({ s, ...itemResult(s) }));
       const fixedRes = onFixed.map((s) => ({ s, ...fixedResult(s) }));
-      const otherRes = filled.map((o) => ({ o, ...otherResult(o) }));
+      const otherRes = filledOthers(others).map((o) => ({ o, ...otherCommissionResult(o) }));
       const error = [
         ...itemRes.map((r) => r.error && `บิล ${r.s.item.invoiceNo} · ${r.s.item.sku}: ${r.error}`),
         ...fixedRes.map((r) => r.error && `เหมาต่อรอบ ร้าน ${r.s.f.franchiseUsername} ${periodLabel(r.s.f.periodCode)}: ${r.error}`),
